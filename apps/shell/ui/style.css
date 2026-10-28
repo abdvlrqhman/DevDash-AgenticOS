@@ -1,0 +1,59 @@
+/* Same tokens as apps/web/src/styles.css (shadcn/ui neutral). */
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/geist-latin-wght-normal.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-display: swap;
+}
+:root {
+  --background: #fafafa; --card: #ffffff; --foreground: #0a0a0a; --muted-foreground: #737373; --border: #e5e5e5;
+  --primary: #171717; --primary-foreground: #fafafa; --ring: #a3a3a3; --destructive: #dc2626; --logo-bg: #171717;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a; --card: #171717; --foreground: #fafafa; --muted-foreground: #a3a3a3; --border: #ffffff1a;
+    --primary: #e5e5e5; --primary-foreground: #171717; --ring: #737373; --destructive: #f87171; --logo-bg: #404040;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; min-height: 100%; background: var(--background); color: var(--foreground); }
+body { font: 14px/1.5 "Geist", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+main {
+  max-width: 384px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; align-items: stretch;
+  padding: max(56px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+.logo { align-self: center; }
+.head { text-align: center; }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.3; margin: 0; }
+h2 { font-size: 13px; font-weight: 500; margin: 8px 0 6px; }
+p { margin: 4px 0 0; }
+.muted { color: var(--muted-foreground); }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 1px 2px #0000000d; }
+form, section { display: flex; flex-direction: column; gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 8px; }
+label { font-size: 14px; font-weight: 500; }
+input {
+  height: 40px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--foreground);
+  padding: 0 12px; font: 16px "Geist", system-ui, sans-serif; outline: none;
+}
+input:focus-visible { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent); }
+button {
+  height: 40px; border: 0; border-radius: 8px; background: var(--primary); color: var(--primary-foreground);
+  font: 500 14px "Geist", system-ui, sans-serif; cursor: pointer;
+}
+button:disabled { opacity: 0.5; }
+button.secondary { background: transparent; color: var(--foreground); border: 1px solid var(--border); }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+#error { color: var(--destructive); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 14px; background: var(--card); }
+ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--card); }
+li + li { border-top: 1px solid var(--border); }
+.space {
+  width: 100%; height: auto; background: none; color: var(--foreground); text-align: left; padding: 10px 12px;
+  display: flex; flex-direction: column; border-radius: 0;
+}
+.space:hover { background: color-mix(in srgb, var(--foreground) 5%, transparent); }
+.space .name { font-weight: 500; }
+.space .host { color: var(--muted-foreground); font-size: 13px; }

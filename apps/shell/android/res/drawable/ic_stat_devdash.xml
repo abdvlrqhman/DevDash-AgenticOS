@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon: the square-Kufic dal from the logo, one colour as Android requires. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M9,4h7a1,1 0,0 1,1 1v10h2a1,1 0,0 1,1 1v3a1,1 0,0 1,-1 1H5a1,1 0,0 1,-1 -1v-3a1,1 0,0 1,1 -1h8V8H9a1,1 0,0 1,-1 -1V5A1,1 0,0 1,9 4z" />
+</vector>

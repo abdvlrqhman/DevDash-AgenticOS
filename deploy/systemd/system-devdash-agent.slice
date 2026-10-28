@@ -1,0 +1,17 @@
+[Unit]
+Description=DevDash agents (all members' Claude sessions, terminals and the tools they spawn)
+
+# One slice bounds EVERYTHING the agents run — every member's sessions and the builds/tests/subagents they start — together.
+# CPU is work-conserving: no quota, so sessions use every idle core, but the low weight makes them yield to the rest of the
+# box (the DevDash server, Caddy, containers, other tenants) whenever it's busy. Memory is a share of the host, so this fits
+# any VPS size and a runaway build can't push the server or anything else into the OOM killer.
+# On a host that throttles sustained CPU, add a quota without editing this file (survives deploys):
+#   systemctl set-property system-devdash-agent.slice CPUQuota=200%
+[Slice]
+CPUAccounting=yes
+CPUWeight=40
+MemoryAccounting=yes
+MemoryHigh=60%
+MemoryMax=70%
+IOAccounting=yes
+IOWeight=40

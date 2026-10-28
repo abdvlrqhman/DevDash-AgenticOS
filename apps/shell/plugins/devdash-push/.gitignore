@@ -1,0 +1,5 @@
+# Written by tauri-plugin's build script on every iOS build.
+/.tauri
+/permissions
+/ios/.build
+/ios/Package.resolved

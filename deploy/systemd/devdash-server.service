@@ -1,0 +1,30 @@
+[Unit]
+Description=DevDash server
+After=network.target devdash-helper.socket
+Wants=devdash-helper.socket
+
+[Service]
+User=devdash
+Group=devdash
+EnvironmentFile=/etc/devdash/devdash.env
+WorkingDirectory=/opt/devdash/current
+ExecStart=/usr/bin/node apps/server/src/main.ts
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+# Hardening. Root work goes through devdash-helper.socket, so the server never needs privileges.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/devdash /run/devdash
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

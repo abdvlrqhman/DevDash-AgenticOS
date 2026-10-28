@@ -1,0 +1,28 @@
+{
+  "name": "devdash",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "workspaces": [
+    "apps/server",
+    "apps/agent",
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=24.7 <27"
+  },
+  "scripts": {
+    "dev:server": "node --env-file-if-exists=.env --watch apps/server/src/main.ts",
+    "dev:web": "npm run dev -w @devdash/web",
+    "build": "npm run build -w @devdash/web",
+    "typecheck": "tsc -p apps/server && tsc -p apps/agent && tsc -p apps/web",
+    "test": "node --test \"apps/*/src/**/*.test.ts\" \"deploy/**/*.test.ts\"",
+    "invite": "node --env-file-if-exists=.env apps/server/src/cli.ts invite"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
+  }
+}

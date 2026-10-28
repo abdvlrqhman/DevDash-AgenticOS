@@ -1,0 +1,18 @@
+[Unit]
+Description=DevDash agent for %i
+Requires=devdash-agent@%i.socket
+After=devdash-agent@%i.socket
+
+[Service]
+# Runs as the member: their terminals and Claude sessions get exactly their Linux permissions.
+# No sandboxing on purpose (it would apply to their shells too). KillMode=process keeps tmux alive across restarts.
+# All members' agents share one slice so the box caps their TOTAL CPU/memory, not each one's (system-devdash-agent.slice).
+Slice=system-devdash-agent.slice
+User=%i
+WorkingDirectory=~
+Environment=LANG=C.UTF-8
+ExecStart=/usr/bin/node /opt/devdash/current/apps/agent/src/main.ts
+KillMode=process
+Restart=always
+RestartSec=2
+UMask=0002

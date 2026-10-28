@@ -1,0 +1,6 @@
+{
+  "name": "devdash",
+  "version": "0.2.0",
+  "description": "Connects Claude Code sessions to DevDash: live status, tasks, notes and services tools, and the team conventions skill.",
+  "license": "MIT"
+}

@@ -1,0 +1,40 @@
+node_modules
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+
+# secrets and local config: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.jks
+*.keystore
+*.mobileprovision
+
+# updater signing key (never commit the private key or the human's secret note)
+UPDATER_KEY_DO_NOT_COMMIT.txt
+apps/shell/src-tauri/updater.key*
+
+# local data
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# native shell build output
+apps/shell/src-tauri/target/
+apps/shell/src-tauri/gen/
+
+.DS_Store
+Thumbs.db
+
+# Local agent worktrees (per-session, never committed)
+.claude/

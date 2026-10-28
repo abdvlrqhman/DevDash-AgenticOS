@@ -1,0 +1,79 @@
+# Installed to /etc/caddy/Caddyfile by deploy/install.sh. DEVDASH_DOMAIN comes from a systemd drop-in;
+# /etc/caddy/devdash-tls.caddy is generated (Cloudflare origin cert, or `tls internal` until it exists).
+
+{$DEVDASH_DOMAIN} {
+	import /etc/caddy/devdash-tls.caddy
+	request_header -X-DevDash-Services
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	# DevDash's own pages: strict. The remote browser (/browser/) runs neko's UI and gets its own rules below.
+	@app not path /browser/*
+	header @app {
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		# frame-src: the in-app view of a service (/services/<name>/view) frames the services site, a separate origin.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self' https://{$DEVDASH_DOMAIN}:8443; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	}
+
+	handle /api/* {
+		header Cache-Control "no-store"
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle /.well-known/devdash.json {
+		reverse_proxy 127.0.0.1:8787
+	}
+	# The shared remote browser (neko), for signed-in members only. It runs its own UI, framed by DevDash.
+	handle /browser/* {
+		forward_auth 127.0.0.1:8787 {
+			uri /api/browser/check
+			# The check is a plain request even when the original is a WebSocket upgrade (neko's stream).
+			header_up -Connection
+			header_up -Upgrade
+		}
+		header {
+			X-Frame-Options "SAMEORIGIN"
+			Content-Security-Policy "frame-ancestors 'self'"
+		}
+		reverse_proxy 127.0.0.1:8090
+	}
+	# Public share links, browser invites, and the two pages about this space that Google checks before it lets members
+	# connect their Google Drive (/about, /privacy): nothing else is public.
+	handle /watch/* {
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle /s/* {
+		reverse_proxy 127.0.0.1:8787
+	}
+	@space_pages path /about /privacy
+	handle @space_pages {
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle {
+		root * /opt/devdash/current/apps/web/dist
+		templates /index.html # fills in {{.Host}} for link-preview tags
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# Services: https://<space>:8443/service/<name>/. Another port is another origin for browsers, so a service's pages
+# can't act on DevDash. DevDash proxies them (members only, or public) and knows them by this header.
+{$DEVDASH_DOMAIN}:8443 {
+	import /etc/caddy/devdash-tls.caddy
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy 127.0.0.1:8787 {
+		header_up X-DevDash-Services 1
+	}
+}

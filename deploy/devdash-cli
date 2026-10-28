@@ -1,0 +1,7 @@
+#!/bin/sh
+# `devdash service ...`: members (and their Claude sessions) manage services through their own agent.
+# Anything else is the admin CLI, e.g.: devdash invite --email you@example.com --username you --role admin
+case "$1" in
+  service|services|svc) exec node /opt/devdash/current/apps/agent/src/cli.ts "$@" ;;
+esac
+cd / && exec sudo -u devdash node --env-file=/etc/devdash/devdash.env /opt/devdash/current/apps/server/src/cli.ts "$@"

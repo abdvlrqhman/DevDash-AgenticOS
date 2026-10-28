@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "lib": ["es2024"],
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

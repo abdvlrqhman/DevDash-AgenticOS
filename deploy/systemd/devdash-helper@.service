@@ -1,0 +1,9 @@
+[Unit]
+Description=DevDash root helper (one request)
+
+[Service]
+ExecStart=/usr/bin/node /usr/local/libexec/devdash-helper.mjs
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutSec=120

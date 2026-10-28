@@ -1,0 +1,61 @@
+name: Android app check
+
+# Runs the Android app on an emulator against a real space: sign-in, a link opening outside, downloads, notifications
+# with the app closed (and tapping one), the native picker in dark mode, the shared browser, and the vault with the
+# emulator as one of two devices.
+# Manual only: it needs DEVDASH_E2E_TOKEN, a short-lived session of a temporary test member.
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: Space to test against
+        required: true
+        default: https://dev.example.com
+
+permissions:
+  contents: read
+
+jobs:
+  emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    defaults: { run: { working-directory: apps/shell } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24 }
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: { distribution: temurin, java-version: 17 }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { workspaces: apps/shell/src-tauri }
+      - run: rustup target add x86_64-linux-android
+      - run: npm ci --no-fund --no-audit
+      - name: Build the app (debug build for the emulator, so its WebView can be driven)
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          npx tauri android init --ci
+          npx tauri icon app-icon.png
+          bash android/prepare.sh
+          npx tauri android build --apk --debug --target x86_64 --ci
+          find src-tauri/gen/android/app/build/outputs/apk -name '*.apk'
+      - name: Enable KVM
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run on the emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          DEVDASH_E2E_TOKEN: ${{ secrets.DEVDASH_E2E_TOKEN }}
+          DEVDASH_E2E_ORIGIN: ${{ inputs.origin }}
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          working-directory: apps/shell
+          script: node android/e2e.mjs "$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)" e2e-out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with: { name: android-e2e, path: apps/shell/e2e-out, retention-days: 7 }

@@ -1,0 +1,257 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * shadcn/ui neutral theme. DevDash adds only status colors (running, needs you), the terminal surface and the logo.
+ * Light by default; dark follows the device unless the member picks one (lib/theme.ts toggles .dark on <html>).
+ */
+:root {
+  /* Native controls (select menus, date pickers, scrollbars) follow the theme too. */
+  color-scheme: light;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.95 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+
+  --live: oklch(0.6 0.15 152);
+  --attention: oklch(0.7 0.14 75);
+  --attention-foreground: oklch(0.42 0.09 70);
+  --attention-soft: oklch(0.97 0.035 85);
+  --term-bg: oklch(0.18 0 0);
+  --term-fg: oklch(0.93 0 0);
+  --logo-bg: oklch(0.205 0 0);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.185 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.72 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.175 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.922 0 0);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+
+  --live: oklch(0.74 0.17 152);
+  --attention: oklch(0.82 0.14 80);
+  --attention-foreground: oklch(0.86 0.12 82);
+  --attention-soft: oklch(0.27 0.05 80);
+  --term-bg: oklch(0.12 0 0);
+  --term-fg: oklch(0.93 0 0);
+  --logo-bg: oklch(0.32 0 0);
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --font-heading: var(--font-sans);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-live: var(--live);
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
+  --color-attention-soft: var(--attention-soft);
+  --color-term-bg: var(--term-bg);
+  --color-term-fg: var(--term-fg);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html, body, #root {
+    height: 100%;
+  }
+  /* The app shell pins itself to the visual viewport; the page itself never scrolls. */
+  body {
+    overflow: hidden;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  select option, select optgroup {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
+  /* App feel on touch screens: no double-tap zoom, no rubber-band or pull-to-refresh, no callouts on controls. */
+  html {
+    touch-action: manipulation;
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+  }
+  button, [role="button"], [role="tab"], [role="option"], [role="menuitem"], nav, header, label, [data-slot="item"] {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
+/*
+ * The page column: a page's header and body share it, so titles, actions and content line up at every width.
+ * --page-max is the content width (set by PageHeader/PageBody's width prop); the gutter is the minimum side space.
+ */
+.page-col {
+  --gutter: 1rem;
+  padding-inline: max(var(--gutter), calc((100% - var(--page-max, 56rem)) / 2));
+}
+@media (min-width: 768px) { .page-col { --gutter: 1.5rem; } }
+/* Canvases (a terminal, the shared browser, logs) keep a tighter edge on phones, where every column of text counts. */
+@media (max-width: 767px) { .page-col.canvas { --gutter: 0.5rem; } }
+
+/* Motion tokens. Responses are quick and decelerate; nothing the member triggers eases in. */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* Inside the native app nothing selects except what people actually copy: messages, code, inputs, the terminal. */
+.shell body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.shell :is(input, textarea, [contenteditable], .prose-dd, pre, code, .xterm, [data-selectable]) {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+/* Pressed state for rows and buttons where there is no hover. */
+@media (hover: none) {
+  a[data-slot="item"]:active, button[data-slot="item"]:active { background: var(--muted); }
+  [data-slot="button"]:active:not(:disabled) { opacity: 0.75; }
+}
+
+/* Scrollbars: thin, rounded, theme-colored, and only as visible as they need to be. In the base layer so no-scrollbar can still hide one. */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 22%, transparent) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 18%, transparent);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in oklch, var(--foreground) 32%, transparent); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+}
+.xterm-viewport { scrollbar-color: color-mix(in oklch, var(--term-fg) 25%, transparent) transparent; }
+
+/* A status light coming on catches in two quick steps, like an LED, rather than fading in. */
+@keyframes led-on { 0% { opacity: 0.1; } 30% { opacity: 1; } 45% { opacity: 0.35; } 100% { opacity: 1; } }
+.led-on { animation: led-on 320ms steps(1, end) both; }
+@media (prefers-reduced-motion: reduce) { .led-on { animation: none; } }
+
+/* A "needs you" light blinks three times when it appears (wins over .led-on: it is the louder signal). */
+@keyframes needs-you { 50% { opacity: 0.15; } }
+.needs-you { animation: needs-you 1.1s steps(1) 3; }
+@media (prefers-reduced-motion: reduce) { .needs-you { animation: none; } }
+
+/* Markdown in Claude's replies. */
+.prose-dd { overflow-wrap: anywhere; line-height: 1.6; }
+.prose-dd > :first-child { margin-top: 0; }
+.prose-dd > :last-child { margin-bottom: 0; }
+.prose-dd p, .prose-dd ul, .prose-dd ol, .prose-dd pre, .prose-dd table, .prose-dd blockquote { margin: 0.65em 0; }
+.prose-dd ul { list-style: disc; padding-left: 1.3em; }
+.prose-dd ol { list-style: decimal; padding-left: 1.3em; }
+.prose-dd li { margin: 0.2em 0; }
+.prose-dd h1, .prose-dd h2, .prose-dd h3 { font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; margin: 1.1em 0 0.4em; }
+.prose-dd h1 { font-size: 1.2em; } .prose-dd h2 { font-size: 1.1em; } .prose-dd h3 { font-size: 1em; }
+.prose-dd strong { font-weight: 600; }
+.prose-dd code { font-family: var(--font-mono); font-size: 0.85em; background: var(--muted); border-radius: 5px; padding: 0.12em 0.35em; }
+.prose-dd pre { background: var(--term-bg); color: var(--term-fg); border-radius: 10px; padding: 10px 12px; overflow-x: auto; }
+.prose-dd pre code { background: none; padding: 0; font-size: 12.5px; color: inherit; }
+.prose-dd a { text-decoration: underline; text-underline-offset: 2px; }
+.prose-dd a.file-code { text-decoration: none; }
+.prose-dd a.file-code code { text-decoration: underline dotted; text-underline-offset: 3px; transition: background-color 150ms; }
+.prose-dd a.file-code:hover code { background: var(--accent); text-decoration-style: solid; }
+.prose-dd blockquote { border-left: 3px solid var(--border); padding-left: 0.8em; color: var(--muted-foreground); }
+.prose-dd table { border-collapse: collapse; display: block; overflow-x: auto; }
+.prose-dd th, .prose-dd td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.prose-dd hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
+
+/* While a pane edge is dragged: no width animations, resize cursor everywhere, no text selection. */
+[data-resizing], [data-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+  transition: none !important;
+}

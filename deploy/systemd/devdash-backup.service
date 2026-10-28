@@ -1,0 +1,9 @@
+[Unit]
+Description=DevDash nightly backup
+After=devdash-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/devdash-backup.sh
+Nice=10
+IOSchedulingClass=idle

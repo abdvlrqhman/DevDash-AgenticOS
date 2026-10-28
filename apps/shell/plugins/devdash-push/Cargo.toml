@@ -1,0 +1,17 @@
+[package]
+name = "tauri-plugin-devdash-push"
+version = "0.1.0"
+description = "DevDash's iPhone notifications while the app is closed (Apple Push Notification service)"
+license = "MIT"
+edition = "2021"
+publish = false
+# Tauri plugins must declare `links` with their crate name (tauri-plugin's build script checks it).
+links = "tauri-plugin-devdash-push"
+
+[dependencies]
+tauri = "2.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2.7", features = ["build"] }

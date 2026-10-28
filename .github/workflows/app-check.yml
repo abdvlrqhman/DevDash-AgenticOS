@@ -1,0 +1,49 @@
+name: App check
+# Compiles the native app (apps/shell) for Windows and Android without publishing anything, so a change to the shell
+# is known to build before it reaches a release (and, through auto-update, everyone's app). Runs on branches, pull
+# requests and by hand; releases themselves are app-release.yml. The iPhone build is app-check-ios.yml.
+on:
+  push:
+    branches-ignore: [main]
+    paths: ['apps/shell/**', '.github/workflows/app-check.yml']
+  pull_request:
+    paths: ['apps/shell/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: app-check-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults: { run: { working-directory: apps/shell } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { workspaces: apps/shell/src-tauri }
+      - name: Compile (desktop)
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults: { run: { working-directory: apps/shell } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24 }
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: { distribution: temurin, java-version: 17 }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { workspaces: apps/shell/src-tauri }
+      - run: rustup target add aarch64-linux-android
+      - run: npm ci --no-fund --no-audit
+      - name: Build a debug APK (Rust and DevDash's Kotlin, android/*.kt)
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          npx tauri android init --ci
+          npx tauri icon app-icon.png
+          bash android/prepare.sh
+          npx tauri android build --apk --debug --target aarch64 --ci

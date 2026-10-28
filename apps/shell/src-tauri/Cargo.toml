@@ -1,0 +1,37 @@
+[package]
+name = "devdash"
+version = "0.1.11"
+description = "DevDash: your team's space on your own server"
+license = "MIT"
+edition = "2021"
+
+[lib]
+name = "devdash_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+# generate_context! expands updater config that references serde_json, so it must be a direct dependency.
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-process = "2"
+
+# iPhone: notifications while the app is closed, through Apple's push service.
+[target.'cfg(target_os = "ios")'.dependencies]
+tauri-plugin-devdash-push = { path = "../plugins/devdash-push" }
+
+# The self-updater only runs on desktop (Windows/macOS/Linux). On mobile the OS
+# owns installs, so the updater plugin is excluded from the android/ios targets.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

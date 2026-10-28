@@ -1,0 +1,38 @@
+name: Bug report
+description: Something doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open …
+        2. Click …
+        3. See …
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      multiple: true
+      options: [Web (desktop browser), Web (phone browser), Windows app, Android app, iPhone/iPad app, Server or install]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      description: DevDash commit (Server page) and, for the apps, the app version.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output, for example `journalctl -u devdash-server -n 100`. Remove anything private.
+      render: text

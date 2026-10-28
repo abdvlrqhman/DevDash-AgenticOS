@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "On desktop the bundled connect screen may check for and install app updates on launch. Scoped to desktop because the updater plugin is desktop-only; the remote space is not listed (no `remote` block), so it still gets no native APIs.",
+  "platforms": ["linux", "macOS", "windows"],
+  "windows": ["main"],
+  "permissions": ["updater:default", "process:allow-restart"]
+}

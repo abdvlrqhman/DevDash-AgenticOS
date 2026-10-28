@@ -1,0 +1,14 @@
+[Unit]
+Description=DevDash root helper socket
+
+[Socket]
+ListenStream=/run/devdash/helper.sock
+SocketUser=root
+SocketGroup=devdash
+SocketMode=0660
+DirectoryMode=0755
+Accept=yes
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

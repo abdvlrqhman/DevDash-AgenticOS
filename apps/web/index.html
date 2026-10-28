@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#FFFFFF" />
+    <script src="/theme.js"></script>
+    <meta name="referrer" content="no-referrer" />
+    <meta name="description" content="Claude Code, terminals, tasks and builds on your team's own server. From any phone or PC." />
+    <!-- ?v= forces browsers to drop a cached old icon; bump it when the icon changes. -->
+    <link rel="icon" href="/favicon.ico?v=2" sizes="32x32" />
+    <link rel="icon" href="/icon.svg?v=2" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
+    <link rel="manifest" href="/manifest.webmanifest?v=2" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="DevDash" />
+    <!-- Link previews. Caddy's templates directive fills in the host, so the image URL is absolute. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="DevDash" />
+    <meta property="og:description" content="Claude Code, terminals, tasks and builds on your team's own server. From any phone or PC." />
+    <meta property="og:image" content="https://{{.Host}}/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <title>DevDash</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

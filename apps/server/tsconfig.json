@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "lib": [
+      "es2024"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/modules/vault/vault.test.ts"
+  ],
+  "//": "vault.test.ts drives the browser crypto (DOM types) against the server; node runs it, the web typecheck covers that code."
+}

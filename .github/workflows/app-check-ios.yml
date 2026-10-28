@@ -1,0 +1,38 @@
+name: App check (iPhone)
+# Builds the iPhone app (unsigned) without publishing anything. macOS runners cost ten times the minutes of Linux ones
+# on a private repository, so this runs only when iPhone-specific files change, and by hand (run it before a release
+# when shared Rust in src-tauri/src/lib.rs changed its iOS parts).
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'apps/shell/ios/**'
+      - 'apps/shell/plugins/**'
+      - 'apps/shell/src-tauri/Info.ios.plist'
+      - 'apps/shell/src-tauri/src/ios_push.rs'
+      - 'apps/shell/src-tauri/Cargo.toml'
+      - '.github/workflows/app-check-ios.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: app-check-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults: { run: { working-directory: apps/shell } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24 }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { workspaces: apps/shell/src-tauri }
+      - run: rustup target add aarch64-apple-ios
+      - run: npm ci --no-fund --no-audit
+      - name: Build the iPhone app, unsigned (Rust, the Swift plugins and Info.ios.plist)
+        run: |
+          npx tauri ios init --ci
+          npx tauri icon app-icon.png
+          npx tauri ios build --no-sign --ci

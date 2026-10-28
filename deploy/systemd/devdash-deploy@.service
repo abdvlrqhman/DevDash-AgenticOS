@@ -1,0 +1,10 @@
+[Unit]
+Description=DevDash: deploy commit %i from GitHub
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/root
+ExecStart=/usr/local/libexec/devdash-deploy.sh %i
+TimeoutStartSec=30min
+Nice=10

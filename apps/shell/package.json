@@ -1,0 +1,16 @@
+{
+  "name": "@devdash/shell",
+  "version": "0.1.11",
+  "private": true,
+  "description": "Native DevDash app (Tauri): connect screen + window around a DevDash space",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.3"
+  }
+}
