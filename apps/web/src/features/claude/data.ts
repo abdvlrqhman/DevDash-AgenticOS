@@ -9,7 +9,11 @@ export { byFolder, folderName, sessionPlace, shortPath } from './places'
 export type Session = InferResponseType<typeof api.api.claude.sessions.$get>['sessions'][number]
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-export type PendingRequest = { requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[] }
+/** `ownerOnly`: a teammate (`askedBy`) asked for something that would use the owner's access: only the owner can answer. */
+export type PendingRequest = {
+  requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[]
+  ownerOnly?: boolean; askedBy?: { id: number; name: string } | null
+}
 
 export const sessionsQuery = (archived = false) => queryOptions({
   queryKey: ['claude', 'sessions', archived],

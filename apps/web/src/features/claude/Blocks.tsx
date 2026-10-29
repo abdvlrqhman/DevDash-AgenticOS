@@ -71,7 +71,7 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
             const who = b.uuid && senders?.[b.uuid]?.name
             const text = b.text.trim()
             return (
-              <div key={b.key} className="group/msg flex max-w-[85%] flex-col items-end gap-1 self-end">
+              <div key={b.key} className="group/msg flex max-w-[85%] min-w-0 flex-col items-end gap-1 self-end">
                 {(who || b.at || text) && (
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">
                     {/* Shown on hover (or focus) with a mouse, always on touch screens. */}
@@ -98,7 +98,8 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
                   </div>
                 )}
                 {/* data-selectable: the app selects only what people copy (styles.css), and your own messages are that too. */}
-                {text && <div data-selectable className="rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-[15px] break-words whitespace-pre-wrap text-primary-foreground md:text-sm">{b.text}</div>}
+                {/* overflow-wrap: anywhere, not break-word: a long link must narrow the bubble too, or it pushes it off the left. */}
+                {text && <div data-selectable className="max-w-full rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-[15px] [overflow-wrap:anywhere] whitespace-pre-wrap text-primary-foreground md:text-sm">{b.text}</div>}
               </div>
             )
           }

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import { BadgeCheck, Bot, ChevronRight, Copy, GitBranch, GitCommitHorizontal, Lock, Plus, RefreshCw, Search, Share2, Sparkles, StickyNote } from 'lucide-react'
+import { BadgeCheck, Bot, ChevronRight, Copy, GitBranch, GitCommitHorizontal, KeyRound, Lock, Plus, RefreshCw, Search, Share2, Sparkles, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 import { StatusLight } from '@/components/app/brand'
 import { PageBody, PageHeader, Section } from '@/components/app/page'
@@ -10,12 +10,14 @@ import { Button } from '@/components/ui/button'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabCount, TabsTrigger } from '@/components/ui/tabs'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ErrorAlert } from '../auth/LoginPage'
 import { projectSessionsQuery, relativeTime, STATUS_LABEL, useLiveProjectSessions, type ProjectSession, type Session } from '../claude/data'
 import { NewSession } from '../claude/SessionsPage'
+import { CAPS, capsLabel, projectCapsQuery, type Cap } from '../claude/ShareDialog'
 import { Board } from '../work/Board'
 import { activityQuery, commitsQuery, notesQuery, projectQuery, STATUSES, tasksQuery, useLiveWork, type SessionSharing, type Task } from '../work/data'
 import { StatusIcon, TaskRow } from '../work/TaskBits'
@@ -63,6 +65,7 @@ function ProjectPageView() {
         description={<span className="flex items-center gap-1.5"><span className="truncate font-mono">{repoLabel(p.repoUrl)}</span><GitBranch className="size-3.5 shrink-0" />{p.defaultBranch}</span>}
         actions={<>
           {p.repoUrl && <Button size="icon-sm" variant="ghost" aria-label="Fetch now" disabled={fetchNow.isPending} onClick={() => fetchNow.mutate()}><RefreshCw className={fetchNow.isPending ? 'animate-spin' : ''} /></Button>}
+          <GuestCapsDefault slug={p.slug} />
           <PinButton kind="project" id={p.slug} />
           <Button size="sm" variant="outline" onClick={() => setSession(true)}><Sparkles /><span className="hidden sm:inline">Claude</span></Button>
         </>} />
@@ -308,6 +311,54 @@ function SharingDefault({ slug, sharing }: { slug: string; sharing: SessionShari
           {SHARING.map((o) => <ToggleGroupItem key={o.value} value={o.value} className="flex-1">{o.label}</ToggleGroupItem>)}
         </ToggleGroup>
         <p className="mt-2 text-xs text-muted-foreground">{current.hint} For everyone's new sessions in this project; whoever starts one can still change it then or later.</p>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/**
+ * Share permissions, in the project's header: what teammates' requests can use of mine without asking me, in my Claude
+ * sessions here. Each member sets their own, and a session's Share dialog can still change it for that session.
+ */
+function GuestCapsDefault({ slug }: { slug: string }) {
+  const qc = useQueryClient()
+  const q = useQuery(projectCapsQuery(slug))
+  const save = useMutation({
+    mutationFn: (caps: Cap[]) => unwrap(api.api.claude.projects[':slug']['guest-caps'].$put({ param: { slug }, json: { caps } })),
+    onSuccess: (r) => qc.setQueryData(projectCapsQuery(slug).queryKey, r),
+    onError: (e) => toast.error(e.message),
+  })
+  const caps = q.data?.caps ?? []
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="ghost" className="text-muted-foreground" title={`Share permissions: ${capsLabel(caps)}`}
+          aria-label={`Share permissions: ${capsLabel(caps)}`}>
+          <span className="relative">
+            <KeyRound />
+            {caps.length > 0 && <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary" />}
+          </span>
+          <span className="hidden sm:inline">Share permissions</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 text-sm">
+        <p className="font-medium">Share permissions</p>
+        <p className="mt-1 text-xs text-muted-foreground">In your Claude sessions in this project, teammates’ requests can use these of yours without asking you.</p>
+        <div className="mt-3 flex flex-col divide-y rounded-md border">
+          {CAPS.map((c) => (
+            <label key={c.value} className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-3 py-2">
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span>{c.label}</span>
+                <span className="text-xs text-muted-foreground">{c.what}</span>
+              </span>
+              <Switch checked={caps.includes(c.value)} disabled={!q.data || save.isPending} aria-label={`Share ${c.label}`}
+                onCheckedChange={(on) => save.mutate(on ? [...caps, c.value] : caps.filter((x) => x !== c.value))} />
+            </label>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Off: Claude asks you. Yours only: everyone sets their own. A session’s Share dialog can still change it for that session.
+        </p>
       </PopoverContent>
     </Popover>
   )

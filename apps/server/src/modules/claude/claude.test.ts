@@ -26,7 +26,7 @@ function setup({ tailnetConnected }: { tailnetConnected?: (userId: number) => bo
     },
   } as unknown as AgentsService
   const claude = claudeService({
-    db, agents, hub: createHub(), projects: {} as ProjectsService,
+    db, agents, hub: createHub(), projects: { idOf: (slug: string) => (slug === 'app' ? 1 : 0) } as unknown as ProjectsService,
     notify: async (userId, _kind, n) => void notified.push({ userId, title: n.title }),
     tailnetConnected,
   })
@@ -44,13 +44,111 @@ test('watching a shared session: ask to join, the owner lets one person in, only
   assert.deepEqual(notified.map((n) => n.userId), [1])
 
   assert.throws(() => claude.setWriter(bob, 's1', 2, true), /Only the owner/)
-  assert.deepEqual(claude.setWriter(ann, 's1', 2, true).writers, [{ id: 2, name: 'Bob' }])
+  assert.deepEqual(claude.setWriter(ann, 's1', 2, true).writers, [{ id: 2, name: 'Bob', full: false }])
   assert.equal((await claude.get(bob, 's1')).canSend, true)
   assert.equal((await claude.get(cat, 's1')).canSend, false)
   assert.throws(() => claude.askToJoin(bob, 's1'), /already/)
 
   claude.setWriter(ann, 's1', 2, false)
   assert.equal((await claude.get(bob, 's1')).canSend, false)
+})
+
+test("a teammate's message never runs with the owner's access: it goes to the agent as a guest turn, the owner approves", async () => {
+  const { claude, db, sent, notified, emit, ann, bob, cat } = setup()
+  claude.setSharing(ann, 's1', { audience: 'people', people: [{ id: 2, canSend: true }, { id: 3, canSend: false, full: true }] })
+  assert.deepEqual((await claude.get(ann, 's1')).people, [{ id: 2, name: 'Bob', canSend: true, full: false }, { id: 3, name: 'Cat', canSend: true, full: true }])
+  assert.deepEqual(await Promise.all([ann, bob, cat].map(async (u) => (await claude.get(u, 's1')).access)), ['owner', 'ask', 'full'])
+
+  // Bob asks: the agent is told who is talking (it gates his turn), and so is Claude, inside his message.
+  sent.length = 0
+  await claude.send(bob, 's1', 'delete all of the repos on GitHub', [])
+  const fromBob = sent.find((r) => r.op === 'claude.send')!
+  assert.deepEqual(fromBob.guest, { id: 2, name: 'Bob' })
+  const [note, text] = fromBob.content as { type: string; text: string }[]
+  assert.match(note!.text, /from Bob, a teammate, not from Ann/)
+  assert.equal(text!.text, 'delete all of the repos on GitHub')
+  assert.equal((fromBob.launch as { ownerName: string }).ownerName, 'Ann')
+
+  // The owner, and someone they gave full access, run as the owner: no guest turn, no note.
+  for (const u of [ann, cat]) {
+    sent.length = 0
+    await claude.send(u, 's1', 'ship it', [])
+    const r = sent.find((x) => x.op === 'claude.send')!
+    assert.equal(r.guest, null)
+    assert.deepEqual((r.content as { text: string }[]).map((c) => c.text), ['ship it'])
+  }
+
+  // Everyone may ask in a session shared with the whole team: still guests, never full access.
+  claude.setSharing(ann, 's1', { audience: 'everyone', everyoneCanSend: true })
+  assert.equal((await claude.get(cat, 's1')).access, 'ask')
+  sent.length = 0
+  await claude.send(cat, 's1', 'hi', [])
+  assert.deepEqual(sent.find((r) => r.op === 'claude.send')!.guest, { id: 3, name: 'Cat' })
+
+  // What Bob's turn wants of Ann's access: only Ann hears about it, and the agent learns who answered.
+  notified.length = 0
+  emit({ ev: 'claude.permission', id: 's1', requestId: 'r1', toolName: 'Bash', input: { command: 'gh repo delete' }, ownerOnly: true, askedBy: { id: 2, name: 'Bob' } })
+  assert.deepEqual(notified, [{ userId: 1, title: 'Bob asked Claude to use your access' }])
+  sent.length = 0
+  await claude.answer(bob, 's1', 'r1', { behavior: 'allow', updatedInput: {} })
+  await claude.answer(ann, 's1', 'r1', { behavior: 'allow', updatedInput: {} })
+  assert.deepEqual(sent.map((r) => r.by), [{ owner: false }, { owner: true }]) // the agent refuses Bob's
+
+  // The CLI is the owner's terminal, unguarded: people who may only ask watch it.
+  await assert.rejects(() => claude.switchMode(bob, 's1', 'cli', 80, 24), /full access/)
+  db.prepare("update claude_sessions set mode = 'cli' where id = 's1'").run()
+  assert.deepEqual([ann, bob].map((u) => claude.cliAccess(u, 's1').readonly), [false, true])
+  claude.setSharing(ann, 's1', { audience: 'people', people: [{ id: 2, canSend: true, full: true }] })
+  assert.equal(claude.cliAccess(bob, 's1').readonly, false)
+})
+
+test('what the owner shares with teammates: none by default, sent to the agent and told to Claude, gone when sharing stops', async () => {
+  const { claude, sent, ann, bob } = setup()
+  assert.deepEqual((await claude.get(ann, 's1')).session.guestCaps, [])
+  sent.length = 0
+  const r = claude.setSharing(ann, 's1', { audience: 'everyone', everyoneCanSend: true, caps: ['tailnet', 'drive', 'drive'] })
+  assert.deepEqual(r.session.guestCaps, ['drive', 'tailnet'])
+  assert.deepEqual([...sent], [{ op: 'claude.set', id: 's1', key: 'guestCaps', value: ['drive', 'tailnet'] }]) // a running session's gate
+  sent.length = 0
+  claude.setSharing(ann, 's1', { audience: 'everyone', everyoneCanSend: true, caps: ['drive', 'tailnet'] })
+  assert.equal(sent.length, 0, 'unchanged: nothing to tell')
+
+  await claude.send(bob, 's1', 'upload the render', [])
+  const req = sent.find((x) => x.op === 'claude.send')!
+  assert.deepEqual((req.launch as { guestCaps: string[] }).guestCaps, ['drive', 'tailnet'])
+  assert.match((req.content as { text: string }[])[0]!.text, /never harms Ann|nothing that harms Ann/)
+  assert.match((req.content as { text: string }[])[0]!.text, /except what they shared with teammates here: Google Drive, Tailscale/)
+
+  // Only the owner again, by the dialog or the plain switch: sharing again starts from none.
+  claude.setSharing(ann, 's1', { audience: 'private', caps: ['drive'] })
+  assert.deepEqual((await claude.get(ann, 's1')).session.guestCaps, [])
+  claude.setSharing(ann, 's1', { audience: 'everyone', caps: ['github'] })
+  await claude.update(ann, 's1', { shared: false })
+  assert.deepEqual((await claude.get(ann, 's1')).session.guestCaps, [])
+})
+
+test("each member's default for a project: their sessions there follow it, unless a session's Share dialog sets its own", async () => {
+  const { claude, db, sent, ann, bob } = setup()
+  db.prepare("insert into projects (id, slug, name, created_by) values (1, 'app', 'App', 1)").run()
+  db.prepare("update claude_sessions set project_id = 1 where id = 's1'").run()
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, shared, started, project_id) values ('b1', 2, 'Bob here', '/x', 1, 1, 1)").run()
+  assert.deepEqual(claude.projectCaps(ann, 'app').caps, [])
+  assert.equal((await claude.get(ann, 's1')).session.guestCapsFromProject, true)
+
+  sent.length = 0
+  assert.deepEqual(claude.setProjectCaps(ann, 'app', ['github', 'drive']).caps, ['drive', 'github'])
+  assert.deepEqual((await claude.get(ann, 's1')).session.guestCaps, ['drive', 'github'])
+  assert.deepEqual(sent.filter((r) => r.op === 'claude.set'), [{ op: 'claude.set', id: 's1', key: 'guestCaps', value: ['drive', 'github'] }], 'its running session learns')
+  assert.deepEqual((await claude.get(bob, 'b1')).session.guestCaps, [], "Ann's default is only hers")
+
+  // This session only: its own choice, kept when the project default changes.
+  claude.setSharing(ann, 's1', { audience: 'everyone', everyoneCanSend: true, caps: ['tailnet'] })
+  claude.setProjectCaps(ann, 'app', ['apps'])
+  const s = (await claude.get(ann, 's1')).session
+  assert.deepEqual([s.guestCaps, s.guestCapsFromProject], [['tailnet'], false])
+  // Back to the project's.
+  claude.setSharing(ann, 's1', { audience: 'everyone', everyoneCanSend: true, caps: null })
+  assert.deepEqual((await claude.get(ann, 's1')).session.guestCaps, ['apps'])
 })
 
 test('requestNotification: a question leads with the question and its options; plans and permissions stay actionable', () => {
@@ -278,12 +376,12 @@ test('sharing with chosen people: only they see it, each watching or also sendin
   const { claude, notified, ann, bob, cat } = setup() // s1 starts shared with the whole team
   notified.length = 0
   const r = claude.setSharing(ann, 's1', { audience: 'people', people: [{ id: 2, canSend: false }, { id: 2, canSend: false }, { id: 1, canSend: true }] })
-  assert.deepEqual(r.people, [{ id: 2, name: 'Bob', canSend: false }]) // de-duplicated; the owner is never "shared with"
+  assert.deepEqual(r.people, [{ id: 2, name: 'Bob', canSend: false, full: false }]) // de-duplicated; the owner is never "shared with"
   assert.deepEqual([r.session.audience, r.session.sharedWith, r.session.shared], ['people', 1, false])
   assert.equal(notified.length, 0) // Bob could already see it; nobody new
 
   assert.equal((await claude.get(bob, 's1')).canSend, false)
-  assert.deepEqual((await claude.get(bob, 's1')).people, [{ id: 2, name: 'Bob', canSend: false }])
+  assert.deepEqual((await claude.get(bob, 's1')).people, [{ id: 2, name: 'Bob', canSend: false, full: false }])
   await assert.rejects(() => claude.get(cat, 's1'), /private/)
   assert.deepEqual(claude.list(bob, false).map((s) => s.id), ['s1'])
   assert.deepEqual(claude.list(cat, false), [])

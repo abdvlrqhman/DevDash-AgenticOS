@@ -251,6 +251,8 @@ function SessionView({ id }: { id: string }) {
   const canSend = info.data!.canSend
   const role = info.data!.role // a team role's session: shown as the role, not the account the team runs on
   const isOwner = info.data!.isOwner
+  // Owner or full access: messages run with the owner's access, and the CLI is theirs to use.
+  const fullAccess = isOwner || info.data!.access === 'full'
   const working = s.status === 'working'
   const watching = viewers.filter((v) => v.id !== me.id).length
   const showComments = s.shared || commentCount > 0
@@ -285,10 +287,10 @@ function SessionView({ id }: { id: string }) {
           <Tabs value={s.mode} onValueChange={(v) => v !== s.mode && switchMode.mutate(v as 'chat' | 'cli')}>
             <TabsList className="pointer-coarse:h-10!">
               <TabsTrigger value="chat" disabled={!canSend || switchMode.isPending}><MessageSquare /><span className="hidden sm:inline">Chat</span></TabsTrigger>
-              <TabsTrigger value="cli" disabled={!canSend || switchMode.isPending}><SquareTerminal /><span className="hidden sm:inline">CLI</span></TabsTrigger>
+              <TabsTrigger value="cli" disabled={!fullAccess || switchMode.isPending}><SquareTerminal /><span className="hidden sm:inline">CLI</span></TabsTrigger>
             </TabsList>
           </Tabs>
-          <SessionMenu s={s} isOwner={isOwner} canSend={canSend} onUpdate={(v) => update.mutate(v)} onShare={() => setShare(true)} onRename={() => setSettings(true)} onUsage={() => setUsage(true)} onTailnet={() => setTailnet(true)} />
+          <SessionMenu s={s} isOwner={isOwner} canSend={canSend} access={info.data!.access} onUpdate={(v) => update.mutate(v)} onShare={() => setShare(true)} onRename={() => setSettings(true)} onUsage={() => setUsage(true)} onTailnet={() => setTailnet(true)} />
         </>} />
 
 
@@ -311,7 +313,7 @@ function SessionView({ id }: { id: string }) {
               </SubagentCtx.Provider>
               <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} />
               {s.status === 'error' && s.statusDetail && <ErrorAlert error={s.statusDetail} />}
-              <Requests sessionId={id} requests={pending} canAnswer={canSend} waitingOn={canSend ? undefined : s.owner.name} afterPlanApproved={afterPlanApproved} />
+              <Requests sessionId={id} requests={pending} canAnswer={canSend} isOwner={isOwner} owner={s.owner.name} waitingOn={canSend ? undefined : s.owner.name} afterPlanApproved={afterPlanApproved} />
             </div>
           </div>
           <div className="border-t bg-background px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-6 md:pt-3 md:pb-3">
@@ -547,8 +549,8 @@ function SwitchRow({ label, hint, checked, onChange }: { label: string; hint: st
   )
 }
 
-function SessionMenu({ s, isOwner, canSend, onUpdate, onShare, onRename, onUsage, onTailnet }: {
-  s: Session; isOwner: boolean; canSend: boolean; onUpdate: Updater; onShare: () => void; onRename: () => void; onUsage: () => void; onTailnet: () => void
+function SessionMenu({ s, isOwner, canSend, access, onUpdate, onShare, onRename, onUsage, onTailnet }: {
+  s: Session; isOwner: boolean; canSend: boolean; access?: string; onUpdate: Updater; onShare: () => void; onRename: () => void; onUsage: () => void; onTailnet: () => void
 }) {
   const navigate = useNavigate()
   const archive = useArchiveSession(() => void navigate({ to: '/claude' }))
@@ -575,7 +577,8 @@ function SessionMenu({ s, isOwner, canSend, onUpdate, onShare, onRename, onUsage
           </>
         ) : (
           <p className="px-2 py-1.5 text-sm text-muted-foreground">
-            {s.owner.name} shared this session. Claude runs as {s.owner.name}{canSend ? '; you can send messages.' : '.'}
+            {s.owner.name} shared this session. Claude runs as {s.owner.name}
+            {access === 'full' ? '; you have full access.' : canSend ? `; you can ask it, and ${s.owner.name} approves anything that uses their access.` : '.'}
           </p>
         )}
         <DropdownMenuSeparator />

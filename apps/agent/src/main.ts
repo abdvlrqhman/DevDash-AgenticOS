@@ -58,6 +58,12 @@ const str = (v: unknown, what: string) => {
 }
 
 // One-line request/response ops.
+/** A teammate who sent a message (the server says; it has checked they may send), or null for the owner or full access. */
+const guestFrom = (v: unknown) => {
+  const g = v as { id?: unknown; name?: unknown } | null | undefined
+  return g && typeof g.id === 'number' && typeof g.name === 'string' ? { id: g.id, name: g.name.slice(0, 120) } : null
+}
+
 const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'terminals.list': async () => ({
     terminals: (await listSessions()).filter((s) => s.name.startsWith('t-')).map((s) => ({ ...s, name: s.name.slice(2) })),
@@ -76,10 +82,10 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   // The member's cloud storage remote (apps/agent/src/storage.ts): set up when they connect, removed when they disconnect.
   'storage.configure': async (r) => ({ changed: await storage.configure(r.storage as storage.Storage) }),
   'storage.remove': async (r) => ({ changed: await storage.remove(str(r.remote, 'remote'), str(r.tokenUrl, 'tokenUrl')) }),
-  'claude.send': async (r) => (await claude.send(r.launch as claude.Launch, r.content as unknown[], str(r.uuid, 'uuid')), { ok: true }),
-  'claude.answer': (r) => (claude.answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never), { ok: true }),
+  'claude.send': async (r) => (await claude.send(r.launch as claude.Launch, r.content as unknown[], str(r.uuid, 'uuid'), guestFrom(r.guest)), { ok: true }),
+  'claude.answer': (r) => (claude.answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never, { owner: (r.by as { owner?: unknown } | undefined)?.owner === true }), { ok: true }),
   'claude.interrupt': async (r) => (await claude.interrupt(str(r.id, 'id')), { ok: true }),
-  'claude.set': async (r) => (await claude.setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | null) ?? null), { ok: true }),
+  'claude.set': async (r) => (await claude.setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
   'claude.remote': (r) => claude.remote(r.launch as claude.Launch, r.enabled === true),
   'claude.complete': async (r) => ({
     text: await claude.complete(str(r.profile, 'profile'), str(r.prompt, 'prompt'), {

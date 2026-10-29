@@ -25,14 +25,19 @@ function useAnswer(sessionId: string, requestId: string, after?: () => Promise<u
   })
 }
 
-/** Everything Claude is waiting on, in the order it asked. Read-only for viewers who may not send. */
-export function Requests({ sessionId, requests, canAnswer, waitingOn, afterPlanApproved }: {
-  sessionId: string; requests: PendingRequest[]; canAnswer: boolean; waitingOn?: string; afterPlanApproved: () => Promise<unknown>
+/**
+ * Everything Claude is waiting on, in the order it asked. Read-only for viewers who may not send, and for anyone but the
+ * owner when a teammate's request would use the owner's access (`ownerOnly`).
+ */
+export function Requests({ sessionId, requests, canAnswer, isOwner, owner, waitingOn, afterPlanApproved }: {
+  sessionId: string; requests: PendingRequest[]; canAnswer: boolean; isOwner: boolean; owner: string; waitingOn?: string
+  afterPlanApproved: () => Promise<unknown>
 }) {
   return (
     <div className="flex flex-col gap-3">
       {requests.map((r) =>
-        r.toolName === 'AskUserQuestion' ? <QuestionCard key={r.requestId} sessionId={sessionId} req={r} disabled={!canAnswer} waitingOn={waitingOn} />
+        r.ownerOnly ? <OwnerCard key={r.requestId} sessionId={sessionId} req={r} isOwner={isOwner} owner={owner} />
+        : r.toolName === 'AskUserQuestion' ? <QuestionCard key={r.requestId} sessionId={sessionId} req={r} disabled={!canAnswer} waitingOn={waitingOn} />
         : r.toolName === 'ExitPlanMode' ? <PlanCard key={r.requestId} sessionId={sessionId} req={r} disabled={!canAnswer} waitingOn={waitingOn} after={afterPlanApproved} />
         : <PermissionCard key={r.requestId} sessionId={sessionId} req={r} disabled={!canAnswer} waitingOn={waitingOn} />,
       )}
@@ -47,6 +52,7 @@ export function requestSummary(req: PendingRequest): string {
     return q || 'Claude has a question'
   }
   if (req.toolName === 'ExitPlanMode') return 'Plan ready to review'
+  if (req.ownerOnly) return `${req.askedBy?.name ?? 'A teammate'} asked for ${req.toolName}`
   return `Allow ${req.toolName}?`
 }
 
@@ -197,6 +203,38 @@ function PermissionCard({ sessionId, req, disabled, waitingOn }: { sessionId: st
           <Button variant="destructive" className="h-10 flex-1 sm:flex-none" disabled={answer.isPending} onClick={() => answer.mutate({ behavior: 'deny', message: 'The user denied this.' })}>Deny</Button>
         </CardFooter>
       )}
+    </Card>
+  )
+}
+
+/**
+ * A teammate asked Claude for something that would run with the owner's access (a command, their accounts, files outside
+ * the shared folders). Only the owner can allow it; everyone else sees what it waits on.
+ */
+function OwnerCard({ sessionId, req, isOwner, owner }: { sessionId: string; req: PendingRequest; isOwner: boolean; owner: string }) {
+  const answer = useAnswer(sessionId, req.requestId)
+  const who = req.askedBy?.name ?? 'A teammate'
+  return (
+    <Card className={waitingCard}>
+      <CardHeader className="px-4">
+        <CardTitle className="flex items-center gap-2 text-sm"><StatusLight state="waiting" /><ShieldQuestion className="size-4" />{who} asked Claude for {req.toolName}</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 px-4">
+        <p className="text-sm text-muted-foreground">
+          {isOwner ? 'It would run with your access, so only you can allow it.' : `It would run with ${owner}'s access, so only ${owner} can allow it.`}
+        </p>
+        <pre className="max-h-60 overflow-auto rounded-md border bg-background px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap">{describe(req)}</pre>
+        <ErrorAlert error={answer.error} />
+      </CardContent>
+      {isOwner ? (
+        <CardFooter className="flex flex-wrap gap-2 px-4">
+          <Button className="h-10 flex-1 sm:flex-none" disabled={answer.isPending} onClick={() => answer.mutate({ behavior: 'allow', updatedInput: req.input })}>Allow</Button>
+          <Button variant="destructive" className="h-10 flex-1 sm:flex-none" disabled={answer.isPending}
+            onClick={() => answer.mutate({ behavior: 'deny', message: `${owner} didn't allow this. It was asked for by ${who}, so don't try another way to do it.` })}>
+            Deny
+          </Button>
+        </CardFooter>
+      ) : <WaitingOn who={owner} />}
     </Card>
   )
 }

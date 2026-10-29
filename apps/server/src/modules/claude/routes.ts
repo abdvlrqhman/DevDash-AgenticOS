@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
-import { EFFORTS, PERMISSION_MODES, type ClaudeService } from './service.ts'
+import { EFFORTS, GUEST_CAPS, PERMISSION_MODES, type ClaudeService } from './service.ts'
 
 const MB = 1024 * 1024
 const ImageInput = z.object({
@@ -67,7 +67,10 @@ const PatchInput = z.object({
 const SharingInput = z.object({
   audience: z.enum(['private', 'everyone', 'people']),
   everyoneCanSend: z.boolean().optional(),
-  people: z.array(z.object({ id: z.number().int().positive(), canSend: z.boolean() })).max(200).optional(),
+  // full: their messages run with the owner's access (only for people named here); otherwise the owner approves that.
+  people: z.array(z.object({ id: z.number().int().positive(), canSend: z.boolean(), full: z.boolean().optional() })).max(200).optional(),
+  // What teammates' requests may use without asking the owner; null: the owner's default for the project.
+  caps: z.array(z.enum(GUEST_CAPS)).max(GUEST_CAPS.length).nullable().optional(),
 })
 const ModeInput = z.object({ mode: z.enum(['chat', 'cli']), cols: Size.default(100), rows: z.number().int().min(4).max(200).default(30) })
 const DefaultsInput = z.object({
@@ -79,6 +82,9 @@ export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMi
     .use(mw.requireUser)
     .get('/sessions', query(z.object({ archived: z.enum(['0', '1']).default('0') })), (c) =>
       c.json({ sessions: claude.list(c.get('user'), c.req.valid('query').archived === '1') }))
+    .get('/projects/:slug/guest-caps', (c) => c.json(claude.projectCaps(c.get('user'), c.req.param('slug'))))
+    .put('/projects/:slug/guest-caps', json(z.object({ caps: z.array(z.enum(GUEST_CAPS)).max(GUEST_CAPS.length) })), (c) =>
+      c.json(claude.setProjectCaps(c.get('user'), c.req.param('slug'), c.req.valid('json').caps)))
     .get('/projects/:slug/sessions', query(z.object({ archived: z.enum(['0', '1']).default('0') })), (c) =>
       c.json(claude.inProject(c.get('user'), c.req.param('slug'), c.req.valid('query').archived === '1')))
     .post('/sessions', json(CreateInput), async (c) => c.json({ session: await claude.create(c.get('user'), c.req.valid('json')) }))
