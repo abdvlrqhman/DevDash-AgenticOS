@@ -9,7 +9,7 @@
 
 **A self-hosted workspace where a small team and its AI agents build software together, on one Linux server you own.**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 ![Node 24](https://img.shields.io/badge/node-%E2%89%A5%2024.7-339933?logo=node.js&logoColor=white)
 ![Ubuntu 24.04](https://img.shields.io/badge/server-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Platforms](https://img.shields.io/badge/apps-web%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-555)
@@ -31,7 +31,7 @@ turns a single server into that place:
   session with a colleague, answer its questions, and pick up the result as a branch, a pull request or a merge.
 - **Everyone stays separate.** Each person is a real Linux user with their own home, shell, Claude login, cloud storage
   and private network. DevDash itself never runs as root.
-- **You own it.** One server, one domain, MIT licensed. No SaaS account and no data leaving your machine, except what
+- **You own it.** One server, one domain, free for noncommercial use. No SaaS account and no data leaving your machine, except what
   you choose to connect.
 
 > The screenshots in this README show a demo space with sample data.
@@ -280,4 +280,8 @@ tests, code style and how changes are reviewed.
 
 ## License
 
-[MIT](LICENSE)
+DevDash is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It's free for personal and hobby
+projects, schools, research and nonprofits.
+
+**Commercial use** (a company running it, paid client work, or hosting it for others) needs a commercial license. Email
+support@spacie.net and we'll work out terms.

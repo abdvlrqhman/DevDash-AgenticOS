@@ -2,7 +2,7 @@
   "name": "devdash",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "workspaces": [
     "apps/server",
     "apps/agent",

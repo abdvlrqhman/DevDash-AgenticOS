@@ -2,7 +2,7 @@
 name = "devdash"
 version = "0.1.12"
 description = "DevDash: your team's space on your own server"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 edition = "2021"
 
 [lib]

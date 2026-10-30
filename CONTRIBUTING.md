@@ -68,4 +68,7 @@ Explain the reason in the body when it isn't obvious from the change.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).
+DevDash is available under the [PolyForm Noncommercial License 1.0.0](LICENSE) and, for commercial use, under separate
+commercial licenses. By contributing, you confirm the work is yours to contribute, and you grant the licensor named in
+[LICENSE](LICENSE) a perpetual, worldwide, royalty-free license to use, change and distribute your contributions under
+both.
