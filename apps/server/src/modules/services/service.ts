@@ -246,6 +246,9 @@ export function servicesService({ db, agents, hub, notify, previewUrl, basePath 
       return listeningPorts().map((p) => ({ ...p, service: byPort.get(p.port) ?? null }))
     },
 
+    /** Folders services run from or name in their command (a mounted build, say): never cleaned up from under them. */
+    foldersInUse: () => (q.all.all() as Row[]).flatMap((s) => [s.cwd, ...(s.command.match(/\/[^\s'":]+/g) ?? [])]),
+
     /** Who may open the live log view, and on whose agent it runs. */
     logsAccess: (_u: User, name: string) => get(name).owner_username,
   }

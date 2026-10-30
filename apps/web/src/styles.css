@@ -13,7 +13,7 @@
 :root {
   /* Native controls (select menus, date pickers, scrollbars) follow the theme too. */
   color-scheme: light;
-  --background: oklch(1 0 0);
+  --background: oklch(0.992 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -48,6 +48,9 @@
   --term-bg: oklch(0.18 0 0);
   --term-fg: oklch(0.93 0 0);
   --logo-bg: oklch(0.205 0 0);
+  /* Panels sit one tone step off the ground, and step again under the pointer: no hairlines, no resting shadows. */
+  --surface: oklch(0.966 0 0);
+  --surface-2: oklch(0.94 0 0);
 }
 
 .dark {
@@ -86,6 +89,8 @@
   --term-bg: oklch(0.12 0 0);
   --term-fg: oklch(0.93 0 0);
   --logo-bg: oklch(0.32 0 0);
+  --surface: oklch(0.192 0 0);
+  --surface-2: oklch(0.232 0 0);
 }
 
 @theme inline {
@@ -124,6 +129,9 @@
   --color-attention-soft: var(--attention-soft);
   --color-term-bg: var(--term-bg);
   --color-term-fg: var(--term-fg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --ease-spring: var(--spring);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -178,11 +186,33 @@
 /* Canvases (a terminal, the shared browser, logs) keep a tighter edge on phones, where every column of text counts. */
 @media (max-width: 767px) { .page-col.canvas { --gutter: 0.5rem; } }
 
-/* Motion tokens. Responses are quick and decelerate; nothing the member triggers eases in. */
+/*
+ * Motion tokens. Responses are quick and decelerate; nothing the member triggers eases in. --spring is Sileo's (the
+ * toasts'): the same small overshoot on a pressed button, an opening panel and a toast, so the app moves as one thing.
+ */
 :root {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --spring: linear(0, 0.002 0.6%, 0.007 1.2%, 0.015 1.8%, 0.026 2.4%, 0.041 3.1%, 0.06 3.8%, 0.108 5.3%, 0.157 6.6%, 0.214 8%,
+    0.467 13.7%, 0.577 16.3%, 0.631 17.7%, 0.682 19.1%, 0.73 20.5%, 0.771 21.8%, 0.808 23.1%, 0.844 24.5%, 0.874 25.8%,
+    0.903 27.2%, 0.928 28.6%, 0.952 30.1%, 0.972 31.6%, 0.988 33.1%, 1.01 35.7%, 1.025 38.5%, 1.034 41.6%, 1.038 45%,
+    1.035 50.1%, 1.012 64.2%, 1.003 73%, 0.999 83.7%, 1);
 }
+
+/* Menus, popovers and dialogs open on the same spring as the toasts (closing stays quick). */
+:is([data-slot="popover-content"], [data-slot="dropdown-menu-content"], [data-slot="dialog-content"], [data-slot="tooltip-content"])[data-state="open"] {
+  --tw-duration: 320ms;
+  --tw-ease: var(--spring);
+}
+@media (prefers-reduced-motion: reduce) {
+  :is([data-slot="popover-content"], [data-slot="dropdown-menu-content"], [data-slot="dialog-content"])[data-state="open"] { --tw-duration: 0ms; }
+}
+
+/* Sileo's toasts, in the app's type: sentences, not Title Case, and the same font. */
+/* Scoped under the viewport so these win over Sileo's own sheet, which loads after this one. */
+[data-sileo-viewport] { font-family: var(--font-sans); }
+[data-sileo-viewport] [data-sileo-title] { text-transform: none; letter-spacing: -0.005em; }
+[data-sileo-viewport] [data-sileo-description] { line-height: 1.45; }
 
 /* Inside the native app nothing selects except what people actually copy: messages, code, inputs, the terminal. */
 .shell body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

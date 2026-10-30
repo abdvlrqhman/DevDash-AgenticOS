@@ -2,8 +2,10 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExt
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { Archive, ArchiveRestore, Bot, Check, ChevronDown, Circle, Ellipsis, FileCode, Gauge, LoaderCircle, MessageSquare, Network, Pencil, Plus, Share2, SquareTerminal, Shield, ShieldOff, SlidersHorizontal, X, Zap } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
+import { Orb } from '@/components/app/orb'
+import { useArrivals } from '@/lib/motion'
 import { PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
@@ -197,6 +199,9 @@ function SessionView({ id }: { id: string }) {
   }, [info.data])
   const blocks = useMemo(() => buildTranscript(all), [all])
   const touched = useMemo(() => touchedFiles(blocks), [blocks])
+  // What arrives while you watch (your message, Claude's reply, the turn's result) lands instead of popping in.
+  const transcript = useRef<HTMLDivElement>(null)
+  useArrivals(transcript, history.isSuccess ? blocks.map((b) => b.key) : undefined)
   // So a Task step can fetch its subagent's activity and know, from the live task list, whether it is still running.
   const subagentCtx = useMemo(() => ({ sessionId: id, tasks: s?.tasks ?? [] }), [id, s?.tasks])
   const lastPromptAt = useMemo(() => blocks.findLast((b) => b.kind === 'user')?.at, [blocks]) as number | undefined
@@ -270,24 +275,27 @@ function SessionView({ id }: { id: string }) {
             {s.status === 'waiting' && pending[0]
               ? <span className="min-w-0 truncate font-medium text-attention-foreground">{requestSummary(pending[0])}</span>
               : STATUS_LABEL[s.status]}
-            <span className="truncate" title={s.cwd}>{sessionPlace(s)}</span>
-            {role
-              ? <span className="flex shrink-0 items-center gap-1"><Bot className="size-3" />{role.name} · AI team</span>
-              : <>
-                  {s.owner.id !== me.id && <span className="shrink-0">, {s.owner.name}'s</span>}
-                  {s.audience !== 'private' && s.owner.id === me.id && <span className="flex shrink-0 items-center gap-1">, <Share2 className="size-3" />{sharingLabel(s)}</span>}
-                </>}
-            {watching > 0 && <span className="shrink-0 sm:hidden">, {watching} watching</span>}
+            {/* One line that reads as a sentence and, when it doesn't fit, is cut at its end, never mid-way. */}
+            <span className="min-w-0 truncate" title={s.cwd}>
+              in {sessionPlace(s)}
+              {role
+                ? <>, <Bot className="inline size-3 align-[-1px]" /> {role.name}, AI team</>
+                : <>
+                    {s.owner.id !== me.id && <>, {s.owner.name}'s</>}
+                    {s.audience !== 'private' && s.owner.id === me.id && <>, <Share2 className="inline size-3 align-[-1px]" /> {sharingLabel(s)}</>}
+                  </>}
+              {watching > 0 && <span className="sm:hidden">, {watching} watching</span>}
+            </span>
           </span>
         }
         actions={<>
-          <div className="hidden sm:flex"><Watchers viewers={viewers} me={me.id} /></div>
+          <div className="hidden xl:flex"><Watchers viewers={viewers} me={me.id} /></div>
           {showComments && <CommentsButton count={commentCount} onClick={() => setCommentsOpen(true)} />}
           <ModelMenu s={s} disabled={!canSend} isOwner={isOwner} onUpdate={(v) => update.mutate(v)} />
           <Tabs value={s.mode} onValueChange={(v) => v !== s.mode && switchMode.mutate(v as 'chat' | 'cli')}>
             <TabsList className="pointer-coarse:h-10!">
-              <TabsTrigger value="chat" disabled={!canSend || switchMode.isPending}><MessageSquare /><span className="hidden sm:inline">Chat</span></TabsTrigger>
-              <TabsTrigger value="cli" disabled={!fullAccess || switchMode.isPending}><SquareTerminal /><span className="hidden sm:inline">CLI</span></TabsTrigger>
+              <TabsTrigger value="chat" disabled={!canSend || switchMode.isPending}><MessageSquare /><span className="hidden xl:inline">Chat</span></TabsTrigger>
+              <TabsTrigger value="cli" disabled={!fullAccess || switchMode.isPending}><SquareTerminal /><span className="hidden xl:inline">CLI</span></TabsTrigger>
             </TabsList>
           </Tabs>
           <SessionMenu s={s} isOwner={isOwner} canSend={canSend} access={info.data!.access} onUpdate={(v) => update.mutate(v)} onShare={() => setShare(true)} onRename={() => setSettings(true)} onUsage={() => setUsage(true)} onTailnet={() => setTailnet(true)} />
@@ -309,14 +317,14 @@ function SessionView({ id }: { id: string }) {
               <ErrorAlert error={history.error} />
               {!s.started && !raw.length && <p className="py-10 text-center text-muted-foreground">Tell Claude what to work on.</p>}
               <SubagentCtx.Provider value={subagentCtx}>
-                <Blocks blocks={blocks} senders={history.data?.senders} live={working || s.status === 'waiting'} />
+                <div ref={transcript}><Blocks blocks={blocks} senders={history.data?.senders} live={working || s.status === 'waiting'} /></div>
               </SubagentCtx.Provider>
               <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} />
               {s.status === 'error' && s.statusDetail && <ErrorAlert error={s.statusDetail} />}
               <Requests sessionId={id} requests={pending} canAnswer={canSend} isOwner={isOwner} owner={s.owner.name} waitingOn={canSend ? undefined : s.owner.name} afterPlanApproved={afterPlanApproved} />
             </div>
           </div>
-          <div className="border-t bg-background px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-6 md:pt-3 md:pb-3">
+          <div className="bg-background px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-6 md:pb-4">
             <div className="mx-auto max-w-4xl">
               <Composer sessionId={id} profile={s.profile} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
                 disabledReason={canSend ? undefined : <WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} />}
@@ -370,7 +378,11 @@ const LiveText = memo(function LiveText({ store, working, since, onGrow }: { sto
   grow.current = onGrow
   useLayoutEffect(() => grow.current(), [text])
   if (text) return <Prose text={text} />
-  return working ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><StatusLight state="live" />Claude is working… <Elapsed since={since} /></p> : null
+  return working ? (
+    <p className="flex items-center gap-2.5 py-1 text-sm text-muted-foreground">
+      <Orb state="working" size={20} />Claude is working… <Elapsed since={since} />
+    </p>
+  ) : null
 })
 
 /** How long Claude has been on this answer, counting up. */
@@ -491,13 +503,13 @@ function ModelMenu({ s, disabled, isOwner, onUpdate }: { s: Session; disabled: b
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={disabled}>
         <Button variant="outline" size="sm" className="shrink-0 max-sm:size-9 max-sm:px-0" aria-label="Model, effort and permissions">
-          <SlidersHorizontal className="sm:hidden" />
-          <span className="hidden sm:inline">{modelLabel(list, s.model)}</span>
-          <span className="hidden items-center gap-1 border-l pl-2 text-foreground/80 sm:flex">
+          <SlidersHorizontal className="xl:hidden" />
+          <span className="hidden xl:inline">{modelLabel(list, s.model)}</span>
+          <span className="hidden items-center gap-1 border-l pl-2 text-foreground/80 xl:flex">
             {s.permissionMode === 'bypassPermissions' ? <ShieldOff /> : <Shield />}{modeLabel(s.permissionMode)}{s.effort ? `, ${s.effort}` : ''}
             {s.fastMode && <Zap aria-label="Fast mode" />}
           </span>
-          <ChevronDown className="hidden sm:block" />
+          <ChevronDown className="hidden xl:block" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] w-72 overflow-y-auto">

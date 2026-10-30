@@ -118,7 +118,7 @@ function Workbench({ q, actionLabel, encode, children }: {
 
   return (
     <div className="flex flex-col gap-4">
-      {children && <div className="flex flex-col gap-3 rounded-xl border bg-card p-3.5">{children}</div>}
+      {children && <div className="flex flex-col gap-3 rounded-2xl bg-surface p-3.5">{children}</div>}
 
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" onClick={run} disabled={running}>{running ? 'Working…' : `${actionLabel} ${items.length} image${items.length === 1 ? '' : 's'}`}</Button>
@@ -130,7 +130,7 @@ function Workbench({ q, actionLabel, encode, children }: {
 
       <ul className="flex flex-col gap-2">
         {items.map((it) => (
-          <li key={it.id} className="flex items-center gap-3 rounded-xl border bg-card p-2.5">
+          <li key={it.id} className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
             <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
               <img src={it.out?.url ?? it.srcUrl} alt="" loading="lazy" className="max-h-full max-w-full object-contain"
                 onLoad={it.srcW ? undefined : (e) => measure(it.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
@@ -371,7 +371,7 @@ export function FaviconMaker() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3 rounded-xl border bg-card p-2.5">
+      <div className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
         <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
           <img src={previewUrl} alt="" className="max-h-full max-w-full object-contain" />
         </div>
@@ -401,7 +401,7 @@ export function FaviconMaker() {
       {results.length > 0 && (
         <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
           {results.map((r) => (
-            <li key={r.size} className="flex flex-col items-center gap-2 rounded-xl border bg-card p-3">
+            <li key={r.size} className="flex flex-col items-center gap-2 rounded-2xl bg-surface p-3">
               <div className="flex h-16 items-center justify-center"><img src={r.url} alt={`${r.size} pixel icon`} width={Math.min(r.size, 64)} height={Math.min(r.size, 64)} style={{ imageRendering: r.size <= 48 ? 'pixelated' : 'auto' }} /></div>
               <div className="font-mono text-xs text-muted-foreground">{r.size}×{r.size} · {bytes(r.blob.size)}</div>
               <Button type="button" size="xs" variant="outline" className="w-full" onClick={() => downloadBlob(r.blob, `icon-${r.size}.png`)}><Download />PNG</Button>

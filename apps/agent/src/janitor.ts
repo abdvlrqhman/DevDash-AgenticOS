@@ -12,6 +12,9 @@ import { promisify } from 'node:util'
 //      agent that re-downloads an SDK/node_modules into it can make it gigabytes). Only the ones THIS member owns.
 // We only ever remove something PROVABLY safe — stale, with no uncommitted edits, and nothing unmerged to lose (git keeps
 // the branch's commits regardless). Any doubt → skip and log. We never touch a main checkout.
+// A session worktree also has to be unused: no DevDash session that isn't archived works in it and no service runs from
+// or mounts it, as the server says at sweep time (inUse). A quiet folder can still be a live session's (Claude's last
+// turns may have changed nothing in it, and a forced remove takes its ignored files too). No answer → none are touched.
 
 const run = promisify(execFile)
 const ROOT = () => process.env.DEVDASH_PROJECTS_ROOT || '/srv/devdash'
@@ -166,12 +169,24 @@ async function handleOrphan(path: string, ageMs: number, out: Result): Promise<v
 /** This member's own uid, to only ever touch worktrees they own (so one agent never fights another's permissions). */
 const myUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
+/** Folders DevDash still uses (sessions' and services'), from the server; throws when it can't say. */
+export type InUse = () => Promise<string[]>
+
 /**
  * DevDash's session worktrees (/srv/devdash/worktrees/<slug>/<hex>, branch dd/<hex>): remove this member's abandoned
- * ones with the same safety policy as the subagent ones. Stale + clean + merged/nothing-ahead only; git keeps the branch.
+ * ones with the same safety policy as the subagent ones. Unused + stale + clean + merged/nothing-ahead only.
  */
-async function sweepDevdashWorktrees(now: number, out: Result): Promise<void> {
+async function sweepDevdashWorktrees(now: number, out: Result, inUse?: InUse): Promise<void> {
   const wtRoot = join(ROOT(), 'worktrees')
+  let used: string[]
+  try {
+    if (!inUse) throw new Error('no way to ask')
+    used = await Promise.all((await inUse()).map(canon))
+  } catch (err) {
+    console.log(`janitor: left session worktrees alone — couldn't ask DevDash which are in use (${(err as Error).message})`)
+    return
+  }
+  const isUsed = (p: string) => used.some((u) => u === p || u.startsWith(`${p}/`))
   const uid = myUid()
   let slugs: string[]
   try {
@@ -193,7 +208,9 @@ async function sweepDevdashWorktrees(now: number, out: Result): Promise<void> {
       try {
         const st = await lstat(path)
         if (uid >= 0 && st.uid !== uid) continue // only this member's own worktrees
-        const r = reg.get(await canon(path))
+        const real = await canon(path)
+        if (isUsed(real) || isUsed(path)) continue // a session or a service still works in it, however quiet
+        const r = reg.get(real)
         if (!r) continue // not a registered worktree (half-removed / unexpected) → leave it
         const ageMs = now - (await newestMtimeMs(path))
         const d = decide(await inspect(repo, path, r, base, ageMs))
@@ -276,7 +293,7 @@ async function sweepAttachments(now: number, out: Result): Promise<void> {
 }
 
 /** One full sweep across the member's project checkouts. Never throws; returns how many it removed vs. kept. */
-export async function sweep(now = Date.now()): Promise<Result> {
+export async function sweep(now = Date.now(), inUse?: InUse): Promise<Result> {
   const out: Result = { removed: 0, skipped: 0 }
   let repos: string[]
   try {
@@ -315,7 +332,7 @@ export async function sweep(now = Date.now()): Promise<Result> {
       }
     }
   }
-  await sweepDevdashWorktrees(now, out).catch((err) => console.log(`janitor: devdash worktrees sweep failed — ${(err as Error).message}`))
+  await sweepDevdashWorktrees(now, out, inUse).catch((err) => console.log(`janitor: devdash worktrees sweep failed — ${(err as Error).message}`))
   await sweepUploads(now, out).catch((err) => console.log(`janitor: uploads sweep failed — ${(err as Error).message}`))
   await sweepAttachments(now, out).catch((err) => console.log(`janitor: attachments sweep failed — ${(err as Error).message}`))
   if (out.removed || out.skipped) console.log(`janitor: removed ${out.removed}, kept ${out.skipped} stale/uncertain worktree(s)`)
@@ -323,7 +340,7 @@ export async function sweep(now = Date.now()): Promise<Result> {
 }
 
 /** Schedules the sweep off the agent's critical path: once ~2 min after start, then every ~6h. Never blocks or throws. */
-export function startJanitor(): void {
-  const once = () => void sweep().catch((err) => console.log(`janitor: sweep failed — ${(err as Error).message}`))
+export function startJanitor(inUse: InUse): void {
+  const once = () => void sweep(Date.now(), inUse).catch((err) => console.log(`janitor: sweep failed — ${(err as Error).message}`))
   setTimeout(() => { once(); setInterval(once, SWEEP_INTERVAL_MS).unref() }, FIRST_SWEEP_MS).unref()
 }

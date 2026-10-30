@@ -10,6 +10,8 @@ use tauri_plugin_opener::OpenerExt;
 
 #[cfg(target_os = "ios")]
 mod ios_push;
+#[cfg(desktop)]
+mod tray;
 
 /// Desktop self-update, from the space this app opens rather than from GitHub: DevDash's repository can be private, so
 /// each space serves the app's releases itself (https://<space>/api/app/latest.json). Every update is still checked
@@ -279,7 +281,14 @@ fn on_download(webview: tauri::Webview, event: tauri::webview::DownloadEvent<'_>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Desktop: one copy of DevDash. Opening it again (while it waits in the tray) shows the window that's already
+    // running. This plugin has to be registered before any other.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show(app)))
+        .on_window_event(tray::on_window_event);
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
     // iPhone: notifications while the app is closed, through Apple's push service. After the
@@ -302,6 +311,7 @@ pub fn run() {
             {
                 app.handle().plugin(tauri_plugin_process::init())?;
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                tray::create(app.handle())?;
             }
 
             #[cfg(target_os = "ios")]
@@ -340,6 +350,9 @@ pub fn run() {
                     .title("DevDash")
                     .inner_size(1200.0, 800.0)
                     .min_inner_size(360.0, 560.0)
+                    // The window's own file-drop handling would take every drag (WebView2 then gives the page none):
+                    // off, so pages get normal drag and drop, a task card on the board or a file onto a message.
+                    .disable_drag_drop_handler()
                     // window.open() and target=_blank, from the space's pages or a service shown inside them (WebView2
                     // raises popups from frames here too): links go to the system browser, not a stray in-app window.
                     .on_new_window(move |url, features| {

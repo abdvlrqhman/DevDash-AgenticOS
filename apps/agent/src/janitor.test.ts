@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ATTACHMENTS_MS, decide, STALE_MS, sweep, type WorktreeState } from './janitor.ts'
@@ -86,4 +87,37 @@ test("a member's old attachments (two weeks untouched) are swept; recent ones st
   }
   assert.deepEqual(readdirSync(up).sort(), ['live-session']) // the emptied session folder went too
   assert.deepEqual(readdirSync(join(up, 'live-session')), ['bbbb'])
+})
+
+test('a session worktree goes only once DevDash says no session or service uses it, however long it has been quiet', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dd-janitor-wt-'))
+  const repo = join(root, 'projects', 'app')
+  const wt = join(root, 'worktrees', 'app', 'abcd1234')
+  mkdirSync(repo, { recursive: true })
+  const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' } })
+  git('init', '-q', '-b', 'main')
+  git('commit', '-q', '--allow-empty', '-m', 'x')
+  git('worktree', 'add', '-q', '-b', 'dd/abcd1234', wt, 'main')
+  const quiet = () => { // nothing in it changed for two days
+    const t = (Date.now() - 2 * STALE_MS) / 1000
+    for (const p of [join(wt, '.git'), wt]) utimesSync(p, t, t)
+  }
+  const saved = process.env.DEVDASH_PROJECTS_ROOT
+  process.env.DEVDASH_PROJECTS_ROOT = root
+  try {
+    quiet()
+    await sweep(Date.now())
+    assert.equal(existsSync(wt), true, 'no way to ask: left alone')
+    await sweep(Date.now(), async () => { throw new Error('not connected') })
+    assert.equal(existsSync(wt), true, 'no answer: left alone')
+    await sweep(Date.now(), async () => [join(wt, 'web')])
+    assert.equal(existsSync(wt), true, 'a session works in it')
+    quiet()
+    await sweep(Date.now(), async () => ['/somewhere/else'])
+    assert.equal(existsSync(wt), false, 'unused, quiet, clean and merged: removed')
+  } finally {
+    if (saved === undefined) delete process.env.DEVDASH_PROJECTS_ROOT
+    else process.env.DEVDASH_PROJECTS_ROOT = saved
+    rmSync(root, { recursive: true, force: true })
+  }
 })

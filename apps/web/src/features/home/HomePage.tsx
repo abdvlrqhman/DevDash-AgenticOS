@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ChevronRight, ListTodo, Plus, Search, StickyNote } from 'lucide-react'
 import { StatusLight } from '@/components/app/brand'
+import { Orb } from '@/components/app/orb'
 import { PageHeader, pageCol } from '@/components/app/page'
 import { showSearch } from '@/components/app/search'
 import { Button } from '@/components/ui/button'
@@ -20,7 +21,6 @@ const greeting = () => {
   const h = new Date().getHours()
   return h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
 }
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const today = () => new Date().toISOString().slice(0, 10)
 const now = () => Math.floor(Date.now() / 1000)
 /** When a line happened: the time today, the date before that. */
@@ -50,9 +50,6 @@ function useLastHere() {
   }, [])
   return last
 }
-
-/** The handover's status light flicks on once per app load, like a rack coming up; after that it just changes. */
-let lit = false
 
 type Line = { key: string; at: number; text: ReactNode; to?: string; tone?: 'live' | 'error' }
 
@@ -130,56 +127,71 @@ export function HomePage() {
   useArrivals(runningList, loaded ? [...working.map((s) => s.id), ...up.map((s) => s.name)] : undefined)
   useArrivals(log, activityQ.isSuccess ? lines.map((l) => l.key) : undefined)
 
-  const light = needsYou ? 'waiting' : working.length || up.length ? 'live' : 'idle'
-  const flick = !lit && loaded
-  useEffect(() => { if (loaded) lit = true }, [loaded])
+  const orb = needsYou ? 'listening' : working.length ? 'working' : 'breathing'
+  const headline = !loaded ? 'Checking the server…'
+    : needsYou ? `${count(needsYou, 'thing')} ${needsYou === 1 ? 'needs' : 'need'} you.`
+    : working.length ? `Claude is working on ${count(working.length, 'session').toLowerCase()}.`
+    : 'All quiet.'
+
+  // The one orchestrated moment: the first time Home appears in a visit, the note writes itself in, top to bottom.
+  const page = useRef<HTMLDivElement>(null)
+  useMotion((gsap) => {
+    if (!loaded || introduced) return
+    introduced = true
+    gsap.timeline({ defaults: { ease: 'power3.out', duration: 0.6, clearProps: 'opacity,transform' } })
+      .fromTo('[data-orb]', { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.7, ease: 'back.out(1.6)' })
+      .fromTo('[data-intro]', { opacity: 0, y: 14 }, { opacity: 1, y: 0, stagger: 0.07 }, '<0.08')
+      .fromTo('[data-section]', { opacity: 0, y: 18 }, { opacity: 1, y: 0, stagger: 0.08 }, '<0.15')
+  }, [loaded], page)
 
   return (
     <>
       <PageHeader title={space?.name ?? 'Home'} actions={<Button size="sm" onClick={() => setCreating(true)}><Plus />New session</Button>} />
-      <div style={pageCol()} className="page-col flex flex-col gap-10 py-6 md:py-8 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start lg:gap-x-12">
+      <div ref={page} style={pageCol()} className="page-col flex flex-col gap-12 py-8 md:py-12 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start lg:gap-x-14">
         {/* On phones both columns melt into one list (display: contents) and `order` sets the reading order. */}
-        <div className="contents lg:flex lg:min-w-0 lg:flex-col lg:gap-10">
-          <header className="order-1 flex flex-col gap-4">
-            <div className="flex flex-col gap-1.5">
-              <p className="text-sm text-muted-foreground">
-                {greeting()}, {me.name.split(' ')[0]}.{lastHere && away > 300 && <> Last here {relativeTime(lastHere)}.</>}
-              </p>
-              <h2 className="flex items-baseline gap-3 text-2xl leading-tight font-semibold tracking-tight text-balance md:text-[1.75rem]">
-                {loaded && <StatusLight state={light} className={cn('relative -top-0.5 size-3', flick && 'led-on')} />}
-                {!loaded ? <span className="text-muted-foreground">Checking the server…</span>
-                  : needsYou ? `${plural(needsYou, 'thing')} ${needsYou === 1 ? 'needs' : 'need'} you.`
-                  : working.length ? `Nothing needs you. Claude is working on ${plural(working.length, 'session')}.`
-                  : 'All quiet. Nothing needs you.'}
-              </h2>
-              {loaded && <Facts working={needsYou ? working.length : 0} up={up.length} total={services.length} />}
+        <div className="contents lg:flex lg:min-w-0 lg:flex-col lg:gap-12">
+          <header className="order-1 flex flex-col gap-7">
+            <div className="flex items-start gap-4 md:gap-5">
+              <span data-orb className="flex size-16 shrink-0 items-center justify-center rounded-full bg-surface">
+                {loaded && <Orb state={orb} size={64} label={headline} />}
+              </span>
+              <div className="flex min-w-0 flex-col gap-2 pt-0.5">
+                <p data-intro className="text-sm text-muted-foreground">
+                  {greeting()}, {me.name.split(' ')[0]}.{lastHere && away > 300 && <> Last here {relativeTime(lastHere)}.</>}
+                </p>
+                <h1 data-intro className={cn('max-w-[22ch] text-[2rem] leading-[1.05] font-semibold tracking-[-0.035em] text-balance md:text-[2.75rem]',
+                  !loaded && 'text-muted-foreground')}>
+                  {headline}
+                </h1>
+                {loaded && <Facts data-intro needsYou={needsYou} working={needsYou ? working.length : 0} up={up.length} total={services.length} />}
+              </div>
             </div>
-            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 md:mx-0 md:px-0">
+            <div data-intro className="-mx-4 flex gap-2 overflow-x-auto px-4 md:mx-0 md:px-0">
               <Button variant="outline" size="sm" onClick={() => setNewTask(true)}><ListTodo />New task</Button>
               <Button variant="outline" size="sm" asChild><Link to="/notes/$id" params={{ id: 'new' }}><StickyNote />New note</Link></Button>
-              <Button variant="outline" size="sm" onClick={showSearch}><Search />Search<kbd className="ml-1 hidden font-mono text-[10px] text-muted-foreground md:inline">⌘K</kbd></Button>
+              <Button variant="outline" size="sm" onClick={showSearch}><Search />Search<kbd className="ml-1 hidden text-[11px] text-muted-foreground md:inline">⌘K</kbd></Button>
             </div>
           </header>
 
           {needsYou > 0 && (
             <Block title="Needs you" count={needsYou} className="order-2">
-              <ul ref={needsList} className="divide-y overflow-hidden rounded-xl border">
+              <Panel ref={needsList}>
                 {trouble.map((t) => (
                   <Row key={t.key} k={t.key} to="/server" lead={<StatusLight state="error" />} title={t.title} detail={t.detail} />
                 ))}
                 {waiting.map((s) => (
-                  <Row key={s.id} k={s.id} to={`/claude/${s.id}`} attention lead={<StatusLight state="waiting" />}
+                  <Row key={s.id} k={s.id} to={`/claude/${s.id}`} attention lead={<StatusLight state="waiting" className="needs-you" />}
                     title={s.title} detail={`Claude is waiting for your answer, in ${where(s)}`} />
                 ))}
                 {crashed.map((s) => (
                   <Row key={s.name} k={s.name} to={`/services/${s.name}`} lead={<StatusLight state="error" />}
-                    title={<span className="font-mono">{s.name}</span>} detail="Crashed and stopped restarting. Its logs say why." />
+                    title={s.name} detail="Crashed and stopped restarting. Its logs say why." />
                 ))}
                 {urgent.map((t) => (
                   <Row key={t.key} k={t.key} to={`/tasks/${t.project.slug}/${t.number}`} lead={<StatusIcon status={t.status} />}
-                    title={t.title} detail={<span className="flex items-center gap-2"><span className="font-mono">{t.key}</span><Due due={t.due} /></span>} />
+                    title={t.title} detail={<span className="flex items-center gap-2"><span className="tabular-nums">{t.key}</span><Due due={t.due} /></span>} />
                 ))}
-              </ul>
+              </Panel>
             </Block>
           )}
 
@@ -189,7 +201,7 @@ export function HomePage() {
                 {lines.map((l, i) => (
                   <li key={l.key} data-key={l.key} {...(i < fresh ? { 'data-fresh': '' } : {})}>
                     {i === fresh && fresh > 0 && (
-                      <div className="flex items-center gap-3 py-2 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-3 py-2.5 text-xs text-muted-foreground">
                         <span className="h-px flex-1 bg-border" />Last here {clock(lastHere!)}<span className="h-px flex-1 bg-border" />
                       </div>
                     )}
@@ -204,21 +216,19 @@ export function HomePage() {
             {!tasksQ.isSuccess ? null : upcoming.length === 0 ? (
               <Calm>{urgent.length ? 'Nothing else on your plate.' : 'No tasks assigned to you.'} <button className="text-foreground underline underline-offset-4" onClick={() => setNewTask(true)}>Add one</button></Calm>
             ) : (
-              <ul className="divide-y overflow-hidden rounded-xl border">
-                {upcoming.slice(0, 7).map((t) => <TaskLine key={t.key} t={t} />)}
-              </ul>
+              <Panel>{upcoming.slice(0, 7).map((t) => <TaskLine key={t.key} t={t} />)}</Panel>
             )}
           </Block>
 
           {recent.length > 0 && (
             <Block title="Pick up where you left off" link={{ to: '/claude', label: 'All sessions' }} className="order-6">
-              <ul className="grid gap-2 sm:grid-cols-2">
+              <ul className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0">
                 {recent.map((s) => (
-                  <li key={s.id}>
+                  <li key={s.id} className="w-[72%] shrink-0 snap-start sm:w-auto">
                     <Link to="/claude/$id" params={{ id: s.id }}
-                      className="flex h-full flex-col gap-1 rounded-xl border px-3.5 py-3 text-sm transition-colors duration-150 hover:bg-accent/50 active:bg-accent">
-                      <span className="line-clamp-1 font-medium">{s.title}</span>
-                      <span className="line-clamp-1 text-xs text-muted-foreground">{relativeTime(s.lastActivityAt)}, {where(s)}</span>
+                      className="flex h-full flex-col gap-6 rounded-2xl bg-surface px-4 py-3.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98]">
+                      <span className="line-clamp-2 font-medium">{s.title}</span>
+                      <span className="line-clamp-1 text-xs text-muted-foreground">{where(s)}, {relativeTime(s.lastActivityAt)}</span>
                     </Link>
                   </li>
                 ))}
@@ -227,14 +237,14 @@ export function HomePage() {
           )}
         </div>
 
-        <aside className="contents lg:sticky lg:top-20 lg:flex lg:flex-col lg:gap-10">
+        <aside className="contents lg:sticky lg:top-20 lg:flex lg:flex-col lg:gap-12">
           <Block title="Running now" count={working.length + up.length || undefined} link={{ to: '/services', label: 'Services' }} className="order-3">
             {!loaded ? null : working.length + up.length === 0 ? <Calm>Nothing is running. Claude sessions and services show here while they work.</Calm> : (
-              <ul ref={runningList} className="divide-y overflow-hidden rounded-xl border">
-                {working.map((s) => (
+              <Panel ref={runningList}>
+                {working.map((s, i) => (
                   <li key={s.id} data-key={s.id}>
-                    <Link to="/claude/$id" params={{ id: s.id }} className="flex items-center gap-3 px-3.5 py-3 text-sm transition-colors duration-150 hover:bg-accent/50 active:bg-accent">
-                      <StatusLight state="live" />
+                    <Link to="/claude/$id" params={{ id: s.id }} className={rowClass}>
+                      {i < 4 ? <Orb state="working" size={20} label="Claude is working" /> : <span className="flex size-5 items-center justify-center"><StatusLight state="live" /></span>}
                       <span className="min-w-0 flex-1">
                         <span className="line-clamp-1 font-medium">{s.title}</span>
                         <span className="line-clamp-1 text-xs text-muted-foreground">{s.statusDetail || 'Working'}, in {where(s)}</span>
@@ -245,14 +255,14 @@ export function HomePage() {
                 ))}
                 {up.map((s) => (
                   <li key={s.name} data-key={s.name}>
-                    <Link to="/services/$name" params={{ name: s.name }} className="flex items-center gap-3 px-3.5 py-2.5 text-sm transition-colors duration-150 hover:bg-accent/50 active:bg-accent">
-                      <StatusLight state={s.listening ? 'live' : 'idle'} />
-                      <span className="min-w-0 flex-1 truncate font-mono">{s.name}</span>
-                      <span className="font-mono text-xs text-muted-foreground tabular-nums">:{s.port}</span>
+                    <Link to="/services/$name" params={{ name: s.name }} className={cn(rowClass, 'py-2')}>
+                      <span className="flex size-5 items-center justify-center"><StatusLight state={s.listening ? 'live' : 'idle'} /></span>
+                      <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                      <span className="text-xs text-muted-foreground tabular-nums">:{s.port}</span>
                     </Link>
                   </li>
                 ))}
-              </ul>
+              </Panel>
             )}
           </Block>
 
@@ -263,9 +273,12 @@ export function HomePage() {
                   const busy = working.filter((s) => s.owner.id === u.id).length
                   return (
                     <li key={u.id} className="flex items-center gap-3 text-sm">
-                      <UserAvatar user={u} className="size-7" textClassName="text-xs" />
+                      <span className="relative">
+                        <UserAvatar user={u} className="size-8" textClassName="text-xs" />
+                        {busy > 0 && <span className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full bg-live ring-2 ring-background" />}
+                      </span>
                       <span className="min-w-0 flex-1 truncate">{u.name}{u.id === me.id && <span className="text-muted-foreground"> (you)</span>}</span>
-                      {busy > 0 && <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><StatusLight state="live" />{plural(busy, 'session')}</span>}
+                      {busy > 0 && <span className="text-xs text-muted-foreground">{count(busy, 'session').toLowerCase()}</span>}
                     </li>
                   )
                 })}
@@ -279,6 +292,13 @@ export function HomePage() {
     </>
   )
 }
+
+/** Home writes itself in once per visit, not every time you come back to it. */
+let introduced = false
+
+const WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten']
+/** "Two things", in words up to ten: it reads as a sentence, not a counter. */
+const count = (n: number, one: string, many = `${one}s`) => `${WORDS[n] ?? n} ${n === 1 ? one : many}`
 
 const rank = (t: Task) => ['urgent', 'high', 'medium', 'low', 'none'].indexOf(t.priority)
 
@@ -294,24 +314,25 @@ const activityLine = (a: Activity): Line => ({
 /** One line of the log: the time it happened, a tick, what happened. */
 function LogLine({ line }: { line: Line }) {
   const body = (
-    <span data-line className="flex items-start gap-3 py-1.5 text-sm">
-      <span className="w-16 shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">{clock(line.at)}</span>
-      <span data-tick className={cn('mt-[7px] size-1.5 shrink-0 self-start rounded-[2px]',
-        line.tone === 'error' ? 'bg-destructive' : line.tone === 'live' ? 'bg-live' : 'bg-muted-foreground/40')} />
+    <span data-line className="flex items-start gap-3 py-2 text-sm">
+      <span className="w-16 shrink-0 pt-px text-xs whitespace-nowrap text-muted-foreground tabular-nums">{clock(line.at)}</span>
+      <span data-tick className={cn('mt-[7px] size-1.5 shrink-0 self-start rounded-full',
+        line.tone === 'error' ? 'bg-destructive' : line.tone === 'live' ? 'bg-live' : 'bg-muted-foreground/35')} />
       <span className="line-clamp-2 min-w-0 flex-1 text-muted-foreground">{line.text}</span>
     </span>
   )
-  return line.to ? <Link to={line.to} className="-mx-2 block rounded-md px-2 transition-colors duration-150 hover:bg-accent/50">{body}</Link> : body
+  return line.to ? <Link to={line.to} className="-mx-3 block rounded-xl px-3 transition-colors duration-200 hover:bg-surface">{body}</Link> : body
 }
 
 /** What the headline leaves out (Needs you lists the rest right below), each a link to where it lives. */
-function Facts({ working, up, total }: { working: number; up: number; total: number }) {
+function Facts({ needsYou, working, up, total, ...rest }: { needsYou: number; working: number; up: number; total: number } & React.HTMLAttributes<HTMLParagraphElement>) {
   const parts: ReactNode[] = []
-  if (working) parts.push(<Fact key="r" to="/claude">Claude is working on {plural(working, 'session')}</Fact>)
-  if (total) parts.push(<Fact key="s" to="/services">{up} of {plural(total, 'service')} up</Fact>)
+  if (!needsYou) parts.push(<span key="n">Nothing needs you</span>)
+  if (working) parts.push(<Fact key="r" to="/claude">Claude is working on {count(working, 'session').toLowerCase()}</Fact>)
+  if (total) parts.push(<Fact key="s" to="/services">{up} of {total} services are up</Fact>)
   if (!parts.length) return null
   return (
-    <p className="text-sm text-muted-foreground">
+    <p {...rest} className="text-[15px] text-muted-foreground">
       {parts.map((p, i) => <span key={i}>{p}{i < parts.length - 2 ? ', ' : i === parts.length - 2 ? ' and ' : '.'}</span>)}
     </p>
   )
@@ -323,24 +344,29 @@ const Fact = ({ to, children }: { to: string; children: ReactNode }) => (
 
 function Block({ title, count, link, className, children }: { title: string; count?: number; link?: { to: string; label: string }; className?: string; children: ReactNode }) {
   return (
-    <section className={cn('flex min-w-0 flex-col gap-3', className)}>
+    <section data-section className={cn('flex min-w-0 flex-col gap-3', className)}>
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-[15px] font-semibold">{title}{count ? <span className="ml-1.5 font-normal text-muted-foreground tabular-nums">{count}</span> : null}</h3>
-        {link && <Link to={link.to} className="-my-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent/60 hover:text-foreground">{link.label}</Link>}
+        <h2 className="text-base font-semibold tracking-[-0.01em]">{title}{count ? <span className="ml-2 font-normal text-muted-foreground tabular-nums">{count}</span> : null}</h2>
+        {link && <Link to={link.to} className="-my-1 rounded-full px-2.5 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-surface hover:text-foreground">{link.label}</Link>}
       </div>
       {children}
     </section>
   )
 }
 
+/** Rows on one tone-stepped panel: the panel groups them, a step in tone under the pointer marks one; no lines. */
+const Panel = ({ ref, children }: { ref?: React.Ref<HTMLUListElement>; children: ReactNode }) => (
+  <ul ref={ref} className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">{children}</ul>
+)
+const rowClass = 'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]'
+
 const Calm = ({ children }: { children: ReactNode }) => <p className="text-sm text-pretty text-muted-foreground">{children}</p>
 
 function Row({ k, to, lead, title, detail, attention }: { k: string; to: string; lead: ReactNode; title: ReactNode; detail: ReactNode; attention?: boolean }) {
   return (
     <li data-key={k}>
-      <Link to={to} className={cn('flex items-center gap-3 px-3.5 py-3 text-sm transition-colors duration-150 hover:bg-accent/50 active:bg-accent',
-        attention && 'bg-attention-soft hover:bg-attention-soft/70')}>
-        <span className="flex size-4 shrink-0 items-center justify-center">{lead}</span>
+      <Link to={to} className={cn(rowClass, attention && 'bg-attention-soft hover:bg-attention-soft/70')}>
+        <span className="flex size-5 shrink-0 items-center justify-center">{lead}</span>
         <span className="min-w-0 flex-1">
           <span className="line-clamp-1 font-medium">{title}</span>
           <span className={cn('line-clamp-1 text-xs', attention ? 'text-attention-foreground' : 'text-muted-foreground')}>{detail}</span>
@@ -354,13 +380,12 @@ function Row({ k, to, lead, title, detail, attention }: { k: string; to: string;
 function TaskLine({ t }: { t: Task }) {
   return (
     <li>
-      <Link to="/tasks/$slug/$number" params={{ slug: t.project.slug, number: String(t.number) }}
-        className="flex items-center gap-3 px-3.5 py-2.5 text-sm transition-colors duration-150 hover:bg-accent/50 active:bg-accent">
-        <StatusIcon status={t.status} />
+      <Link to="/tasks/$slug/$number" params={{ slug: t.project.slug, number: String(t.number) }} className={rowClass}>
+        <span className="flex size-5 shrink-0 items-center justify-center"><StatusIcon status={t.status} /></span>
         <span className="min-w-0 flex-1 truncate">{t.title}</span>
         <PriorityIcon priority={t.priority} />
         <Due due={t.due} />
-        <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{t.key}</span>
+        <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">{t.key}</span>
       </Link>
     </li>
   )

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from '@tanstack/react-router'
 import { Copy, Download, ExternalLink, FileText, Link2, RotateCw, Square } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { NativeSelect } from '@/components/app/native-select'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
@@ -73,7 +73,7 @@ function RunPageView() {
         {artifacts.length > 0 && (
           <section className="flex flex-col gap-2">
             <h3 className="text-sm font-medium">Artifacts</h3>
-            <ul className="overflow-hidden rounded-xl border">
+            <ul className="overflow-hidden rounded-2xl bg-surface">
               {artifacts.map((a) => (
                 <li key={a.id} className="flex items-center gap-3 border-b px-3 py-2.5 text-sm last:border-b-0">
                   <span className="min-w-0 flex-1"><span className="block truncate font-medium">{a.name}</span><span className="text-xs text-muted-foreground">{a.expired ? 'Expired on GitHub' : bytes(a.size)}</span></span>
@@ -89,7 +89,7 @@ function RunPageView() {
         <section className="flex flex-col gap-3">
           <h3 className="text-sm font-medium">Jobs</h3>
           {jobs.map((j) => (
-            <div key={j.id} className="overflow-hidden rounded-xl border">
+            <div key={j.id} className="overflow-hidden rounded-2xl bg-surface">
               <div className="flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-sm">
                 <RunIcon status={j.status} conclusion={j.conclusion} />
                 <span className="min-w-0 flex-1 truncate font-medium">{j.name}</span>

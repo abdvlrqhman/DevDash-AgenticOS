@@ -3,7 +3,7 @@ import {
   BookOpen, Brain, CalendarClock, Check, ChevronRight, Circle, CircleAlert, Copy, FileText, Info, ListChecks, LoaderCircle, MessagesSquare, SquareSlash,
   type LucideIcon,
 } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
@@ -64,7 +64,7 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
   return (
     <div className={cn('flex flex-col', nested ? 'gap-2' : 'gap-4')}>
       {group(blocks).map((b) => {
-        switch (b.kind) {
+        const el = (() => { switch (b.kind) {
           case 'steps':
             return <ToolSteps key={b.key} steps={b.steps} live={live} renderChildren={children} />
           case 'user': {
@@ -78,7 +78,7 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
                     {text && <CopyButton text={b.text} label="Copy message" className="opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100" />}
                     {(who || b.at) && (
                       <span>
-                        {[who, b.at && <time key="t" dateTime={new Date(b.at).toISOString()} title={new Date(b.at).toLocaleString()}>{clock(b.at)}</time>].filter(Boolean).reduce<ReactNode[]>((acc, x, i) => (i ? [...acc, ' · ', x] : [x]), [])}
+                        {[who, b.at && <time key="t" dateTime={new Date(b.at).toISOString()} title={new Date(b.at).toLocaleString()}>{clock(b.at)}</time>].filter(Boolean).reduce<ReactNode[]>((acc, x, i) => (i ? [...acc, ', ', x] : [x]), [])}
                       </span>
                     )}
                   </div>
@@ -99,7 +99,7 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
                 )}
                 {/* data-selectable: the app selects only what people copy (styles.css), and your own messages are that too. */}
                 {/* overflow-wrap: anywhere, not break-word: a long link must narrow the bubble too, or it pushes it off the left. */}
-                {text && <div data-selectable className="max-w-full rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-[15px] [overflow-wrap:anywhere] whitespace-pre-wrap text-primary-foreground md:text-sm">{b.text}</div>}
+                {text && <div data-selectable className="max-w-full rounded-[22px] rounded-br-lg bg-primary px-4 py-2.5 text-[15px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-primary-foreground md:text-sm md:leading-relaxed">{b.text}</div>}
               </div>
             )
           }
@@ -125,8 +125,10 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
           case 'event':
             return <Event key={b.key} text={b.text} ok={b.ok} tone={b.tone} detail={b.detail} images={b.images} />
           case 'note':
-            return <p key={b.key} className="border-y py-1.5 text-center text-xs text-muted-foreground">{b.text}</p>
-        }
+            return <p key={b.key} className="py-1.5 text-center text-xs text-muted-foreground">{b.text}</p>
+        } })()
+        // Top-level items carry their key, so what arrives while you watch can land (SessionPage, useArrivals).
+        return nested || !el ? el : <div key={b.key} data-key={b.key} className="flex flex-col">{el}</div>
       })}
     </div>
   )
@@ -158,13 +160,21 @@ function ResultLine({ b, reply }: { b: Extract<Block, { kind: 'result' }>; reply
   ].filter(Boolean).join('\n') : undefined
   const tone = b.stopped ? 'text-muted-foreground' : b.ok ? 'text-muted-foreground' : 'text-destructive'
   return (
-    <p className={cn('flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs tabular-nums', tone)} title={detail}>
-      {b.ok || b.stopped ? <Check className="size-3.5" /> : <CircleAlert className="size-3.5" />}
-      <span>{b.stopped ? 'Stopped' : b.ok ? 'Done' : 'Stopped with an error'}</span>
-      {b.at && <><span aria-hidden>·</span><time dateTime={new Date(b.at).toISOString()}>{clock(b.at)}</time></>}
-      <span aria-hidden>·</span><span>{took(b.seconds)}</span>
-      {t && <><span aria-hidden>·</span><span>{kTokens(read)} in, {kTokens(t.output)} out</span></>}
-      {b.cost !== undefined && <><span aria-hidden>·</span><span>${b.cost < 0.01 ? b.cost.toFixed(3) : b.cost.toFixed(2)}</span></>}
+    // A sentence, then the meter: "Done at 14:02 after 51s", and quieter, what it read and wrote and cost.
+    <p className={cn('flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs tabular-nums', tone)} title={detail}>
+      <span className="flex items-center gap-1.5">
+        {b.ok || b.stopped ? <Check className="size-3.5" /> : <CircleAlert className="size-3.5" />}
+        <span>
+          {b.stopped ? 'Stopped' : b.ok ? 'Done' : 'Stopped with an error'}
+          {b.at && <> at <time dateTime={new Date(b.at).toISOString()}>{clock(b.at)}</time></>} after {took(b.seconds)}
+        </span>
+      </span>
+      {(t || b.cost !== undefined) && (
+        <span className="opacity-70">
+          {t && <>{kTokens(read)} in, {kTokens(t.output)} out</>}
+          {b.cost !== undefined && <>{t ? ', ' : ''}${b.cost < 0.01 ? b.cost.toFixed(3) : b.cost.toFixed(2)}</>}
+        </span>
+      )}
       {reply && <CopyButton text={reply} label="Copy reply" className="-my-1" />}
     </p>
   )

@@ -24,8 +24,15 @@ export const SHARED_ROOTS = [`${SRV}/projects`, `${SRV}/worktrees`, `${SRV}/file
 export const GUEST_CAPS = ['drive', 'tailnet', 'github', 'apps'] as const
 export type GuestCap = (typeof GUEST_CAPS)[number]
 
-/** Tools that use nothing of the owner's. A subagent's own tool calls come through this gate too. */
-const HARMLESS = new Set(['TodoWrite', 'Task', 'Agent', 'WebSearch', 'ToolSearch', 'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion'])
+/**
+ * Tools that use nothing of the owner's: planning, to-dos, skills (instructions to read), subagents and their messages,
+ * background task output, worktrees in the project. A subagent's own tool calls come through this gate too.
+ */
+const HARMLESS = new Set([
+  'TodoWrite', 'Task', 'Agent', 'WebSearch', 'ToolSearch', 'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'Skill',
+  'SlashCommand', 'TaskOutput', 'TaskStop', 'SendMessage', 'ListAgents', 'EnterWorktree', 'ExitWorktree', 'ScheduleWakeup',
+  'CronCreate', 'CronDelete', 'CronList', 'PushNotification', 'LSP',
+])
 /** File tools, and which of their inputs is a path. */
 const PATHS: Record<string, string[]> = {
   Read: ['file_path'], Write: ['file_path'], Edit: ['file_path'], MultiEdit: ['file_path'],
@@ -69,6 +76,8 @@ export type GuestContext = {
   /** The session reaches the owner's private network (its tools get the tailnet proxy). */
   tailnet: boolean
   roots?: string[]
+  /** Scratch folders anyone may use (/tmp). */
+  scratch?: string[]
   /** What the owner shared with teammates in this session. */
   caps?: readonly string[] | null
   /** The session's tailnet MCP servers, by name. */
@@ -84,11 +93,12 @@ export function guestMay(tool: string, input: Record<string, unknown>, o: GuestC
   // Through the owner's tailnet proxy a page fetch could reach their devices.
   if (tool === 'WebFetch') return !o.tailnet || caps.has('tailnet')
   if (tool.startsWith('mcp__')) return caps.has(tailnetTool(tool, o) ? 'tailnet' : 'apps')
-  if (tool === 'Bash') return commandMay(String(input.command ?? ''), caps, o)
+  if (tool === 'Bash' || tool === 'Monitor') return commandMay(String(input.command ?? ''), caps, o)
   if (SHELL_MORE.has(tool)) return true
   const keys = PATHS[tool]
   if (!keys) return false // anything unknown
-  const roots = o.roots ?? SHARED_ROOTS
+  // Scratch files in /tmp are nobody's private things, except Claude Code's own per-user folder there (transcripts).
+  const roots = [...(o.roots ?? SHARED_ROOTS), ...(o.scratch ?? ['/tmp'])]
   const paths = keys.map((k) => input[k]).filter((v): v is string => typeof v === 'string' && v.length > 0)
   if (!paths.length) paths.push(o.cwd)
   // A Glob pattern can climb out of its folder (`../../home/x/**`): where its fixed part lands counts too.
@@ -98,7 +108,10 @@ export function guestMay(tool: string, input: Record<string, unknown>, o: GuestC
     paths.push(input.pattern.startsWith('~') ? '~' : isAbsolute(fixed) ? fixed : resolve(from, fixed))
   }
   // "~" is the owner's home, never shared.
-  return paths.every((p) => !p.startsWith('~') && inside(isAbsolute(p) ? p : resolve(o.cwd, p), roots))
+  return paths.every((p) => {
+    const at = isAbsolute(p) ? p : resolve(o.cwd, p)
+    return !p.startsWith('~') && inside(at, roots) && !/^\/tmp\/claude-\d+(\/|$)/.test(realPath(at))
+  })
 }
 
 /** DevDash's network tools and the session's tailnet MCPs reach the owner's devices. */

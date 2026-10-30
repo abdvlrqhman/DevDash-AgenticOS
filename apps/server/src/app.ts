@@ -114,6 +114,8 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const previews = servicePages({ db, auth, origin: config.origin, port: config.servicesPort })
   const services = servicesService({ db, agents, hub, notify: notifications.notify, previewUrl: previews.urlOf, basePath: previews.basePathOf })
   hub.authorize('services', () => true)
+  // Members' agents clean up session worktrees (apps/agent/src/janitor.ts) only when nothing here still uses them.
+  agents.onRpc('worktrees.inUse', () => ({ paths: [...claude.foldersInUse(), ...services.foldersInUse()] }))
   const mw = authMiddleware(auth)
   const ip = (c: Context) => clientIp(c, config.trustCfIp)
 

@@ -270,7 +270,8 @@ export function Composer({ sessionId, profile, working, disabledReason, footer, 
       )}
       <ErrorAlert error={error} />
       {/* One card: what you attach, what you write, and a row inside it with attach, the session's status and Stop/Send. */}
-      <div className="flex flex-col gap-1 rounded-[22px] border bg-background px-2.5 pt-2 pb-1.5 shadow-xs transition-[box-shadow,border-color] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30 dark:bg-input/20">
+      {/* A filled tone step that lifts a touch when you type into it: the conversation's one place to act. */}
+      <div className="flex flex-col gap-1 rounded-[26px] bg-surface px-2.5 pt-2.5 pb-1.5 ring-1 ring-transparent transition-[background-color,box-shadow] duration-300 ease-spring focus-within:bg-background focus-within:shadow-[0_6px_24px_-8px_color-mix(in_oklch,var(--foreground)_22%,transparent)] focus-within:ring-border">
       {(images.length > 0 || files.length > 0 || bigs.length > 0) && (
         <div className="flex flex-wrap gap-2 px-1 pt-1">
           {images.map((img, i) => (
@@ -315,7 +316,7 @@ export function Composer({ sessionId, profile, working, disabledReason, footer, 
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">{footer}</div>
         {/* Stop is always there while Claude works; Send joins it once something is typed (it waits for Claude). */}
         {working && (
-          <Button size="icon" variant="secondary" className="size-9 shrink-0 rounded-full" aria-label="Stop Claude" title="Stop (Esc)" onClick={onStop}>
+          <Button size="icon" className="size-9 shrink-0 rounded-full" aria-label="Stop Claude" title="Stop (Esc)" onClick={onStop}>
             <Square className="fill-current" />
           </Button>
         )}

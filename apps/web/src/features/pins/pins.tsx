@@ -3,7 +3,7 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/r
 import { Link, useRouterState } from '@tanstack/react-router'
 import type { InferResponseType } from 'hono/client'
 import { FolderGit2, ListTodo, Pin, PinOff, Server, Sparkles, StickyNote, X } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { Button } from '@/components/ui/button'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'

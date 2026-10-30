@@ -642,6 +642,11 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
      * Every session in a project the member may open, unlisted ones included, each saying whose it is: theirs, a
      * teammate's shared one, or a team role's. Other people's private sessions are only counted, with their names.
      */
+    /** Folders sessions still work in (any that isn't archived, however quiet): never cleaned up from under them. */
+    foldersInUse: () =>
+      (db.prepare('select cwd, worktree from claude_sessions where archived = 0').all() as { cwd: string; worktree: string | null }[])
+        .flatMap((r) => [r.cwd, r.worktree ?? ''].filter((p) => p.startsWith('/'))),
+
     /** My default for a project: what teammates' requests may use of mine in my sessions there. */
     projectCaps(user: User, slug: string) {
       return { caps: parseCaps(repo.projectCaps(user.id, projects.idOf(slug))) }

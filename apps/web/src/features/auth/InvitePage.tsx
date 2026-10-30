@@ -73,7 +73,7 @@ function AcceptForm({ token, invite, onDone }: { token: string; invite: Invite; 
           {invite.role === 'admin' && <Badge variant="secondary" className="ml-1.5 align-middle">Admin</Badge>}
         </p>
       </div>
-      <form onSubmit={submit} className="rounded-xl border bg-card p-5 shadow-xs md:p-6">
+      <form onSubmit={submit} className="rounded-2xl bg-surface p-5 shadow-xs md:p-6">
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="name">Your name</FieldLabel>
@@ -126,7 +126,7 @@ function BackupCodes({ codes, space }: { codes: string[]; space: string }) {
         <h1 className="text-xl font-semibold tracking-tight">Save your backup codes</h1>
         <p className="text-sm text-muted-foreground">If you lose your phone, each code signs you in once. You won't see them again.</p>
       </div>
-      <div className="rounded-xl border bg-card p-5 shadow-xs">
+      <div className="rounded-2xl bg-surface p-5 shadow-xs">
         <ul className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-sm">
           {codes.map((c) => <li key={c}>{c}</li>)}
         </ul>

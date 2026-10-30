@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { CircleCheck, CircleDashed, CircleX, Ellipsis, LoaderCircle, Play, Plug, Plus, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { NativeSelect } from '@/components/app/native-select'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
@@ -89,7 +89,7 @@ export function BuildsTab({ slug, isGithub }: { slug: string; isGithub: boolean 
       <section className="flex flex-col gap-3">
         <h3 className="text-sm font-medium">Recent runs</h3>
         {!d.runs.length ? <p className="text-sm text-muted-foreground">No workflow runs yet.</p> : (
-          <ul className="overflow-hidden rounded-xl border">
+          <ul className="overflow-hidden rounded-2xl bg-surface">
             {d.runs.map((r) => (
               <li key={r.id} className="border-b last:border-b-0">
                 <Link to="/projects/$slug/builds/$run" params={{ slug, run: String(r.id) }} className="flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-accent/40">

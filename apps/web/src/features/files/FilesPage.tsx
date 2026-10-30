@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { ChevronRight, Copy, Download, Ellipsis, File, Folder, FolderPlus, Link2, Lock, Pencil, Trash2, Upload } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { NativeSelect } from '@/components/app/native-select'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
@@ -267,7 +267,7 @@ function ShareLinks() {
   if (q.error) return <ErrorAlert error={q.error} />
   if (!q.data.shares.length) return <p className="text-sm text-muted-foreground">No share links yet. Open a file's menu and choose Share link; build artifacts can be shared from a project's Builds tab.</p>
   return (
-    <ul className="overflow-hidden rounded-xl border">
+    <ul className="overflow-hidden rounded-2xl bg-surface">
       {q.data.shares.map((s) => (
         <li key={s.id} className={cn('flex items-center gap-3 border-b px-3 py-2.5 text-sm last:border-b-0', !s.active && 'opacity-60')}>
           <Link2 className="size-4 shrink-0 text-muted-foreground" />

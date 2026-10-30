@@ -15,7 +15,7 @@ test('guest turns: the shared project is fine, the owner\'s access waits for the
     writeFileSync(join(project, 'app.ts'), 'x')
     writeFileSync(join(home, '.ssh', 'id_ed25519'), 'secret')
     symlinkSync(join(home, '.ssh'), join(project, 'keys')) // a link inside the project to the owner's keys
-    const o = { cwd: project, tailnet: false, roots: [shared] }
+    const o = { cwd: project, tailnet: false, roots: [shared], scratch: [] } // this test's owner home is in /tmp itself
 
     // Reading and editing the shared project: the teammate could do that with their own account.
     assert.equal(guestMay('Read', { file_path: join(project, 'app.ts') }, o), true)
@@ -41,7 +41,10 @@ test('guest turns: the shared project is fine, the owner\'s access waits for the
     assert.equal(guestMay('SomethingNew', {}, o), false)
 
     // Planning, to-dos, web search and subagents use nothing of the owner's.
-    for (const t of ['TodoWrite', 'Task', 'WebSearch', 'ExitPlanMode']) assert.equal(guestMay(t, {}, o), true, t)
+    for (const t of ['TodoWrite', 'Task', 'WebSearch', 'ExitPlanMode', 'Skill', 'TaskOutput']) assert.equal(guestMay(t, {}, o), true, t)
+    // Scratch files in /tmp are fine; Claude Code's own per-user folder there (transcripts) is the owner's.
+    assert.equal(guestMay('Read', { file_path: '/tmp/shots/home.png' }, { ...o, scratch: undefined }), true)
+    assert.equal(guestMay('Read', { file_path: '/tmp/claude-1000/x/tasks/a.output' }, { ...o, scratch: undefined }), false)
     // Fetching a page is fine, unless the session reaches the owner's private network.
     assert.equal(guestMay('WebFetch', { url: 'https://example.com' }, o), true)
     assert.equal(guestMay('WebFetch', { url: 'http://100.64.0.3' }, { ...o, tailnet: true }), false)

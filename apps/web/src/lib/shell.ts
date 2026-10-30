@@ -1,4 +1,4 @@
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 
 // Bridge injected by the native app (apps/shell/src-tauri/src/lib.rs). Absent in a normal browser.
 declare global {

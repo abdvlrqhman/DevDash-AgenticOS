@@ -13,7 +13,7 @@ import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuBadge,
   SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarTrigger, useSidebar,
 } from '@/components/ui/sidebar'
-import { Toaster } from '@/components/ui/sonner'
+import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ConfirmHost } from '@/components/app/confirm'
 import { api, meQuery, spaceQuery } from '@/lib/api'
@@ -120,7 +120,7 @@ export function AppShell() {
           <MobileTabs waiting={waiting} />
         </SidebarInset>
       </SidebarProvider>
-      <Toaster position="bottom-right" mobileOffset={{ bottom: 'calc(4rem + env(safe-area-inset-bottom))' }} />
+      <Toaster />
       <ConfirmHost />
       <SearchDialog />
     </TooltipProvider>

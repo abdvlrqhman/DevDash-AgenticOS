@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { BadgeCheck, Copy, ExternalLink, Network, Smartphone, Zap } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Globe, Maximize, Power, UserPlus } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { PageHeader, pageCol } from '@/components/app/page'
 import { NativeSelect } from '@/components/app/native-select'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
@@ -120,7 +120,7 @@ function Invites({ onClose }: { onClose: () => void }) {
         {!!list.data?.invites.length && (
           <div className="flex flex-col gap-2">
             <h3 className="text-sm font-medium">Active invites</h3>
-            <ul className="overflow-hidden rounded-xl border">
+            <ul className="overflow-hidden rounded-2xl bg-surface">
               {list.data.invites.map((i) => (
                 <li key={i.id} className="flex items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0">
                   <span className="min-w-0 flex-1">

@@ -1,6 +1,6 @@
 [package]
 name = "devdash"
-version = "0.1.11"
+version = "0.1.12"
 description = "DevDash: your team's space on your own server"
 license = "MIT"
 edition = "2021"
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
-tauri = { version = "2.12", features = [] }
+tauri = { version = "2.12", features = ["tray-icon"] }
 # generate_context! expands updater config that references serde_json, so it must be a direct dependency.
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +29,7 @@ tauri-plugin-devdash-push = { path = "../plugins/devdash-push" }
 # owns installs, so the updater plugin is excluded from the android/ios targets.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 codegen-units = 1

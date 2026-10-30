@@ -1,6 +1,6 @@
 {
   "name": "@devdash/shell",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "description": "Native DevDash app (Tauri): connect screen + window around a DevDash space",
   "scripts": {

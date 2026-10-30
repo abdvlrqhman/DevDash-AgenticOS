@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import { BadgeCheck, Bot, ChevronRight, Copy, GitBranch, GitCommitHorizontal, KeyRound, Lock, Plus, RefreshCw, Search, Share2, Sparkles, StickyNote } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { PageBody, PageHeader, Section } from '@/components/app/page'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -207,7 +207,7 @@ function rows(sessions: ProjectSession[]): Row[] {
 
 function SessionList({ sessions, expand }: { sessions: ProjectSession[]; expand?: boolean }) {
   return (
-    <ul className="overflow-hidden rounded-xl border">
+    <ul className="overflow-hidden rounded-2xl bg-surface">
       {rows(sessions).map((r) => (
         <li key={r.key} className="border-b last:border-b-0">
           {'s' in r ? <SessionRow s={r.s} /> : <SessionGroup {...r.group} open={expand} />}
@@ -406,7 +406,7 @@ function Overview({ slug, live, tasks, isGithub, instructions, onTab, onNew }: {
             ))}
           </div>
           {moving.length > 0
-            ? <div className="overflow-hidden rounded-xl border">{moving.slice(0, 6).map((t) => <TaskRow key={t.id} t={t} showProject={false} />)}</div>
+            ? <div className="overflow-hidden rounded-2xl bg-surface">{moving.slice(0, 6).map((t) => <TaskRow key={t.id} t={t} showProject={false} />)}</div>
             : <p className="text-sm text-muted-foreground">Nothing in progress or in review.</p>}
         </>}
       </Card>
@@ -477,7 +477,7 @@ function Commits({ slug }: { slug: string }) {
 
 function CommitList({ commits }: { commits: { sha: string; subject: string; author: string; at: number }[] }) {
   return (
-    <ul className="overflow-hidden rounded-xl border">
+    <ul className="overflow-hidden rounded-2xl bg-surface">
       {commits.map((c) => (
         <li key={c.sha} className="flex items-start gap-3 border-b px-3 py-2.5 text-sm last:border-b-0">
           <GitCommitHorizontal className="mt-0.5 size-4 shrink-0 text-muted-foreground" />

@@ -90,7 +90,7 @@ function ToolGrid({ tools }: { tools: Tool[] }) {
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {tools.map((t) => (
         <Link key={t.id} to="/tools/$tool" params={{ tool: t.id }}
-          className="group flex items-start gap-3 rounded-xl border bg-card p-3.5 transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none">
+          className="group flex items-start gap-3 rounded-2xl bg-surface p-3.5 transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
             <t.icon className="size-4.5" />
           </div>

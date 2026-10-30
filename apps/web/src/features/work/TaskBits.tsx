@@ -48,16 +48,16 @@ export function Due({ due, done }: { due: string | null; done?: boolean }) {
 
 const meta = (t: Task, showProject: boolean) => (
   <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-    <span className="shrink-0 font-mono">{showProject ? t.key : `#${t.number}`}</span>
+    <span className="shrink-0 tabular-nums">{showProject ? t.key : `#${t.number}`}</span>
     <Due due={t.due} done={t.status === 'done'} />
   </span>
 )
 
-/** One task on the board. Drag on desktop; tap to open. */
-export function TaskCard({ t, showProject, onDragStart }: { t: Task; showProject: boolean; onDragStart?: (e: React.DragEvent) => void }) {
+/** One task on the board: tap to open; the board makes it draggable (Board.tsx), so the link itself never is. */
+export function TaskCard({ t, showProject }: { t: Task; showProject: boolean }) {
   return (
-    <Link to="/tasks/$slug/$number" params={{ slug: t.project.slug, number: String(t.number) }} draggable={!!onDragStart} onDragStart={onDragStart}
-      className="flex flex-col gap-2 rounded-lg border bg-card p-3 text-sm shadow-xs transition-colors hover:border-foreground/20 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
+    <Link to="/tasks/$slug/$number" params={{ slug: t.project.slug, number: String(t.number) }} draggable={false}
+      className="flex flex-col gap-2 rounded-2xl bg-surface p-3.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
       <span className="flex items-start gap-2">
         <PriorityIcon priority={t.priority} className="mt-0.5" />
         <span className={cn('min-w-0 flex-1 leading-snug', t.status === 'done' && 'text-muted-foreground line-through')}>{t.title}</span>

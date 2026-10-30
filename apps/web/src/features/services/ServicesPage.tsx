@@ -129,7 +129,7 @@ function PortsInUse() {
       <CollapsibleContent className="pt-3">
         <ErrorAlert error={ports.error} />
         {ports.data && (
-          <div className="overflow-hidden rounded-xl border">
+          <div className="overflow-hidden rounded-2xl bg-surface">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
                 <tr><th className="px-3 py-2 font-medium">Port</th><th className="px-3 py-2 font-medium">User</th><th className="px-3 py-2 font-medium">What</th></tr>

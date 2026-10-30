@@ -1,4 +1,4 @@
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 
 // Files made in the page (a converted image, a merged PDF, backup codes) saved to the device. A browser, the desktop app
 // and the iPhone app save a blob: link themselves; the Android app's WebView can't, so it's handed the bytes in pieces

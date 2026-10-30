@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { live } from './live'
 
 // The entry script Vite names after its content: a deploy with any change to the app gives it a new name.

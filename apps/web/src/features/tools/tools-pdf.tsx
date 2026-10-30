@@ -101,7 +101,7 @@ function Loading({ label = 'Opening PDF…' }: { label?: string }) {
 
 function PdfBar({ file, pageCount, onChange, extra }: { file: File; pageCount: number; onChange: () => void; extra?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-2.5">
+    <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-surface p-2.5">
       <FileText className="size-5 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{file.name}</div>
@@ -217,7 +217,7 @@ export function MergePdf() {
       <ul className="flex flex-col gap-2">
         {items.map((it, i) => (
           <li key={it.id} draggable onDragStart={dnd.onDragStart(i)} onDragOver={dnd.onDragOver(i)} onDrop={dnd.onDrop(i)}
-            className="flex items-center gap-2 rounded-xl border bg-card p-2.5">
+            className="flex items-center gap-2 rounded-2xl bg-surface p-2.5">
             <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground" aria-hidden />
             <span className="w-5 shrink-0 text-center font-mono text-xs text-muted-foreground tabular-nums">{i + 1}</span>
             <div className="min-w-0 flex-1">
@@ -582,7 +582,7 @@ export function JpgToPdf() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-card p-3.5">
+      <div className="flex flex-wrap items-end gap-3 rounded-2xl bg-surface p-3.5">
         <ToolField label="Page size" className="w-36"><NativeSelect value={size} onChange={(e) => setSize(e.target.value as typeof size)}><option value="auto">Fit image</option><option value="a4">A4</option><option value="letter">Letter</option></NativeSelect></ToolField>
         {size !== 'auto' && <ToolField label="Orientation" className="w-36"><NativeSelect value={orient} onChange={(e) => setOrient(e.target.value as typeof orient)}><option value="portrait">Portrait</option><option value="landscape">Landscape</option></NativeSelect></ToolField>}
       </div>
@@ -654,7 +654,7 @@ export function PdfToJpg() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3 rounded-xl border bg-card p-2.5">
+      <div className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
         <FileText className="size-5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1 truncate text-sm font-medium">{file.name}</div>
         <Button type="button" size="sm" variant="ghost" onClick={() => { for (const r of result) URL.revokeObjectURL(r.url); setFile(null); setResult([]); setNeedPw(false) }}><Undo2 />Change</Button>
@@ -667,7 +667,7 @@ export function PdfToJpg() {
           </div>
         </ToolField>
       )}
-      <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-card p-3.5">
+      <div className="flex flex-wrap items-end gap-3 rounded-2xl bg-surface p-3.5">
         <ToolField label="Format" className="w-32"><NativeSelect value={format} onChange={(e) => setFormat(e.target.value as typeof format)}><option value="image/jpeg">JPG</option><option value="image/png">PNG</option></NativeSelect></ToolField>
         <ToolField label="Resolution" className="w-36"><NativeSelect value={String(dpi)} onChange={(e) => setDpi(Number(e.target.value))}><option value="96">96 DPI (screen)</option><option value="150">150 DPI</option><option value="300">300 DPI (print)</option></NativeSelect></ToolField>
         {format === 'image/jpeg' && (
@@ -863,7 +863,7 @@ export function CompressPdf() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3 rounded-xl border bg-card p-2.5">
+      <div className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
         <FileText className="size-5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{file.name}</div><div className="font-mono text-xs text-muted-foreground tabular-nums">{bytes(file.size)}</div></div>
         <Button type="button" size="sm" variant="ghost" onClick={() => { setFile(null); setResult(null) }}><Undo2 />Change</Button>
@@ -872,7 +872,7 @@ export function CompressPdf() {
         <RotateCw className="mt-0.5 size-4 shrink-0" />
         <span>Lossy — every page is re-rendered to an image, so text stops being selectable. Best for scanned or image-heavy PDFs. If it can't beat the original, it'll tell you.</span>
       </div>
-      <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-card p-3.5">
+      <div className="flex flex-wrap items-end gap-3 rounded-2xl bg-surface p-3.5">
         <ToolField label="Resolution" className="w-36"><NativeSelect value={String(dpi)} onChange={(e) => setDpi(Number(e.target.value))}><option value="72">72 DPI (small)</option><option value="120">120 DPI</option><option value="150">150 DPI</option><option value="200">200 DPI (sharp)</option></NativeSelect></ToolField>
         <ToolField label={<span className="flex items-center gap-2">Quality <span className="font-mono text-foreground">{quality}%</span></span>} className="min-w-48 flex-1">
           <input type="range" min={30} max={90} value={quality} onChange={(e) => setQuality(Number(e.target.value))} className="w-full accent-primary" />
@@ -932,7 +932,7 @@ export function UnlockPdf() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3 rounded-xl border bg-card p-2.5">
+      <div className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
         <FileText className="size-5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1 truncate text-sm font-medium">{file.name}</div>
         <Button type="button" size="sm" variant="ghost" onClick={() => { setFile(null); setResult(null); setPassword('') }}><Undo2 />Change</Button>

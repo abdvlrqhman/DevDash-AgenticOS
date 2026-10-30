@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Eye, Hand, MessageSquareText, SendHorizontal } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -95,7 +95,7 @@ export function CommentsButton({ count, onClick }: { count: number; onClick: () 
   return (
     <Button variant="ghost" size="sm" className="relative shrink-0 max-sm:size-9 max-sm:px-0" aria-label={`Comments${count ? ` (${count})` : ''}`} onClick={onClick}>
       <MessageSquareText />
-      <span className="hidden sm:inline">Comments</span>
+      <span className="hidden xl:inline">Comments</span>
       {count > 0 && <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground max-sm:absolute max-sm:-top-0.5 max-sm:-right-0.5 max-sm:bg-foreground max-sm:text-background">{count}</span>}
     </Button>
   )

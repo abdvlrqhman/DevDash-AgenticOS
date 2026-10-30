@@ -22,7 +22,7 @@ export function NoteList({ notes, empty }: { notes: Note[]; empty: string }) {
       {notes.map((n) => (
         <li key={n.id}>
           <Link to="/notes/$id" params={{ id: String(n.id) }}
-            className={cn('flex h-full flex-col gap-1.5 rounded-xl border bg-card p-4 text-sm transition-colors hover:border-foreground/20 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none', n.status === 'superseded' && 'opacity-60')}>
+            className={cn('flex h-full flex-col gap-1.5 rounded-2xl bg-surface p-4 text-sm transition-colors hover:border-foreground/20 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none', n.status === 'superseded' && 'opacity-60')}>
             <span className="flex items-center gap-1.5 font-medium">
               {n.pinned && <Pin className="size-3.5 shrink-0" aria-label="Pinned" />}
               {n.private && <Lock className="size-3.5 shrink-0" aria-label="Private" />}

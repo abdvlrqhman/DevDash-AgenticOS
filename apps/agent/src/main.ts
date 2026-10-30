@@ -261,4 +261,5 @@ else server.listen(process.env.DEVDASH_AGENT_SOCKET)
 server.on('listening', () => console.log(`devdash agent for ${process.env.USER} ready`))
 
 // Periodically prune stale, provably-safe Claude Code subagent worktrees so they stop filling the shared disk.
-startJanitor()
+// Session worktrees are only cleaned up once the server says no session or service uses them.
+startJanitor(async () => ((await rpc('worktrees.inUse', {})) as { paths?: string[] }).paths ?? [])

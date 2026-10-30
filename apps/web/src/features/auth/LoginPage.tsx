@@ -79,7 +79,7 @@ export function LoginPage() {
           <p className="text-sm text-muted-foreground">{location.host}</p>
         </div>
       </div>
-      <form onSubmit={submit} className="rounded-xl border bg-card p-5 shadow-xs md:p-6">
+      <form onSubmit={submit} className="rounded-2xl bg-surface p-5 shadow-xs md:p-6">
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="login">Email or username</FieldLabel>

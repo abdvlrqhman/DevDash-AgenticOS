@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, LogOut } from 'lucide-react'
-import { toast } from 'sonner'
+import { toast } from '@/lib/toast'
 import { PageBody, PageHeader, SettingsSection } from '@/components/app/page'
 import { useSignOut } from '@/components/app/shell'
 import { membersQuery, UserAvatar } from '@/components/app/user-avatar'
