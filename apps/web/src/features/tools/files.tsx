@@ -55,14 +55,14 @@ export function Dropzone({ accept, multiple = false, onFiles, disabled, title, h
     <div
       onDrop={onDrop} onDragOver={(e) => e.preventDefault()} onDragEnter={onDragEnter} onDragLeave={onDragLeave}
       className={cn(
-        'group relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border bg-muted/30 px-6 text-center transition-colors',
+        'group relative flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-foreground/10 bg-surface px-6 text-center transition-[background-color,border-color] duration-300 ease-spring',
         compact ? 'py-6' : 'py-12 sm:py-16',
-        dragging && 'border-primary/60 bg-primary/5',
+        dragging && 'border-foreground/30 bg-surface-2',
         disabled && 'pointer-events-none opacity-60',
       )}
     >
-      <div className={cn('flex items-center justify-center rounded-full bg-background text-muted-foreground shadow-xs transition-colors group-hover:text-foreground',
-        compact ? 'size-9' : 'size-12', dragging && 'text-primary')}>
+      <div className={cn('flex items-center justify-center rounded-full bg-background text-muted-foreground transition-colors group-hover:text-foreground',
+        compact ? 'size-9' : 'size-12', dragging && 'text-foreground')}>
         {icon ?? <UploadCloud className={compact ? 'size-4.5' : 'size-6'} />}
       </div>
       <div className="flex flex-col gap-0.5">
@@ -72,7 +72,7 @@ export function Dropzone({ accept, multiple = false, onFiles, disabled, title, h
         {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
       </div>
       <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled}
-        className="mt-1 rounded-lg border bg-background px-3 py-1.5 text-sm font-medium shadow-xs transition-colors hover:bg-muted focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none">
+        className="mt-1 h-8 rounded-full bg-background px-3.5 text-sm font-medium transition-[background-color,scale] duration-300 ease-spring hover:bg-background/70 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none active:scale-[0.96]">
         {multiple ? 'Choose files' : 'Choose a file'}
       </button>
       <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="sr-only" tabIndex={-1} aria-hidden
@@ -88,7 +88,7 @@ export function ProgressBar({ value, total, label }: { value: number; total: num
     <div className="flex flex-col gap-1.5" role="status" aria-live="polite">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{label ?? 'Working…'}</span>
-        <span className="font-mono tabular-nums">{value} / {total}</span>
+        <span className="tabular-nums">{value} of {total}</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
         <div className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out" style={{ width: `${pct}%` }} />

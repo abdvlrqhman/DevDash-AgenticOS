@@ -38,19 +38,19 @@ export function Sources({ slug, sources }: { slug: string; sources: Team['source
   })
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex min-h-8 items-end justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">Data sources</h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">Read-only. Roles get the data; keys stay on the server.</p>
+      <div className="flex min-h-7 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold tracking-[-0.01em]">Data sources{sources.length > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{sources.length}</span>}</h2>
+          <p className="mt-0.5 text-sm text-pretty text-muted-foreground">Read-only. Roles get the data; keys stay on the server.</p>
         </div>
-        <Button size="sm" variant="ghost" onClick={() => setAdding(true)}><Plus />Add</Button>
+        <Button size="sm" variant="ghost" className="shrink-0" onClick={() => setAdding(true)}><Plus />Add</Button>
       </div>
       {sources.length > 0 ? (
-        <ul className="flex flex-col divide-y rounded-xl border">
+        <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
           {sources.map((s) => {
             const K = KINDS[s.kind as Kind]
             return (
-              <li key={s.id} className="flex items-center gap-3 px-3.5 py-2.5 text-sm">
+              <li key={s.id} className="flex items-center gap-2 rounded-xl py-2 pr-1 pl-3 text-sm">
                 <K.icon className="size-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -73,7 +73,7 @@ export function Sources({ slug, sources }: { slug: string; sources: Team['source
       <AddSource open={adding} onOpenChange={setAdding} slug={slug} />
       <SourceKey source={keyFor} onClose={() => setKeyFor(null)} />
       <ResponsiveDialog open={!!preview} onOpenChange={(v) => !v && setPreview(null)} title={`What roles see in ${preview?.name ?? ''}`} description="The start of a first look, as a role would read it.">
-        <pre className="max-h-[50vh] overflow-auto rounded-lg bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap">{preview?.text}</pre>
+        <pre className="max-h-[50vh] overflow-auto rounded-xl bg-surface p-3 font-mono text-xs whitespace-pre-wrap">{preview?.text}</pre>
       </ResponsiveDialog>
     </section>
   )

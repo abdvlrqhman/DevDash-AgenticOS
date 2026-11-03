@@ -20,7 +20,8 @@ export const buildsQuery = (slug: string) => ({ queryKey: ['builds', slug], quer
 
 const ago = (iso: string) => {
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
-  return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : new Date(iso).toLocaleDateString()
+  return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago`
+    : new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', ...(s > 300 * 86400 ? { year: 'numeric' } : {}) })
 }
 
 /** GitHub's status + conclusion as one icon. */
@@ -52,26 +53,29 @@ export function BuildsTab({ slug, isGithub }: { slug: string; isGithub: boolean 
   })
 
   if (!isGithub) return <ConnectRepo slug={slug} />
-  if (q.isPending) return <Skeleton className="h-48" />
+  if (q.isPending) return <div className="flex flex-col gap-4"><Skeleton className="h-16 rounded-2xl bg-surface" /><Skeleton className="h-48 rounded-2xl bg-surface" /></div>
   if (q.error) return <div className="flex flex-col gap-3"><ErrorAlert error={q.error} /><GitHubConnection compact /></div>
   const d = q.data
+  const latest = d.runs[0]
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-10">
+      {latest && <Latest slug={slug} r={latest} />}
+
       <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-medium">Build targets</h3>
+        <div className="flex min-h-7 items-center justify-between gap-3">
+          <h2 className="text-base font-semibold tracking-[-0.01em]">Build targets{d.targets.length > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{d.targets.length}</span>}</h2>
           <Button size="sm" variant="outline" onClick={() => setAdding(true)}><Plus />Add target</Button>
         </div>
         {!d.targets.length ? (
-          <p className="text-sm text-muted-foreground">A target is a workflow you start with one tap, like "Android APK" or "Windows installer". It needs <code className="font-mono">workflow_dispatch</code> in the workflow file.</p>
+          <p className="text-sm text-pretty text-muted-foreground">A target is a workflow you start with one tap, like "Android APK" or "Windows installer". It needs <code className="font-mono">workflow_dispatch</code> in the workflow file. <button className="text-foreground underline underline-offset-4" onClick={() => setAdding(true)}>Add one</button></p>
         ) : (
-          <ul className="grid gap-2 sm:grid-cols-2">
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {d.targets.map((t) => (
-              <li key={t.id} className="flex items-center gap-3 rounded-xl border p-3">
+              <li key={t.id} className="flex min-w-0 items-center gap-3 rounded-2xl bg-surface py-3 pr-2 pl-4">
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{t.name}</span>
-                  <span className="block truncate font-mono text-xs text-muted-foreground">{t.workflow} @ {t.ref}</span>
+                  <span className="block truncate text-xs text-muted-foreground"><span className="font-mono">{t.workflow}</span> on {t.ref}</span>
                 </span>
                 <Button size="sm" disabled={start.isPending} onClick={() => start.mutate(t.id)}>
                   {start.isPending && start.variables === t.id ? <LoaderCircle className="animate-spin" /> : <Play />}Run
@@ -87,18 +91,19 @@ export function BuildsTab({ slug, isGithub }: { slug: string; isGithub: boolean 
       </section>
 
       <section className="flex flex-col gap-3">
-        <h3 className="text-sm font-medium">Recent runs</h3>
-        {!d.runs.length ? <p className="text-sm text-muted-foreground">No workflow runs yet.</p> : (
-          <ul className="overflow-hidden rounded-2xl bg-surface">
+        <h2 className="text-base font-semibold tracking-[-0.01em]">Recent runs{d.runs.length > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{d.runs.length}</span>}</h2>
+        {!d.runs.length ? <p className="text-sm text-muted-foreground">No workflow runs yet. Runs on GitHub, and the ones started here, show up within a few seconds.</p> : (
+          <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
             {d.runs.map((r) => (
-              <li key={r.id} className="border-b last:border-b-0">
-                <Link to="/projects/$slug/builds/$run" params={{ slug, run: String(r.id) }} className="flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-accent/40">
-                  <RunIcon status={r.status} conclusion={r.conclusion} />
+              <li key={r.id}>
+                <Link to="/projects/$slug/builds/$run" params={{ slug, run: String(r.id) }}
+                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
+                  <span className="flex size-5 shrink-0 items-center justify-center"><RunIcon status={r.status} conclusion={r.conclusion} /></span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate">{r.title}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{r.workflow} #{r.number}, {r.branch}, {r.event.replace(/_/g, ' ')}{r.actor ? ` by ${r.actor}` : ''}</span>
+                    <span className="block truncate font-medium">{r.title}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{r.workflow} <span className="tabular-nums">#{r.number}</span> on {r.branch}, {r.event.replace(/_/g, ' ')}{r.actor ? ` by ${r.actor}` : ''}</span>
                   </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{ago(r.createdAt)}</span>
+                  <span className="shrink-0 text-xs whitespace-nowrap text-muted-foreground">{ago(r.createdAt)}</span>
                 </Link>
               </li>
             ))}
@@ -107,6 +112,30 @@ export function BuildsTab({ slug, isGithub }: { slug: string; isGithub: boolean 
       </section>
       <AddTarget slug={slug} open={adding} onClose={() => setAdding(false)} workflows={d.workflows} defaultBranch={d.defaultBranch} />
     </div>
+  )
+}
+
+type Run = { id: number; title: string; workflow: string; number: number; status: string; conclusion: string | null; branch: string; createdAt: string }
+
+/** The tab's one loud line: how the newest run went (or that it's going), as a link to it. */
+function Latest({ slug, r }: { slug: string; r: Run }) {
+  const running = r.status !== 'completed'
+  const said = running ? (r.status === 'in_progress' ? 'is running' : 'is waiting to start')
+    : r.conclusion === 'success' ? 'passed'
+    : r.conclusion === 'cancelled' ? 'was cancelled'
+    : r.conclusion === 'skipped' || r.conclusion === 'neutral' ? 'was skipped'
+    : 'failed'
+  return (
+    <Link to="/projects/$slug/builds/$run" params={{ slug, run: String(r.id) }}
+      className="-mx-3 flex items-start gap-4 rounded-2xl px-3 py-2 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface active:scale-[0.99]">
+      <RunIcon status={r.status} conclusion={r.conclusion} className="mt-1 size-7 md:mt-1.5" />
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="text-[1.5rem] leading-[1.15] font-semibold tracking-[-0.025em] text-balance md:text-[1.75rem]">
+          {r.workflow} <span className="tabular-nums">#{r.number}</span> {said}{running ? '…' : '.'}
+        </span>
+        <span className="line-clamp-2 text-sm text-pretty text-muted-foreground">{r.title}, on {r.branch}, {running ? 'started ' : ''}{ago(r.createdAt)}</span>
+      </span>
+    </Link>
   )
 }
 
@@ -127,10 +156,10 @@ function ConnectRepo({ slug }: { slug: string }) {
   const ok = /github\.com[:/][\w.-]+\/[\w.-]+/.test(url.trim())
   const submit = (e: FormEvent) => { e.preventDefault(); if (ok) connect.mutate() }
   return (
-    <form onSubmit={submit} className="flex max-w-xl flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h3 className="text-sm font-medium">Connect a GitHub repository</h3>
-        <p className="text-sm text-muted-foreground">Builds run on GitHub Actions. This project isn't linked to a repository yet — add its github.com address to run its workflows from here. It also turns on fetching and commit history for the project.</p>
+    <form onSubmit={submit} className="flex max-w-xl flex-col gap-5">
+      <div className="flex flex-col gap-1.5">
+        <h2 className="text-base font-semibold tracking-[-0.01em]">Connect a GitHub repository</h2>
+        <p className="text-sm text-pretty text-muted-foreground">Builds run on GitHub Actions. This project isn't linked to a repository yet — add its github.com address to run its workflows from here. It also turns on fetching and commit history for the project.</p>
       </div>
       <FieldGroup>
         <Field>

@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Plus, Trash2, Users } from 'lucide-react'
+import { ChevronRight, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
+import { Orb } from '@/components/app/orb'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
@@ -41,10 +42,10 @@ function TurnOn({ slug, name }: { slug: string; name: string }) {
     onError: (e) => toast.error(e.message),
   })
   return (
-    <Empty className="border">
+    <Empty className="rounded-2xl bg-surface">
       <EmptyHeader>
-        <EmptyMedia variant="icon"><Users /></EmptyMedia>
-        <EmptyTitle>An AI team for {name}</EmptyTitle>
+        <EmptyMedia variant="icon" className="rounded-xl bg-surface-2"><Users /></EmptyMedia>
+        <EmptyTitle className="text-base font-semibold">An AI team for {name}</EmptyTitle>
         <EmptyDescription>
           Roles like a CEO, CTO or Marketing that know this project, work on their own, keep notes and tell you what to do next.
           They run as you, on your Claude plan. They can read and suggest; they can't change code, publish or spend.
@@ -70,55 +71,61 @@ function TeamView({ t }: { t: Team }) {
     onError: (e) => toast.error(e.message),
   })
   return (
-    <div className="flex flex-col gap-6">
-      {t.pending > 0 && (
-        <Link to="/approvals" className="flex flex-wrap items-center gap-3 rounded-xl border border-attention/40 bg-attention-soft px-4 py-3 text-attention-foreground dark:bg-attention/10 dark:text-attention">
-          <StatusLight state="waiting" />
-          <span className="font-medium">{t.pending === 1 ? '1 thing is' : `${t.pending} things are`} waiting for your approval</span>
-          <span className="ml-auto text-sm font-medium">Review →</span>
-        </Link>
-      )}
-      {t.paused && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 text-sm">
-          <span>The team is paused: no role works on its own until you resume it. You can still chat and run shifts by hand.</span>
-          <Button size="sm" className="ml-auto" disabled={pause.isPending} onClick={() => pause.mutate(false)}>Resume team</Button>
+    <div className="flex flex-col gap-10">
+      {(t.pending > 0 || t.paused || t.digest) && (
+        <div className="flex flex-col gap-3">
+          {t.pending > 0 && (
+            <Link to="/approvals" className="flex items-center gap-3 rounded-2xl bg-attention-soft px-4 py-3 text-attention-foreground transition-[opacity,scale] duration-300 ease-spring hover:opacity-85 active:scale-[0.99]">
+              <StatusLight state="waiting" />
+              <span className="min-w-0 flex-1 font-medium">{t.pending === 1 ? 'One thing is' : `${t.pending} things are`} waiting for your approval</span>
+              <span className="flex shrink-0 items-center gap-0.5 text-sm font-medium">Review<ChevronRight className="size-4" /></span>
+            </Link>
+          )}
+          {t.paused && (
+            <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-surface px-4 py-3 text-sm">
+              <span className="min-w-0 flex-1 text-pretty">The team is paused: no role works on its own until you resume it. You can still chat and run shifts by hand.</span>
+              <Button size="sm" disabled={pause.isPending} onClick={() => pause.mutate(false)}>Resume team</Button>
+            </div>
+          )}
+          {t.digest && (
+            <Link to="/projects/$slug/team/$role" params={{ slug, role: String(t.digest.role.id) }}
+              className="flex flex-col gap-2 rounded-2xl bg-surface p-4 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
+              <div className="flex items-center gap-2.5 text-sm">
+                <RoleMark id={t.digest.role.id} name={t.digest.role.name} className="size-7 rounded-lg text-[10px]" />
+                <span className="font-medium">{t.digest.role.name}'s digest</span>
+                <span className="text-muted-foreground">{relativeTime(t.digest.at)}</span>
+              </div>
+              <div className="line-clamp-6 text-sm text-foreground/85"><Prose text={t.digest.report} /></div>
+            </Link>
+          )}
         </div>
       )}
-      {t.digest && (
-        <Link to="/projects/$slug/team/$role" params={{ slug, role: String(t.digest.role.id) }} className="flex flex-col gap-2 rounded-xl border p-4 hover:bg-accent/30">
-          <div className="flex items-center gap-2.5 text-sm">
-            <RoleMark id={t.digest.role.id} name={t.digest.role.name} className="size-7 rounded-md text-[10px]" />
-            <span className="font-medium">{t.digest.role.name}'s digest</span>
-            <span className="text-muted-foreground">{relativeTime(t.digest.at)}</span>
-          </div>
-          <div className="line-clamp-6 text-sm"><Prose text={t.digest.report} /></div>
-        </Link>
-      )}
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="flex min-w-0 flex-col gap-6">
-          <Block title="Roles" action={t.roles.length > 0 && <Button size="sm" variant="outline" onClick={() => setAdding(true)}><Plus />New role</Button>}>
+      <div className="grid items-start gap-10 xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-x-12">
+        <div className="flex min-w-0 flex-col gap-10">
+          <Block title="Roles" count={t.roles.length} action={t.roles.length > 0 && <Button size="sm" variant="outline" onClick={() => setAdding(true)}><Plus />New role</Button>}>
             {t.roles.length ? (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-2">
                 {t.roles.map((r) => <RoleCard key={r.id} slug={slug} r={r} />)}
               </div>
             ) : (
-              <button onClick={() => setAdding(true)} className="flex flex-col items-center gap-1 rounded-xl border border-dashed p-8 text-center hover:bg-accent/40">
+              <button onClick={() => setAdding(true)} className="flex flex-col items-center gap-1 rounded-2xl bg-surface p-8 text-center transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
                 <Plus className="size-5 text-muted-foreground" />
                 <span className="font-medium">Add the first role</span>
-                <span className="text-sm text-muted-foreground">Start with a CEO: it looks at the whole project and says what matters next.</span>
+                <span className="text-sm text-pretty text-muted-foreground">Start with a CEO: it looks at the whole project and says what matters next.</span>
               </button>
             )}
           </Block>
           {t.roles.length > 0 && <Threads slug={slug} threads={t.threads} roles={t.roles} />}
           <Block title="Journal" description="What happened in the project. Claude sessions get a short summary after each stretch of work.">
             {t.journal.length ? (
-              <ol className="flex flex-col divide-y rounded-xl border">
+              <ol className="flex flex-col">
                 {t.journal.map((j) => (
-                  <li key={j.id} className="flex gap-3 px-3.5 py-2.5 text-sm">
-                    <span className="w-16 shrink-0 text-xs text-muted-foreground tabular-nums">{relativeTime(j.at)}</span>
-                    <span className="min-w-0">
+                  <li key={j.id} className="flex items-start gap-3 py-2 text-sm">
+                    <span className="w-[4.5rem] shrink-0 pt-px text-xs whitespace-nowrap text-muted-foreground tabular-nums">{relativeTime(j.at)}</span>
+                    <span className="mt-[7px] size-1.5 shrink-0 rounded-full bg-muted-foreground/35" />
+                    <span className="min-w-0 flex-1 text-pretty">
                       {j.who && <span className="text-muted-foreground">{j.who}{j.kind === 'session' ? "'s Claude" : ''}: </span>}
-                      {j.url ? <a href={j.url} className="hover:underline">{j.text}</a> : j.text}
+                      {j.url ? <a href={j.url} className="underline-offset-4 hover:underline">{j.text}</a> : j.text}
                     </span>
                   </li>
                 ))}
@@ -126,7 +133,7 @@ function TeamView({ t }: { t: Team }) {
             ) : <p className="text-sm text-muted-foreground">Nothing yet. Work in this project's Claude sessions shows up here.</p>}
           </Block>
         </div>
-        <div className="flex min-w-0 flex-col gap-6">
+        <div className="flex min-w-0 flex-col gap-10">
           <Priorities slug={slug} priorities={t.priorities} />
           <Goals slug={slug} goals={t.goals} />
           <Brief slug={slug} brief={t.brief} />
@@ -149,15 +156,15 @@ function TeamView({ t }: { t: Team }) {
   )
 }
 
-function Block({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
+function Block({ title, count, description, action, children }: { title: string; count?: number; description?: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex min-h-8 items-end justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
-          {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
+    <section className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-h-7 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold tracking-[-0.01em]">{title}{count ? <span className="ml-2 font-normal text-muted-foreground tabular-nums">{count}</span> : null}</h2>
+          {description && <p className="mt-0.5 text-sm text-pretty text-muted-foreground">{description}</p>}
         </div>
-        {action}
+        {action && <div className="shrink-0">{action}</div>}
       </div>
       {children}
     </section>
@@ -165,8 +172,11 @@ function Block({ title, description, action, children }: { title: string; descri
 }
 
 export function RoleMark({ id, name, className }: { id: number; name: string; className?: string }) {
-  return <div aria-hidden className={cn('flex size-9 shrink-0 items-center justify-center rounded-lg text-xs font-semibold', roleTone(id), className)}>{roleMark(name)}</div>
+  return <div aria-hidden className={cn('flex size-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold', roleTone(id), className)}>{roleMark(name)}</div>
 }
+
+/** Rows on one tone-stepped panel (see Home): the panel groups them, no lines between. */
+const panel = 'flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5'
 
 /** How a closed thread ended: Done, Declined, Duplicate, Not needed, Handled elsewhere. */
 export function OutcomeBadge({ as, className }: { as: CloseAs | null; className?: string }) {
@@ -178,7 +188,7 @@ function RoleCard({ slug, r }: { slug: string; r: Role }) {
   const last = r.lastShift
   return (
     <Link to="/projects/$slug/team/$role" params={{ slug, role: String(r.id) }}
-      className={cn('flex flex-col gap-3 rounded-xl border p-4 transition-colors hover:bg-accent/40', r.working && 'border-live/40')}>
+      className="flex flex-col gap-3 rounded-2xl bg-surface p-4 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98]">
       <div className="flex items-center gap-3">
         <RoleMark id={r.id} name={r.name} />
         <div className="min-w-0 flex-1">
@@ -186,10 +196,10 @@ function RoleCard({ slug, r }: { slug: string; r: Role }) {
           {r.summary && <div className="truncate text-xs text-muted-foreground">{r.summary}</div>}
         </div>
         {r.working
-          ? <span className="flex shrink-0 items-center gap-1.5 text-xs text-live"><StatusLight state="live" />Working</span>
+          ? <span className="flex shrink-0 items-center gap-1.5 text-xs"><Orb state="working" size={20} label={`${r.name} is working`} />Working</span>
           : <span className="shrink-0 text-xs text-muted-foreground">{r.paused ? 'Paused' : 'Idle'}</span>}
       </div>
-      <p className="line-clamp-2 text-sm text-muted-foreground">
+      <p className="line-clamp-2 text-sm text-pretty text-muted-foreground">
         {r.shift ? `On a shift since ${relativeTime(r.shift.startedAt)}.`
           : last ? `${relativeTime(last.at)}: ${firstLine(last.report) || (last.status === 'error' ? 'Stopped with an error.' : 'Finished.')}`
           : 'No shifts yet. Open it to run one or chat.'}
@@ -219,17 +229,21 @@ function Threads({ slug, threads, roles }: { slug: string; threads: Team['thread
         <Button size="sm" variant="ghost" onClick={() => setOpen(true)}><Plus />New</Button>
       </div>}>
       {threads.length ? (
-        <ul className="flex flex-col divide-y rounded-xl border">
+        <ul className={panel}>
           {threads.map((x) => (
             <li key={x.id}>
-              <Link to="/projects/$slug/team/threads/$thread" params={{ slug, thread: String(x.id) }} className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2.5 text-sm hover:bg-accent/40', x.status === 'resolved' && 'opacity-60')}>
-                <StatusLight state={x.status === 'resolved' ? 'idle' : x.needsPeople ? 'waiting' : 'live'} />
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">#{x.id}</span>
-                <span className="min-w-0 flex-1 truncate font-medium">{x.title}</span>
-                {x.status !== 'resolved' && x.priority === 'blocker' && <span className="shrink-0 rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] font-medium text-destructive">Blocker</span>}
-                {x.status === 'resolved' && <OutcomeBadge as={x.closedAs} />}
-                <span className="text-xs text-muted-foreground">
-                  {x.status === 'resolved' ? (x.closedBy ? `By ${x.closedBy}` : 'Closed') : x.needsPeople ? 'Needs you' : x.owner ? x.owner.name : 'Nobody owns it'} · {x.messages} {x.messages === 1 ? 'message' : 'messages'} · {relativeTime(x.lastAt)}
+              <Link to="/projects/$slug/team/threads/$thread" params={{ slug, thread: String(x.id) }}
+                className={cn('flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]', x.status === 'resolved' && 'opacity-60')}>
+                <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={x.status === 'resolved' ? 'idle' : x.needsPeople ? 'waiting' : 'live'} /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium">{x.title}</span>
+                    {x.status !== 'resolved' && x.priority === 'blocker' && <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">Blocker</span>}
+                    {x.status === 'resolved' && <OutcomeBadge as={x.closedAs} />}
+                  </span>
+                  <span className={cn('block truncate text-xs', x.status !== 'resolved' && x.needsPeople ? 'text-attention-foreground' : 'text-muted-foreground')}>
+                    <span className="tabular-nums">#{x.id}</span>, {x.status === 'resolved' ? (x.closedBy ? `closed by ${x.closedBy}` : 'closed') : x.needsPeople ? 'needs you' : x.owner ? `${x.owner.name} owns it` : 'nobody owns it'}, {x.messages} {x.messages === 1 ? 'message' : 'messages'}, {relativeTime(x.lastAt)}
+                  </span>
                 </span>
               </Link>
             </li>
@@ -281,7 +295,7 @@ function Goals({ slug, goals }: { slug: string; goals: Team['goals'] }) {
     <Block title="Goals" description="What the team works towards. Roles propose goals and report progress."
       action={!adding && <Button size="sm" variant="ghost" onClick={() => setAdding(true)}><Plus />Add</Button>}>
       {adding && (
-        <form className="flex flex-col gap-2 rounded-xl border p-3" onSubmit={(e) => { e.preventDefault(); if (g.title.trim()) add.mutate() }}>
+        <form className="flex flex-col gap-2 rounded-2xl bg-surface p-3" onSubmit={(e) => { e.preventDefault(); if (g.title.trim()) add.mutate() }}>
           <Input className="h-9" value={g.title} maxLength={200} onChange={(e) => setG({ ...g, title: e.target.value })} placeholder="v1 on the Play Store" aria-label="Goal" autoFocus />
           <Input className="h-9" value={g.measure} maxLength={300} onChange={(e) => setG({ ...g, measure: e.target.value })} placeholder="How we know: live in the store" aria-label="Measure" />
           <div className="flex gap-2">
@@ -292,24 +306,24 @@ function Goals({ slug, goals }: { slug: string; goals: Team['goals'] }) {
         </form>
       )}
       {goals.length ? (
-        <ul className="flex flex-col divide-y rounded-xl border">
+        <ul className={panel}>
           {goals.map((x) => {
             const late = x.status === 'active' && x.due && x.due < today
             return (
-              <li key={x.id} className={cn('group flex flex-col gap-2 px-3.5 py-3 text-sm', x.status !== 'active' && 'opacity-60')}>
+              <li key={x.id} className={cn('group flex flex-col gap-2 rounded-xl px-3 py-2.5 text-sm', x.status !== 'active' && 'opacity-60')}>
                 <div className="flex items-start gap-2">
                   <span className={cn('min-w-0 flex-1 font-medium', x.status === 'done' && 'line-through')}>{x.title}</span>
-                  {x.due && <span className={cn('shrink-0 text-xs', late ? 'text-destructive' : 'text-muted-foreground')}>{late ? 'Late · ' : ''}{x.due}</span>}
+                  {x.due && <span className={cn('shrink-0 text-xs tabular-nums', late ? 'text-destructive' : 'text-muted-foreground')}>{late ? 'Late, ' : ''}{x.due}</span>}
                 </div>
                 {x.status === 'active' && (
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full bg-foreground" style={{ width: `${x.progress}%` }} />
+                  <div className="h-1.5 overflow-hidden rounded-full bg-background">
+                    <div className="h-full rounded-full bg-foreground transition-[width] duration-500 ease-spring" style={{ width: `${x.progress}%` }} />
                   </div>
                 )}
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="min-w-0 flex-1 truncate">
-                    {x.status === 'active' ? `${x.progress}%` : x.status === 'done' ? 'Done' : 'Dropped'}
-                    {x.note ? ` · ${x.note}` : x.measure ? ` · ${x.measure}` : ''}{x.owner ? ` · ${x.owner}` : ''}
+                    <span className="tabular-nums">{x.status === 'active' ? `${x.progress}%` : x.status === 'done' ? 'Done' : 'Dropped'}</span>
+                    {x.note ? `, ${x.note}` : x.measure ? `, ${x.measure}` : ''}{x.owner ? `, ${x.owner}` : ''}
                   </span>
                   {x.status === 'active' ? (
                     <span className="flex shrink-0 gap-1">
@@ -351,9 +365,9 @@ function Priorities({ slug, priorities }: { slug: string; priorities: string }) 
           </div>
         </form>
       ) : priorities ? (
-        <div className="rounded-xl border border-attention/40 bg-attention-soft p-3.5 text-sm whitespace-pre-wrap text-attention-foreground dark:bg-attention/10 dark:text-attention">{priorities}</div>
+        <div className="rounded-2xl bg-surface px-4 py-3 text-sm font-medium whitespace-pre-wrap">{priorities}</div>
       ) : (
-        <button onClick={() => setEditing(true)} className="rounded-xl border border-dashed p-3.5 text-left text-sm text-muted-foreground hover:bg-accent/40">
+        <button onClick={() => setEditing(true)} className="rounded-2xl bg-surface px-4 py-3 text-left text-sm text-muted-foreground transition-colors duration-150 hover:bg-surface-2">
           Say what matters most right now, so the team works on that first.
         </button>
       )}
@@ -376,9 +390,9 @@ function CloseGuard({ slug, guard }: { slug: string; guard: Team['closeGuard'] }
   ]
   return (
     <Block title="Always ask before closing" description="Whatever a role's confidence, these closes come to you as a one-tap Close? Yes/No.">
-      <div className="flex flex-col gap-3">
+      <div className={panel}>
         {rows.map(([k, label, hint]) => (
-          <label key={k} className="flex items-start justify-between gap-3 text-sm">
+          <label key={k} className="flex cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors duration-150 hover:bg-surface-2">
             <span><span className="font-medium">{label}</span><br /><span className="text-muted-foreground">{hint}</span></span>
             <Switch checked={guard[k]} disabled={save.isPending} onCheckedChange={(v) => save.mutate({ [k]: v })} aria-label={label} />
           </label>
@@ -411,7 +425,7 @@ function Brief({ slug, brief }: { slug: string; brief: Team['brief'] }) {
           </div>
         </form>
       ) : (
-        <div className="rounded-xl border p-3.5 text-sm whitespace-pre-wrap">
+        <div className="rounded-2xl bg-surface px-4 py-3 text-sm whitespace-pre-wrap">
           {brief.body}
           {brief.updatedBy && brief.updatedAt && <p className="mt-2 text-xs text-muted-foreground">{brief.updatedBy}, {relativeTime(brief.updatedAt)}</p>}
         </div>
@@ -440,9 +454,9 @@ function Decisions({ slug, decisions }: { slug: string; decisions: Team['decisio
         <Button size="sm" className="h-9" type="submit" disabled={!body.trim() || add.isPending}>Add</Button>
       </form>
       {decisions.length > 0 && (
-        <ul className="flex flex-col divide-y rounded-xl border">
+        <ul className={panel}>
           {decisions.map((d) => (
-            <li key={d.id} className="group flex items-start gap-2 px-3.5 py-2.5 text-sm">
+            <li key={d.id} className="group flex items-start gap-2 rounded-xl py-2 pr-1.5 pl-3 text-sm">
               <div className="min-w-0 flex-1">
                 <p>{d.body}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{d.by ?? 'Someone'}, {relativeTime(d.at)}</p>

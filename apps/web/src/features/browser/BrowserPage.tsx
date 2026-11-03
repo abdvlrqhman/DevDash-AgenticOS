@@ -53,22 +53,27 @@ export function BrowserPage() {
         </>} />
       {inviting && <Invites onClose={() => setInviting(false)} />}
       {url ? (
-        <div style={pageCol()} className="page-col canvas flex min-h-0 flex-1 flex-col py-2 md:py-4"><iframe id="dd-browser" title="Shared browser" src={url} className="min-h-0 w-full flex-1 rounded-lg border-0 bg-black"
+        <div style={pageCol()} className="page-col canvas flex min-h-0 flex-1 flex-col py-2 md:py-4"><iframe id="dd-browser" title="Shared browser" src={url} className="min-h-0 w-full flex-1 rounded-2xl border-0 bg-black"
           allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone" /></div>
       ) : (
-        <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-          <span className="flex size-12 items-center justify-center rounded-full bg-muted"><Globe className="size-5" /></span>
-          <div className="flex flex-col gap-1.5">
-            <h2 className="text-lg font-semibold">Team browser</h2>
-            <p className="text-sm text-muted-foreground">
-              A Chromium on the server that everyone shares. Sign in to a site once (an admin panel, a store console, a test account) and it stays signed in for the whole team, from any device. One person drives at a time; the others watch.
-            </p>
+        // Not running: the panel stands where the browser will be, with the one button that starts it.
+        <div style={pageCol()} className="page-col flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto py-6 md:py-8">
+          <div className="flex min-h-[22rem] flex-1 flex-col items-center justify-center gap-6 rounded-2xl bg-surface px-6 py-12 text-center md:max-h-[34rem]">
+            <span className="flex size-16 items-center justify-center rounded-full bg-background"><Globe className="size-7" strokeWidth={1.75} /></span>
+            <div className="flex max-w-md flex-col gap-2">
+              <h2 className="text-[1.75rem] leading-[1.1] font-semibold tracking-[-0.03em] text-balance md:text-[2.25rem]">One browser for the whole team</h2>
+              <p className="text-sm text-pretty text-muted-foreground">A Chromium on the server that everyone shares, streamed here.</p>
+            </div>
+            <ErrorAlert error={status.error ?? open.error} />
+            <Button size="lg" className="h-11 px-5" disabled={open.isPending || status.isPending} onClick={() => open.mutate()}>
+              {open.isPending ? <><Spinner />Starting…</> : status.data?.running ? 'Join' : 'Start the browser'}
+            </Button>
           </div>
-          <ErrorAlert error={status.error ?? open.error} />
-          <Button className="h-10" disabled={open.isPending || status.isPending} onClick={() => open.mutate()}>
-            {open.isPending ? <><Spinner />Starting…</> : status.data?.running ? 'Join' : 'Start the browser'}
-          </Button>
-          <p className="text-xs text-muted-foreground">It stops by itself after 30 minutes nobody is watching. Logins and open tabs are kept.</p>
+          <ul className="grid gap-x-10 gap-y-5 text-sm text-pretty md:grid-cols-3">
+            <li className="flex flex-col gap-1"><span className="font-medium">Signed in once, for everyone</span><span className="text-muted-foreground">Sign in to a site once (an admin panel, a store console, a test account) and it stays signed in for the whole team, from any device.</span></li>
+            <li className="flex flex-col gap-1"><span className="font-medium">One drives, the others watch</span><span className="text-muted-foreground">One person controls it at a time. People without an account can watch with an invite link.</span></li>
+            <li className="flex flex-col gap-1"><span className="font-medium">Stops by itself</span><span className="text-muted-foreground">After 30 minutes nobody is watching. Logins and open tabs are kept for next time.</span></li>
+          </ul>
         </div>
       )}
     </div>
@@ -119,10 +124,10 @@ function Invites({ onClose }: { onClose: () => void }) {
         </form>
         {!!list.data?.invites.length && (
           <div className="flex flex-col gap-2">
-            <h3 className="text-sm font-medium">Active invites</h3>
-            <ul className="overflow-hidden rounded-2xl bg-surface">
+            <h3 className="text-sm font-semibold">Active invites<span className="ml-2 font-normal text-muted-foreground tabular-nums">{list.data.invites.length}</span></h3>
+            <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
               {list.data.invites.map((i) => (
-                <li key={i.id} className="flex items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0">
+                <li key={i.id} className="flex items-center gap-2 rounded-xl py-2 pr-1.5 pl-3 text-sm transition-colors duration-200 hover:bg-surface-2">
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{i.label}</span>
                     <span className="block truncate text-xs text-muted-foreground">Watch only, until {new Date(i.expiresAt * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>

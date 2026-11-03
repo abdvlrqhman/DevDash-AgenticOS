@@ -1,11 +1,10 @@
-import { useRef, useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, LogOut } from 'lucide-react'
 import { toast } from '@/lib/toast'
-import { PageBody, PageHeader, SettingsSection } from '@/components/app/page'
+import { PageBody, PageHeader } from '@/components/app/page'
 import { useSignOut } from '@/components/app/shell'
 import { membersQuery, UserAvatar } from '@/components/app/user-avatar'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -19,10 +18,29 @@ import { AvatarCropDialog } from './AvatarCrop'
 import { NotificationsPanel } from '../notifications/Notifications'
 import { GitHubConnection } from '../work/GitHub'
 
-const Panel = SettingsSection
+/**
+ * A settings group: what it is on the left (wide screens), its controls on a panel to the right; stacked on phones.
+ * Outline buttons are surface pills, so on the panel they step down to the ground tone and still read as buttons.
+ */
+function Panel({ title, description, children }: { title: ReactNode; description?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="grid gap-3 lg:grid-cols-[17rem_minmax(0,1fr)] lg:gap-12">
+      <div className="min-w-0 lg:pt-5">
+        <h2 className="text-base font-semibold tracking-[-0.01em]">{title}</h2>
+        {description && <p className="mt-1 text-sm text-pretty text-muted-foreground">{description}</p>}
+      </div>
+      <div className="flex min-w-0 flex-col gap-4 self-start rounded-2xl bg-surface p-4 md:p-5 [&_[data-variant=outline]]:bg-background [&_[data-variant=outline]:hover]:bg-surface-2">
+        {children}
+      </div>
+    </section>
+  )
+}
 
-/** Choose, change or remove your picture. You pick the square to show (AvatarCrop); only that, shrunk, uploads. */
-function ProfilePicture() {
+/**
+ * Who you are, and your picture: choose, change or remove it. You pick the square to show (AvatarCrop); only that,
+ * shrunk, uploads.
+ */
+function Profile() {
   const me = useQuery(meQuery).data!
   const qc = useQueryClient()
   const has = useQuery({ ...membersQuery, select: (d) => d.users.find((u) => u.id === me.id)?.avatarAt ?? null }).data
@@ -45,18 +63,26 @@ function ProfilePicture() {
     onSuccess: () => done('Picture removed'),
     onError: (e) => toast.error(e.message),
   })
+  // The picture leads the page (the one big thing on it); changing it sits right under who you are.
   return (
-    <div className="flex items-center gap-4">
-      <UserAvatar user={me} className="size-16" textClassName="text-lg" />
-      <div className="flex flex-wrap gap-2">
-        <input ref={input} type="file" accept="image/*" className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setPicked(f) }} />
-        <Button size="sm" variant="outline" onClick={() => input.current?.click()}>{has ? 'Change picture' : 'Choose a picture'}</Button>
-        {has && <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate()}>Remove</Button>}
+    <header className="flex items-start gap-4 md:gap-6">
+      <UserAvatar user={me} className="size-16 md:size-24" textClassName="text-xl md:text-2xl" />
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5 md:pt-1">
+        <h1 className="truncate text-[1.75rem] leading-[1.1] font-semibold tracking-[-0.03em] md:text-[2.25rem]">{me.name}</h1>
+        <p className="text-[15px] text-muted-foreground"><span>{me.username}</span>, <span className="break-all">{me.email}</span></p>
+        <p className="max-w-[60ch] text-sm text-pretty text-muted-foreground">
+          {me.role === 'admin' ? 'Admin' : 'Member'}. You can sign in with your email or your username, and your picture shows wherever DevDash shows who you are.
+        </p>
+        <div className="mt-2.5 flex flex-wrap gap-2">
+          <input ref={input} type="file" accept="image/*" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setPicked(f) }} />
+          <Button size="sm" variant="outline" onClick={() => input.current?.click()}>{has ? 'Change picture' : 'Choose a picture'}</Button>
+          {has && <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate()}>Remove</Button>}
+        </div>
       </div>
       <AvatarCropDialog file={picked} saving={upload.isPending} onCancel={() => setPicked(null)}
         onPickAnother={() => input.current?.click()} onSave={(picture) => upload.mutate(picture)} />
-    </div>
+    </header>
   )
 }
 
@@ -68,16 +94,8 @@ export function AccountPage() {
   return (
     <>
       <PageHeader title="Account" />
-      <PageBody>
-        <Panel title="Profile" description="Your picture shows wherever DevDash shows who you are. You can sign in with your email or your username.">
-          <ProfilePicture />
-          <dl className="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">Name</dt><dd>{me.name}</dd>
-            <dt className="text-muted-foreground">Username</dt><dd className="font-mono">{me.username}</dd>
-            <dt className="text-muted-foreground">Email</dt><dd className="break-all">{me.email}</dd>
-            <dt className="text-muted-foreground">Role</dt><dd>{me.role === 'admin' ? <Badge variant="outline">Admin</Badge> : 'Member'}</dd>
-          </dl>
-        </Panel>
+      <PageBody className="gap-12 py-8 md:py-12">
+        <Profile />
         <Panel title="Notifications" description="Choose what DevDash tells you about. These apply to all your devices.">
           <NotificationsPanel />
         </Panel>
@@ -95,18 +113,19 @@ export function AccountPage() {
           </Panel>
         )}
         <Panel title="Appearance">
-          <ToggleGroup type="single" variant="outline" value={theme} onValueChange={(v) => v && setTheme(v as ThemePref)}>
-            <ToggleGroupItem value="system">Match device</ToggleGroupItem>
-            <ToggleGroupItem value="light">Light</ToggleGroupItem>
-            <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
+          <ToggleGroup type="single" spacing={1} value={theme} onValueChange={(v) => v && setTheme(v as ThemePref)} aria-label="Appearance"
+            className="w-full rounded-full bg-background p-1 sm:w-fit">
+            <ToggleGroupItem value="system" className="min-w-fit flex-1 rounded-full px-4">Match device</ToggleGroupItem>
+            <ToggleGroupItem value="light" className="min-w-fit flex-1 rounded-full px-4">Light</ToggleGroupItem>
+            <ToggleGroupItem value="dark" className="min-w-fit flex-1 rounded-full px-4">Dark</ToggleGroupItem>
           </ToggleGroup>
         </Panel>
         {!inShell() && (
           <Panel title="Apps" description="Windows and Android installers, and an iPhone build for AltStore or SideStore. On iPhone you can also open this site in Safari and use Share, then Add to Home Screen.">
-            <Button variant="outline" onClick={() => openExternal(APP_DOWNLOADS)}><Download />Download DevDash</Button>
+            <div><Button variant="outline" onClick={() => openExternal(APP_DOWNLOADS)}><Download />Download DevDash</Button></div>
           </Panel>
         )}
-        <div className="border-t pt-6 lg:pl-[calc(17rem+3rem)]"><Button variant="destructive" onClick={() => void signOut()}><LogOut />Sign out</Button></div>
+        <div className="lg:pl-[calc(17rem+3rem)]"><Button variant="destructive" onClick={() => void signOut()}><LogOut />Sign out</Button></div>
       </PageBody>
     </>
   )

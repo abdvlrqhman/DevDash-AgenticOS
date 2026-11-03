@@ -42,7 +42,7 @@
   --sidebar-ring: oklch(0.708 0 0);
 
   --live: oklch(0.6 0.15 152);
-  --attention: oklch(0.7 0.14 75);
+  --attention: oklch(0.67 0.155 68);
   --attention-foreground: oklch(0.42 0.09 70);
   --attention-soft: oklch(0.97 0.035 85);
   --term-bg: oklch(0.18 0 0);

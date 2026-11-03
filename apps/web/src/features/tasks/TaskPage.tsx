@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
@@ -46,57 +46,55 @@ function TaskPageView() {
     onError: (e) => toast.error(e.message),
   })
 
-  if (q.error) return <><PageHeader title={`${slug}#${number}`} back="/tasks" /><div className="p-4"><ErrorAlert error={q.error} /></div></>
-  if (!t) return <><PageHeader title={`${slug}#${number}`} back="/tasks" /><div className="flex flex-col gap-3 p-4"><Skeleton className="h-8 w-2/3" /><Skeleton className="h-32" /></div></>
+  if (q.error) return <><PageHeader title={`${slug}#${number}`} back="/tasks" /><div style={pageCol()} className="page-col py-6"><ErrorAlert error={q.error} /></div></>
+  if (!t) return <><PageHeader title={`${slug}#${number}`} back="/tasks" /><div style={pageCol()} className="page-col flex flex-col gap-4 py-6 md:py-10"><Skeleton className="h-10 w-2/3 rounded-xl" /><Skeleton className="h-32 rounded-2xl" /></div></>
 
   return (
     <>
-      <PageHeader back="/tasks" title={<span className="font-mono">{t.key}</span>}
+      <PageHeader back="/tasks" title={<span className="tabular-nums">{t.key}</span>}
         description={<Link to="/projects/$slug" params={{ slug: t.project.slug }} className="hover:underline">{t.project.name}</Link>}
         actions={<><PinButton kind="task" id={`${slug}/${number}`} /><Button size="sm" onClick={() => setGiving(true)}><Sparkles />Give to Claude</Button></>} />
-      <div style={pageCol()} className="page-col grid w-full gap-6 py-6 lg:grid-cols-[minmax(0,1fr)_16rem]">
-        <div className="flex min-w-0 flex-col gap-6">
+      <div style={pageCol()} className="page-col grid w-full gap-10 py-6 md:py-10 lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-14">
+        <div className="flex min-w-0 flex-col gap-8">
           <Title t={t} onSave={(title) => update.mutate({ title })} />
           <Body t={t} onSave={(body) => update.mutate({ body })} />
           <Comments t={t} />
         </div>
 
-        <aside className="flex flex-col gap-4 text-sm lg:border-l lg:pl-6" aria-label="Task details">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
-            <Field>
-              <FieldLabel htmlFor="t-status">Status</FieldLabel>
-              <NativeSelect id="t-status" value={t.status} onChange={(e) => update.mutate({ status: e.target.value as Status })}>
+        {/* The task's facts as one panel of label and value rows, each value its own quiet picker. */}
+        <aside className="flex flex-col gap-6 text-sm lg:sticky lg:top-20 lg:self-start" aria-label="Task details">
+          <div className="grid gap-0.5 rounded-2xl bg-surface p-1.5 sm:grid-cols-2 lg:grid-cols-1">
+            <Property id="t-status" label="Status" lead={<StatusIcon status={t.status} />}>
+              <NativeSelect id="t-status" className={quietSelect} value={t.status} onChange={(e) => update.mutate({ status: e.target.value as Status })}>
                 {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </NativeSelect>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="t-priority">Priority</FieldLabel>
-              <NativeSelect id="t-priority" value={t.priority} onChange={(e) => update.mutate({ priority: e.target.value as Priority })}>
+            </Property>
+            <Property id="t-priority" label="Priority">
+              <NativeSelect id="t-priority" className={quietSelect} value={t.priority} onChange={(e) => update.mutate({ priority: e.target.value as Priority })}>
                 {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
               </NativeSelect>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="t-assignee">Assignee</FieldLabel>
-              <NativeSelect id="t-assignee" value={t.assignee?.id ?? ''} onChange={(e) => update.mutate({ assignee: e.target.value ? Number(e.target.value) : null })}>
+            </Property>
+            <Property id="t-assignee" label="Assignee">
+              <NativeSelect id="t-assignee" className={quietSelect} value={t.assignee?.id ?? ''} onChange={(e) => update.mutate({ assignee: e.target.value ? Number(e.target.value) : null })}>
                 <option value="">Nobody</option>
                 {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
               </NativeSelect>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="t-due">Due</FieldLabel>
-              <Input id="t-due" type="date" className="h-10" value={t.due ?? ''} onChange={(e) => update.mutate({ due: e.target.value || null })} />
-            </Field>
+            </Property>
+            <Property id="t-due" label="Due">
+              <Input id="t-due" type="date" className="h-9 rounded-lg border-transparent bg-transparent px-2.5 transition-colors hover:bg-surface-2 dark:bg-transparent" value={t.due ?? ''} onChange={(e) => update.mutate({ due: e.target.value || null })} />
+            </Property>
           </div>
           {t.thread && (
-            <div className="flex flex-col gap-1.5">
-              <h3 className="text-xs font-medium text-muted-foreground">Thread</h3>
-              <Link to="/projects/$slug/team/threads/$thread" params={{ slug: t.project.slug, thread: String(t.thread.id) }} className="flex items-start gap-2 hover:underline">
-                <MessagesSquare className="mt-0.5 size-3.5 shrink-0" /><span className="min-w-0"><span className="text-muted-foreground">From thread #{t.thread.id}:</span> {t.thread.title}</span>
+            <div className="flex flex-col gap-2">
+              <h3 className="text-sm font-semibold">Thread</h3>
+              <Link to="/projects/$slug/team/threads/$thread" params={{ slug: t.project.slug, thread: String(t.thread.id) }}
+                className="flex items-start gap-2.5 rounded-2xl bg-surface px-3.5 py-3 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
+                <MessagesSquare className="mt-0.5 size-4 shrink-0 text-muted-foreground" /><span className="min-w-0"><span className="text-muted-foreground">From thread #{t.thread.id}:</span> {t.thread.title}</span>
               </Link>
             </div>
           )}
           <Links t={t} />
-          <p className="text-xs text-muted-foreground">Created by {t.creatorRole ? <span className="text-foreground">{t.creatorRole} · AI team</span> : t.creator} {relativeTime(t.createdAt)}. Commits that say <code className="font-mono">fixes #{t.number}</code> move it to Review on a branch and to Done on the default branch.</p>
+          <p className="text-xs text-pretty text-muted-foreground">Created by {t.creatorRole ? <span className="text-foreground">{t.creatorRole} (AI team)</span> : t.creator} {relativeTime(t.createdAt)}. Commits that say <code className="font-mono">fixes #{t.number}</code> move it to Review on a branch and to Done on the default branch.</p>
         </aside>
       </div>
       <GiveToClaude t={t} open={giving} onClose={() => setGiving(false)} />
@@ -104,16 +102,29 @@ function TaskPageView() {
   )
 }
 
+/** One fact of the task: its name on the left, its picker on the right. */
+function Property({ id, label, lead, children }: { id: string; label: string; lead?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 rounded-xl py-0.5 pr-0.5 pl-3">
+      <label htmlFor={id} className="w-20 shrink-0 text-muted-foreground">{label}</label>
+      {lead && <span className="-mr-1 flex size-4 shrink-0 items-center justify-center">{lead}</span>}
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  )
+}
+const quietSelect = '[&_select]:h-9 [&_select]:rounded-lg [&_select]:border-transparent [&_select]:bg-transparent [&_select]:pl-2.5 [&_select]:shadow-none [&_select]:transition-colors [&_select]:hover:bg-surface-2 dark:[&_select]:bg-transparent dark:[&_select]:hover:bg-surface-2'
+
 function Title({ t, onSave }: { t: TaskDetail; onSave: (title: string) => void }) {
   const [v, setV] = useState(t.title)
   useEffect(() => setV(t.title), [t.title])
   const save = () => { if (v.trim() && v.trim() !== t.title) onSave(v.trim()); else setV(t.title) }
   return (
-    <div className="flex items-start gap-2">
-      <StatusIcon status={t.status} className="mt-2 size-5" />
+    // The task's title is the page's one big thing; it edits in place, a tone step showing where.
+    <div className="flex items-start gap-2.5">
+      <StatusIcon status={t.status} className="mt-3 size-5 md:mt-3.5" />
       <Textarea aria-label="Title" rows={1} value={v} onChange={(e) => setV(e.target.value.replace(/\n/g, ' '))} onBlur={save}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } if (e.key === 'Escape') { setV(t.title); e.currentTarget.blur() } }}
-        className="min-h-0 resize-none border-transparent bg-transparent px-1 py-0.5 text-xl! leading-snug font-semibold shadow-none field-sizing-content hover:border-input focus-visible:border-ring dark:bg-transparent" />
+        className="-ml-2 min-h-0 resize-none rounded-xl border-transparent bg-transparent px-2 py-1 text-[1.75rem]! leading-[1.15] font-semibold tracking-[-0.03em] text-balance shadow-none field-sizing-content transition-colors duration-200 hover:bg-surface focus-visible:bg-surface focus-visible:ring-0 md:text-[2rem]! dark:bg-transparent dark:hover:bg-surface dark:focus-visible:bg-surface" />
     </div>
   )
 }
@@ -134,12 +145,14 @@ function Body({ t, onSave }: { t: TaskDetail; onSave: (body: string) => void }) 
     )
   }
   return t.body.trim() ? (
-    <div className="group relative">
+    <div className="group relative pr-10">
       <Prose text={t.body} />
-      <Button size="icon-sm" variant="ghost" aria-label="Edit details" className="absolute -top-1 right-0 opacity-60 group-hover:opacity-100" onClick={() => setEditing(true)}><Pencil /></Button>
+      <Button size="icon-sm" variant="ghost" aria-label="Edit details" className="absolute -top-1 right-0 text-muted-foreground opacity-70 group-hover:opacity-100" onClick={() => setEditing(true)}><Pencil /></Button>
     </div>
   ) : (
-    <button className="rounded-lg border border-dashed px-3 py-6 text-sm text-muted-foreground hover:bg-accent/40" onClick={() => setEditing(true)}>Add details</button>
+    <button className="rounded-2xl bg-surface px-4 py-6 text-left text-sm text-muted-foreground transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]" onClick={() => setEditing(true)}>
+      Add details: what done looks like, steps, links.
+    </button>
   )
 }
 
@@ -155,12 +168,12 @@ function Comments({ t }: { t: TaskDetail }) {
     if (body.trim()) add.mutate()
   }
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-sm font-medium">Comments</h2>
+    <section className="flex flex-col gap-5 pt-2">
+      <h2 className="text-base font-semibold tracking-[-0.01em]">Comments{t.comments.length > 0 && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{t.comments.length}</span>}</h2>
       {t.comments.map((c) => (
         <div key={c.id} className="flex gap-3">
-          {c.role ? <Avatar className="size-7"><AvatarFallback className="text-[11px]"><Bot className="size-3.5" /></AvatarFallback></Avatar> : <UserAvatar user={c.user} className="size-7" textClassName="text-[11px]" />}
-          <div className="min-w-0 flex-1">
+          {c.role ? <Avatar className="size-8"><AvatarFallback className="text-[11px]"><Bot className="size-4" /></AvatarFallback></Avatar> : <UserAvatar user={c.user} className="size-8" textClassName="text-xs" />}
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
             <p className="flex flex-wrap items-center gap-x-2 text-sm">
               <span className="font-medium">{c.role ?? c.user.name}</span>
               <AuthorTag role={c.role} viaClaude={c.viaClaude} account={c.role ? c.user.name : null} />
@@ -171,8 +184,9 @@ function Comments({ t }: { t: TaskDetail }) {
         </div>
       ))}
       <form onSubmit={submit} className="flex flex-col gap-2">
-        <Textarea aria-label="Write a comment" placeholder="Write a comment" rows={2} value={body} onChange={(e) => setBody(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(e) }} />
+        <Textarea aria-label="Write a comment" placeholder={t.comments.length ? 'Write a comment' : 'Start the conversation: a question, a decision, a link'} rows={2} value={body} onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(e) }}
+          className="border-transparent bg-surface px-3.5 py-3 transition-colors duration-200 focus-visible:border-ring focus-visible:bg-background dark:bg-surface dark:focus-visible:bg-background" />
         <ErrorAlert error={add.error} />
         <div className="flex justify-end"><Button type="submit" size="sm" disabled={!body.trim() || add.isPending}>Comment</Button></div>
       </form>
@@ -185,25 +199,35 @@ function Links({ t }: { t: TaskDetail }) {
   const sessions = t.links.filter((l) => l.kind === 'session')
   if (!commits.length && !sessions.length) return null
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-6">
       {sessions.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <h3 className="text-xs font-medium text-muted-foreground">Claude sessions</h3>
-          {sessions.map((l) => (
-            <Link key={l.ref} to="/claude/$id" params={{ id: l.ref }} className="flex items-center gap-2 hover:underline"><Sparkles className="size-3.5 shrink-0" /><span className="truncate">{l.title}</span></Link>
-          ))}
+        <div className="flex flex-col gap-2">
+          <h3 className="text-sm font-semibold">Claude sessions<span className="ml-2 font-normal text-muted-foreground tabular-nums">{sessions.length}</span></h3>
+          <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
+            {sessions.map((l) => (
+              <li key={l.ref}>
+                <Link to="/claude/$id" params={{ id: l.ref }} className="flex items-center gap-2.5 rounded-xl px-3 py-2 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
+                  <Sparkles className="size-4 shrink-0 text-muted-foreground" /><span className="truncate">{l.title}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {commits.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <h3 className="text-xs font-medium text-muted-foreground">Commits</h3>
-          {commits.map((l) => (
-            <div key={l.ref} className="flex items-start gap-2" title={l.title}>
-              <GitCommitHorizontal className="mt-0.5 size-3.5 shrink-0" />
-              <span className="min-w-0"><span className="font-mono text-xs">{l.ref.slice(0, 7)}</span> <span className="line-clamp-2">{l.title}</span>
-                <span className="block text-xs text-muted-foreground">{l.meta.replace(/^default:/, '')}</span></span>
-            </div>
-          ))}
+        <div className="flex flex-col gap-2">
+          <h3 className="text-sm font-semibold">Commits<span className="ml-2 font-normal text-muted-foreground tabular-nums">{commits.length}</span></h3>
+          <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
+            {commits.map((l) => (
+              <li key={l.ref} className="flex items-start gap-2.5 rounded-xl px-3 py-2" title={l.title}>
+                <GitCommitHorizontal className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="line-clamp-2">{l.title}</span>
+                  <span className="truncate text-xs text-muted-foreground"><span className="font-mono">{l.ref.slice(0, 7)}</span>{l.meta && <>, {l.meta.replace(/^default:/, '')}</>}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

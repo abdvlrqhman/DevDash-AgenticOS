@@ -74,8 +74,8 @@ function ServiceView() {
   const st = stateOf(s)
   return (
     <div className="flex h-full flex-col">
-      <PageHeader back={`/services/${s.name}`} title={<span className="font-mono">{s.name}</span>}
-        description={<span className="flex items-center gap-1.5"><StatusLight state={st.light} />{st.label}{s.public ? ' · anyone with the link' : ' · members only'}</span>}
+      <PageHeader back={`/services/${s.name}`} title={s.name}
+        description={<span className="flex items-center gap-1.5"><StatusLight state={st.light} />{st.label}, {s.public ? 'anyone with the link can open it' : 'members only'}</span>}
         actions={<>
           <PinButton kind="service" id={s.name} />
           <Button size="icon-sm" variant="ghost" aria-label="Reload" title="Reload" onClick={() => setReload((n) => n + 1)}><RotateCw /></Button>
@@ -84,7 +84,7 @@ function ServiceView() {
       {s.previewUrl ? (
         // sandbox: everything a web app normally does, but it can't navigate DevDash itself away.
         // DevDash's own Permissions-Policy still keeps camera, microphone and location off; "Open in browser" has them.
-        <iframe ref={frame} key={reload} title={s.name} src={s.previewUrl} className="min-h-0 w-full flex-1 border-0 border-t bg-background"
+        <iframe ref={frame} key={reload} title={s.name} src={s.previewUrl} className="min-h-0 w-full flex-1 border-0 bg-background"
           allow="clipboard-read; clipboard-write; fullscreen"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals allow-pointer-lock allow-orientation-lock allow-presentation" />
       ) : (

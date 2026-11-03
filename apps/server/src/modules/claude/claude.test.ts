@@ -116,7 +116,7 @@ test('what the owner shares with teammates: none by default, sent to the agent a
   await claude.send(bob, 's1', 'upload the render', [])
   const req = sent.find((x) => x.op === 'claude.send')!
   assert.deepEqual((req.launch as { guestCaps: string[] }).guestCaps, ['drive', 'tailnet'])
-  assert.match((req.content as { text: string }[])[0]!.text, /never harms Ann|nothing that harms Ann/)
+  assert.match((req.content as { text: string }[])[0]!.text, /the project and its files \(its keys and \.env included\) are the team's; Ann's personal accounts/)
   assert.match((req.content as { text: string }[])[0]!.text, /except what they shared with teammates here: Google Drive, Tailscale/)
 
   // Only the owner again, by the dialog or the plain switch: sharing again starts from none.

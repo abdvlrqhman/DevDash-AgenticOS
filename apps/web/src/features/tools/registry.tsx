@@ -1,6 +1,6 @@
 import {
-  AppWindow, ArrowRightLeft, Binary, Braces, CalendarClock, CaseSensitive, Clock, Code, Combine, Diff, FileArchive,
-  FileImage, FileJson, FileOutput, FileText, Fingerprint, Globe, Hash, Image, Images, KeyRound, LayoutGrid, Link,
+  AppWindow, Binary, Braces, CalendarClock, CaseSensitive, Clock, Code, Combine, Diff, FileArchive,
+  FileImage, FileJson, FileOutput, Fingerprint, Globe, Hash, Images, KeyRound, LayoutGrid, Link,
   ListOrdered, Palette, QrCode, Regex, Replace, RotateCw, Scaling, Scissors, Server, Shield, Shrink,
   SplitSquareHorizontal, Stamp, Type, Unlock,
 } from 'lucide-react'
@@ -43,14 +43,14 @@ export type Tool = {
 
 export const CATEGORIES: ToolCategory[] = ['Convert', 'Generate', 'Text', 'Web', 'Image', 'PDF']
 
-/** What each category is for, in one plain line — shown under its heading on the hub. */
-export const CATEGORY_META: Record<ToolCategory, { icon: typeof Braces; description: string }> = {
-  Convert: { icon: ArrowRightLeft, description: 'Reshape data from one format into another.' },
-  Generate: { icon: Fingerprint, description: 'Make IDs, hashes, passwords and placeholder text.' },
-  Text: { icon: Type, description: 'Compare, clean up and inspect blocks of text.' },
-  Web: { icon: Globe, description: 'Everyday helpers for building and debugging web services.' },
-  Image: { icon: Image, description: 'Convert, resize and compress images — right on your device.' },
-  PDF: { icon: FileText, description: 'Merge, split, rotate and rework PDFs — nothing is uploaded.' },
+/** What each category is for, in one plain line, shown under its heading on the hub. */
+export const CATEGORY_META: Record<ToolCategory, { description: string }> = {
+  Convert: { description: 'Reshape data from one format into another.' },
+  Generate: { description: 'Make IDs, hashes, passwords and placeholder text.' },
+  Text: { description: 'Compare, clean up and inspect blocks of text.' },
+  Web: { description: 'Everyday helpers for building and debugging web services.' },
+  Image: { description: 'Convert, resize and compress images on your device.' },
+  PDF: { description: 'Merge, split, rotate and rework PDFs without uploading them.' },
 }
 
 export const TOOLS: Tool[] = [

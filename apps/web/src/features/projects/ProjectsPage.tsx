@@ -3,35 +3,48 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { FileArchive, FolderGit2, GitBranch, Plus, TriangleAlert } from 'lucide-react'
 import { StatusLight } from '@/components/app/brand'
+import { Orb } from '@/components/app/orb'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ApiError, api, unwrap } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { relativeTime } from '../claude/data'
 import { Progress } from '../files/Progress'
-import { projectsQuery, useLiveWork } from '../work/data'
+import { projectsQuery, useLiveWork, type Project } from '../work/data'
 import { GitHubConnection } from '../work/GitHub'
 
+/** A choice of two or three, as one tone-stepped pill: the chosen one lifts onto the page's ground. */
+export const segmented = 'gap-0.5 rounded-full bg-surface p-0.5'
+export const segment = 'h-8 flex-1 rounded-full px-3 hover:bg-transparent data-[state=on]:bg-background data-[state=on]:text-foreground dark:data-[state=on]:bg-surface-2'
+
 type Live = { working: number; waiting: number; people: string[] }
-const firstNames = (people: string[]) => people.map((n) => n.split(' ')[0]).join(', ')
+/** "Yara", "Yara and Omar", "Yara, Omar and Lina": first names, as a sentence says them. */
+const firstNames = (people: string[]) => {
+  const names = people.map((n) => n.split(' ')[0]!)
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] ?? 'someone'
+}
 
 /** Whose Claude is working in a project right now, or when Claude last was. Nothing about what it is doing. */
 export function LiveWork({ live, lastSessionAt }: { live: Live; lastSessionAt: number | null }) {
   if (live.working + live.waiting > 0) {
-    const parts = [live.working && `${live.working} working`, live.waiting && `${live.waiting} waiting for an answer`].filter(Boolean).join(', ')
+    const who = firstNames(live.people)
+    const text = live.working && live.waiting ? `Claude is working for ${who}, and waiting for an answer`
+      : live.working ? `Claude is working for ${who}`
+      : live.people.length === 1 ? `Claude is waiting for ${who}'s answer` : `Claude is waiting for an answer from ${who}`
     return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <StatusLight state={live.working ? 'live' : 'waiting'} />
-        <span className="truncate">{firstNames(live.people)}: {parts}</span>
+      <span className={cn('flex min-w-0 items-start gap-2', !live.working && 'text-attention-foreground')}>
+        {live.working ? <Orb state="working" size={20} label="Claude is working" />
+          : <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state="waiting" /></span>}
+        <span className="line-clamp-2 min-w-0 text-pretty">{text}</span>
       </span>
     )
   }
@@ -40,54 +53,88 @@ export function LiveWork({ live, lastSessionAt }: { live: Live; lastSessionAt: n
 
 export const repoLabel = (url: string | null) => (url ? url.replace(/^(https:\/\/|git@)/, '').replace(/^github\.com[:/]/, '').replace(/\.git$/, '') : 'Only on this server')
 
+const WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten']
+/** "Two projects", in words up to ten: it reads as a sentence, not a counter. */
+export const count = (n: number, one: string, many = `${one}s`) => `${WORDS[n] ?? n} ${n === 1 ? one : many}`
+const word = (n: number) => (WORDS[n] ?? String(n)).toLowerCase()
+
+/**
+ * Every project the team shares, each a card that says first whether Claude is in it right now. The line on top answers
+ * the question people open this page with: is anything going on?
+ */
 export function ProjectsPage() {
   useLiveWork()
   const list = useQuery(projectsQuery)
   const [adding, setAdding] = useState(false)
   const projects = list.data?.projects ?? []
+  const working = projects.filter((p) => p.live.working > 0).length
+  const waiting = projects.filter((p) => p.live.waiting > 0).length
+  const where = working === projects.length
+    ? (working === 1 ? projects[0]!.name : `all ${count(working, 'project').toLowerCase()}`)
+    : `${word(working)} of ${count(projects.length, 'project').toLowerCase()}`
+  const headline = working
+    ? `Claude is working in ${where}${waiting ? `, and waiting for an answer in ${word(waiting)}` : ''}.`
+    : waiting ? `Claude is waiting for an answer in ${count(waiting, 'project').toLowerCase()}.`
+    : `${count(projects.length, 'project')}, all quiet.`
   return (
     <>
-      <PageHeader title="Projects" actions={<Button size="sm" onClick={() => setAdding(true)}><Plus />New</Button>} />
-      <PageBody>
+      <PageHeader title="Projects" actions={<Button size="sm" onClick={() => setAdding(true)}><Plus />New project</Button>} />
+      <PageBody className="gap-8 md:py-10">
         <ErrorAlert error={list.error} />
-        {list.isPending && <div className="flex flex-col gap-2">{[0, 1].map((i) => <Skeleton key={i} className="h-16" />)}</div>}
+        {list.isPending && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-40 rounded-2xl bg-surface" />)}</div>
+        )}
         {list.isSuccess && !projects.length && (
-          <Empty>
+          <Empty className="rounded-2xl bg-surface">
             <EmptyHeader>
-              <EmptyMedia variant="icon"><FolderGit2 /></EmptyMedia>
-              <EmptyTitle>No projects yet</EmptyTitle>
+              <EmptyMedia variant="icon" className="rounded-xl bg-surface-2"><FolderGit2 /></EmptyMedia>
+              <EmptyTitle className="text-base font-semibold">No projects yet</EmptyTitle>
               <EmptyDescription>Add a repository and everyone gets the same checkout on the server, with tasks, notes and Claude sessions around it.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent><Button onClick={() => setAdding(true)}><Plus />Add a project</Button></EmptyContent>
           </Empty>
         )}
         {projects.length > 0 && (
-          <ItemGroup className="rounded-xl border">
-            {projects.map((p) => (
-              <Item key={p.slug} asChild className="rounded-none border-0 border-b last:border-b-0">
-                <Link to="/projects/$slug" params={{ slug: p.slug }}>
-                  <ItemMedia variant="icon"><FolderGit2 /></ItemMedia>
-                  <ItemContent className="min-w-0">
-                    <ItemTitle>{p.name}</ItemTitle>
-                    <ItemDescription className="flex items-center gap-1.5 truncate">
-                      {p.fetchError && <span className="flex shrink-0 items-center gap-1 font-sans text-destructive" title={p.fetchError}><TriangleAlert className="size-3.5" />Can't fetch</span>}
-                      <span className="truncate font-mono">{repoLabel(p.repoUrl)}</span>
-                      <span className="flex shrink-0 items-center gap-1"><GitBranch className="size-3.5" />{p.defaultBranch}</span>
-                    </ItemDescription>
-                    {(p.live.working + p.live.waiting > 0 || p.lastSessionAt) && (
-                      <ItemDescription className="text-xs"><LiveWork live={p.live} lastSessionAt={p.lastSessionAt} /></ItemDescription>
-                    )}
-                    <ItemDescription className="text-xs tabular-nums sm:hidden">{counts(p)}</ItemDescription>
-                  </ItemContent>
-                  <ItemActions className="hidden text-xs text-muted-foreground tabular-nums sm:flex">{counts(p)}</ItemActions>
-                </Link>
-              </Item>
-            ))}
-          </ItemGroup>
+          <>
+            <h2 className={cn('max-w-[26ch] text-[1.75rem] leading-[1.1] font-semibold tracking-[-0.03em] text-balance md:text-[2.25rem]',
+              !working && !waiting && 'text-muted-foreground')}>
+              {headline}
+            </h2>
+            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {projects.map((p) => <ProjectCard key={p.slug} p={p} />)}
+            </ul>
+          </>
         )}
       </PageBody>
       <NewProject open={adding} onClose={() => setAdding(false)} />
     </>
+  )
+}
+
+/** A project at a glance: its name, where its code comes from, whether Claude is in it, and how much is open. */
+function ProjectCard({ p }: { p: Project }) {
+  return (
+    <li className="min-w-0">
+      <Link to="/projects/$slug" params={{ slug: p.slug }}
+        className="flex h-full flex-col gap-5 rounded-2xl sm:min-h-40 bg-surface p-4 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98]">
+        <span className="flex min-w-0 flex-col gap-1">
+          <span className="truncate text-lg leading-tight font-semibold tracking-[-0.02em]">{p.name}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="truncate">{repoLabel(p.repoUrl)}</span>
+            <GitBranch className="size-3.5 shrink-0" /><span className="shrink-0">{p.defaultBranch}</span>
+          </span>
+        </span>
+        <span className="mt-auto flex min-w-0 flex-col gap-2 text-sm">
+          {p.fetchError && (
+            <span className="flex items-center gap-2 text-destructive" title={p.fetchError}>
+              <span className="flex size-5 shrink-0 items-center justify-center"><TriangleAlert className="size-4" /></span>Can't fetch the repository
+            </span>
+          )}
+          <LiveWork live={p.live} lastSessionAt={p.lastSessionAt} />
+          <span className="text-xs text-muted-foreground tabular-nums">{counts(p)}</span>
+        </span>
+      </Link>
+    </li>
   )
 }
 
@@ -250,9 +297,9 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
     <ResponsiveDialog open={open} onOpenChange={close} title="Add a project" description="One shared checkout on the server that the whole team and their Claude sessions work in.">
       <form onSubmit={submit}>
         <FieldGroup>
-          <ToggleGroup type="single" variant="outline" value={mode} className="w-full" onValueChange={(v) => v && setMode(v as 'repo' | 'zip')}>
-            <ToggleGroupItem value="repo" className="h-9 flex-1"><FolderGit2 />From GitHub repo</ToggleGroupItem>
-            <ToggleGroupItem value="zip" className="h-9 flex-1"><FileArchive />Upload a .zip</ToggleGroupItem>
+          <ToggleGroup type="single" spacing={1} value={mode} className={cn(segmented, 'w-full')} onValueChange={(v) => v && setMode(v as 'repo' | 'zip')}>
+            <ToggleGroupItem value="repo" className={cn(segment, 'h-9')}><FolderGit2 />From GitHub repo</ToggleGroupItem>
+            <ToggleGroupItem value="zip" className={cn(segment, 'h-9')}><FileArchive />Upload a .zip</ToggleGroupItem>
           </ToggleGroup>
           {zip ? (
             <Field>
@@ -277,8 +324,8 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
           </Field>
           <Field>
             <FieldLabel htmlFor="np-slug">Short name</FieldLabel>
-            <Input id="np-slug" className="h-10 font-mono" value={effectiveSlug} onChange={(e) => { setSlugTouched(true); setSlug(slugify(e.target.value)) }} />
-            <FieldDescription>The folder name and the prefix of its tasks, like <span className="font-mono">{effectiveSlug || 'app'}#12</span>.</FieldDescription>
+            <Input id="np-slug" className="h-10" value={effectiveSlug} onChange={(e) => { setSlugTouched(true); setSlug(slugify(e.target.value)) }} />
+            <FieldDescription>The folder name and the prefix of its tasks, like <span className="text-foreground tabular-nums">{effectiveSlug || 'app'}#12</span>.</FieldDescription>
           </Field>
           <Field>
             <FieldLabel htmlFor="np-instructions">Instructions <span className="font-normal text-muted-foreground">(optional)</span></FieldLabel>
@@ -290,7 +337,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
             <p className="flex flex-wrap justify-between gap-x-3 text-xs text-muted-foreground tabular-nums" aria-live="polite">
               <span>{gb(stats.sent)} of {gb(stats.total)}</span>
               <span>{stats.reconnecting ? 'Connection lost — reconnecting…'
-                : stats.speed ? `${rate(stats.speed)} · ${eta((stats.total - stats.sent) / stats.speed)}` : 'Measuring speed…'}</span>
+                : stats.speed ? `${rate(stats.speed)}, ${eta((stats.total - stats.sent) / stats.speed)}` : 'Measuring speed…'}</span>
             </p>
           )}
           {unpacking && <p className="text-xs text-muted-foreground">Uploaded. Unpacking and saving it as a git repository — a big one takes a few minutes.</p>}

@@ -1,14 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { LogIn, Plus, RotateCw } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
-import { PageBody, PageHeader, SettingsSection } from '@/components/app/page'
+import { PageBody, PageHeader } from '@/components/app/page'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -19,6 +18,8 @@ import { describeMemory, memoryQuery } from './memory'
 
 type Profile = { name: string; loggedIn: boolean; authMethod: string | null; email: string | null; plan: string | null; memory: boolean }
 type Defaults = { profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
+
+const profileName = (p: Profile) => (p.name === 'default' ? 'Default' : p.name)
 
 export function SetupPage() {
   const qc = useQueryClient()
@@ -39,42 +40,41 @@ export function SetupPage() {
   return (
     <>
       <PageHeader title="Claude setup" back="/claude" />
-      <PageBody>
-        <SettingsSection title="Profiles" description={<>
-              A profile is its own Claude configuration: settings, skills, agents, plugins, memory and sign-in. The same Claude account can sign in to any number of profiles.
-        </>}>
-            <ErrorAlert error={q.error} />
-            {q.isPending ? <Skeleton className="h-16" /> : (
-              <ItemGroup className="rounded-lg border">
-                {profiles.map((p) => (
-                  <Item key={p.name} className="rounded-none border-0 border-b last:border-b-0">
-                    <ItemMedia><StatusLight state={p.loggedIn ? 'live' : 'idle'} /></ItemMedia>
-                    <ItemContent>
-                      <ItemTitle>{p.name === 'default' ? 'Default' : p.name}</ItemTitle>
-                      <ItemDescription>
-                        {p.loggedIn ? [p.email, p.plan, p.authMethod === 'apiKey' ? 'API key' : null].filter(Boolean).join(', ') || 'Signed in' : 'Not signed in'}
-                      </ItemDescription>
-                    </ItemContent>
-                    <ItemActions>
-                      <Button size="sm" variant={p.loggedIn ? 'outline' : 'default'} onClick={() => login(p.name)}><LogIn />{p.loggedIn ? 'Sign in again' : 'Sign in'}</Button>
-                    </ItemActions>
-                  </Item>
-                ))}
-              </ItemGroup>
-            )}
-            <form onSubmit={(e: FormEvent) => { e.preventDefault(); if (name) create.mutate() }} className="flex items-end gap-2">
-              <Field className="flex-1">
-                <FieldLabel htmlFor="new-profile">New profile</FieldLabel>
-                <Input id="new-profile" placeholder="work" value={name} maxLength={21} className="h-9"
-                  onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} />
-              </Field>
-              <Button type="submit" variant="outline" disabled={!name || create.isPending}><Plus />Add</Button>
-            </form>
-            <ErrorAlert error={create.error} />
-            <p className="text-sm text-muted-foreground">
-              Signing in opens a terminal running Claude's own sign-in. Open the link it prints, approve, then paste the code back. DevDash never sees your Claude credentials.
-            </p>
-        </SettingsSection>
+      <PageBody className="gap-12 py-8 md:py-12">
+        <Group title="Profiles" description="A profile is its own Claude configuration: settings, skills, agents, plugins, memory and sign-in. The same Claude account can sign in to any number of profiles.">
+          <ErrorAlert error={q.error} />
+          {/* Whether Claude can work at all: each profile's sign-in, the boldest thing on the page. */}
+          {q.isPending ? <Skeleton className="h-[4.5rem] rounded-2xl" /> : (
+            <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
+              {profiles.map((p) => (
+                <li key={p.name} className="flex items-center gap-3 rounded-xl px-3 py-3">
+                  <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={p.loggedIn ? 'live' : 'idle'} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{profileName(p)}</span>
+                    <span className="block text-sm text-pretty text-muted-foreground">
+                      {p.loggedIn ? [p.email, p.plan, p.authMethod === 'apiKey' ? 'API key' : null].filter(Boolean).join(', ') || 'Signed in' : 'Not signed in. Sessions can’t start with it yet.'}
+                    </span>
+                  </span>
+                  {p.loggedIn
+                    ? <Button size="sm" variant="ghost" className="hover:bg-surface-2 dark:hover:bg-surface-2" onClick={() => login(p.name)}><LogIn />Sign in again</Button>
+                    : <Button size="sm" onClick={() => login(p.name)}><LogIn />Sign in</Button>}
+                </li>
+              ))}
+            </ul>
+          )}
+          <form onSubmit={(e: FormEvent) => { e.preventDefault(); if (name) create.mutate() }} className="flex items-end gap-2">
+            <Field className="flex-1">
+              <FieldLabel htmlFor="new-profile">New profile</FieldLabel>
+              <Input id="new-profile" placeholder="work" value={name} maxLength={21} className="h-9"
+                onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} />
+            </Field>
+            <Button type="submit" variant="outline" className="h-9" disabled={!name || create.isPending}><Plus />Add</Button>
+          </form>
+          <ErrorAlert error={create.error} />
+          <p className="text-sm text-pretty text-muted-foreground">
+            Signing in opens a terminal running Claude's own sign-in. Open the link it prints, approve, then paste the code back. DevDash never sees your Claude credentials.
+          </p>
+        </Group>
         {!q.isPending && profiles.length > 0 && <MemorySection profiles={profiles} />}
         {q.data && <DefaultsCard profiles={profiles} initial={q.data.defaults} />}
       </PageBody>
@@ -82,17 +82,32 @@ export function SetupPage() {
   )
 }
 
+/** A settings group: what it is on the left (wide screens), its controls on the right; stacked on phones. No rules between. */
+function Group({ title, description, children }: { title: ReactNode; description?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="grid gap-3 lg:grid-cols-[17rem_minmax(0,1fr)] lg:gap-12">
+      <div className="min-w-0 lg:pt-1">
+        <h2 className="text-base font-semibold tracking-[-0.01em]">{title}</h2>
+        {description && <p className="mt-1 text-sm text-pretty text-muted-foreground">{description}</p>}
+      </div>
+      <div className="flex min-w-0 flex-col gap-4">{children}</div>
+    </section>
+  )
+}
+
+/** A segmented choice: pills on a track one tone off whatever it sits on (here, a surface panel). */
+const track = 'rounded-2xl bg-background p-1 data-[size=sm]:rounded-2xl'
+const pill = 'rounded-xl'
+
 /** Per profile: Claude Code's own memory (the default) or claude-mem on top of it. */
 function MemorySection({ profiles }: { profiles: Profile[] }) {
   return (
-    <SettingsSection title="Memory" description={<>
-          Claude Code remembers through CLAUDE.md files and its own auto memory. claude-mem adds to that: it records what Claude does and brings the relevant parts back in later sessions, searchable across projects. It summarizes in the background with your Claude plan, and new sessions pick the change up.
-    </>}>
-        <ItemGroup className="rounded-lg border">
-          {profiles.map((p) => <MemoryRow key={p.name} profile={p} />)}
-        </ItemGroup>
-        {profiles.some((p) => p.memory) && <MemoryHealthRow />}
-    </SettingsSection>
+    <Group title="Memory" description="Claude Code remembers through CLAUDE.md files and its own auto memory. claude-mem adds to that: it records what Claude does and brings the relevant parts back in later sessions, searchable across projects. It summarizes in the background with your Claude plan, and new sessions pick the change up.">
+      <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
+        {profiles.map((p) => <MemoryRow key={p.name} profile={p} />)}
+      </ul>
+      {profiles.some((p) => p.memory) && <MemoryHealthRow />}
+    </Group>
   )
 }
 
@@ -104,24 +119,24 @@ function MemoryHealthRow() {
     mutationFn: () => unwrap(api.api.claude.memory.restart.$post()),
     onSuccess: () => { toast.success('claude-mem restarted.'); void qc.invalidateQueries({ queryKey: memoryQuery.queryKey }) },
   })
-  if (q.isPending) return <Skeleton className="h-12" />
+  if (q.isPending) return <Skeleton className="h-14 rounded-2xl" />
   if (q.error) return <ErrorAlert error={q.error} />
   const h = q.data.health
   const d = describeMemory(h)
   return (
-    <div className="flex flex-col gap-2 rounded-lg border p-3">
+    <div className="flex flex-col gap-2 rounded-2xl bg-surface px-4 py-3.5">
       <div className="flex items-center gap-3">
-        <StatusLight state={d.light} />
+        <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={d.light} /></span>
         <div className="min-w-0 flex-1 text-sm">
-          <div>{d.text}</div>
-          {h.version && <div className="text-xs text-muted-foreground">claude-mem {h.version}</div>}
+          <div className={d.light === 'error' ? 'text-destructive' : undefined}>{d.text}</div>
+          {h.version && <div className="text-xs text-muted-foreground">claude-mem <span className="tabular-nums">{h.version}</span></div>}
         </div>
-        {h.state !== 'off' && <Button size="sm" variant="outline" disabled={restart.isPending} onClick={() => restart.mutate()}>
+        {h.state !== 'off' && <Button size="sm" variant="ghost" className="hover:bg-surface-2 dark:hover:bg-surface-2" disabled={restart.isPending} onClick={() => restart.mutate()}>
           {restart.isPending ? <Spinner /> : <RotateCw />}Restart
         </Button>}
       </div>
-      {d.hint && <p className="text-xs text-muted-foreground">{d.hint}</p>}
-      {h.problems?.map((m) => <p key={m} className="text-xs text-muted-foreground">{m}</p>)}
+      {d.hint && <p className="pl-8 text-xs text-pretty text-muted-foreground">{d.hint}</p>}
+      {h.problems?.map((m) => <p key={m} className="pl-8 text-xs text-pretty text-muted-foreground">{m}</p>)}
       <ErrorAlert error={restart.error} />
     </div>
   )
@@ -154,20 +169,18 @@ function MemoryRow({ profile: p }: { profile: Profile }) {
   const busy = save.isPending || waiting
   const id = `memory-${p.name}`
   return (
-    <Item className="rounded-none border-0 border-b last:border-b-0">
-      <ItemContent>
-        <ItemTitle id={id}>{p.name === 'default' ? 'Default' : p.name}</ItemTitle>
-        <ItemDescription>{busy ? 'Working on it…' : p.memory ? 'Claude Code memory and claude-mem' : 'Claude Code memory'}</ItemDescription>
+    <li className="flex flex-col gap-3 rounded-xl px-3 py-3 sm:flex-row sm:items-center">
+      <div className="min-w-0 flex-1">
+        <div id={id} className="font-medium">{profileName(p)}</div>
+        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">{busy && <Spinner className="size-3.5" />}{busy ? 'Working on it…' : p.memory ? 'Claude Code memory and claude-mem' : 'Claude Code memory'}</div>
         <ErrorAlert error={save.error} />
-      </ItemContent>
-      <ItemActions>
-        <ToggleGroup type="single" variant="outline" size="sm" aria-labelledby={id} disabled={busy} value={p.memory ? 'mem' : 'builtin'}
-          onValueChange={(v) => v && v !== (p.memory ? 'mem' : 'builtin') && save.mutate(v === 'mem')}>
-          <ToggleGroupItem value="builtin">Built-in</ToggleGroupItem>
-          <ToggleGroupItem value="mem">claude-mem</ToggleGroupItem>
-        </ToggleGroup>
-      </ItemActions>
-    </Item>
+      </div>
+      <ToggleGroup type="single" size="sm" spacing={1} aria-labelledby={id} disabled={busy} value={p.memory ? 'mem' : 'builtin'}
+        onValueChange={(v) => v && v !== (p.memory ? 'mem' : 'builtin') && save.mutate(v === 'mem')} className={`shrink-0 ${track}`}>
+        <ToggleGroupItem value="builtin" className={`px-3 ${pill}`}>Built-in</ToggleGroupItem>
+        <ToggleGroupItem value="mem" className={`px-3 ${pill}`}>claude-mem</ToggleGroupItem>
+      </ToggleGroup>
+    </li>
   )
 }
 
@@ -190,22 +203,24 @@ function DefaultsCard({ profiles, initial }: { profiles: Profile[]; initial: Def
   const Row = ({ id, label, value, options, onPick, description }: { id: string; label: string; value: string; options: { value: string; label: string }[]; onPick: (v: string) => void; description?: string }) => (
     <Field>
       <FieldLabel id={id}>{label}</FieldLabel>
-      <ToggleGroup type="single" variant="outline" aria-labelledby={id} value={value} onValueChange={(v) => v !== undefined && onPick(v)} className="w-full flex-wrap">
-        {options.map((o) => <ToggleGroupItem key={o.value || 'default'} value={o.value} className="flex-1">{o.label}</ToggleGroupItem>)}
+      <ToggleGroup type="single" spacing={1} aria-labelledby={id} value={value} onValueChange={(v) => v !== undefined && onPick(v)} className={`w-full flex-wrap ${track}`}>
+        {options.map((o) => <ToggleGroupItem key={o.value || 'default'} value={o.value} className={`min-w-fit flex-1 ${pill}`}>{o.label}</ToggleGroupItem>)}
       </ToggleGroup>
       {description && <FieldDescription>{description}</FieldDescription>}
     </Field>
   )
   return (
-    <SettingsSection title="Defaults for new sessions" description="You can change any of these per session.">
+    <Group title="Defaults for new sessions" description="You can change any of these per session.">
+      <div className="rounded-2xl bg-surface p-4 md:p-5">
         <FieldGroup>
-          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v })} options={profiles.map((p) => ({ value: p.name, label: p.name }))} />}
+          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v })} options={profiles.map((p) => ({ value: p.name, label: profileName(p) }))} />}
           <Row id="d-model" label="Model" value={d.model ?? ''} onPick={(v) => set({ model: v || null })} options={FALLBACK_MODELS.map((m) => ({ value: m.value, label: m.displayName }))} />
           <Row id="d-perm" label="Permissions" value={d.permission_mode} onPick={(v) => set({ permission_mode: v })}
             options={PERMISSION_MODES.map((p) => ({ value: p.value, label: p.label }))} description={PERMISSION_MODES.find((p) => p.value === d.permission_mode)?.hint} />
           <Row id="d-open" label="Open sessions in" value={d.open_in} onPick={(v) => set({ open_in: v as 'chat' | 'cli' })} options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]} />
           <ErrorAlert error={save.error} />
         </FieldGroup>
-    </SettingsSection>
+      </div>
+    </Group>
   )
 }

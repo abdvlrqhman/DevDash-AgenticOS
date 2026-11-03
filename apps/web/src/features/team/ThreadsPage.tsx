@@ -40,14 +40,15 @@ export function ThreadsPage() {
 
   return (
     <>
-      <PageHeader back={`/projects/${slug}`} title="Threads" description={first ? `${first.project.name} · open and closed` : 'Open and closed'} />
-      <PageBody>
+      <PageHeader back={`/projects/${slug}`} title="Threads" description={first ? `${first.project.name}, open and closed` : 'Open and closed'} />
+      <PageBody className="md:py-8">
         <div className="flex max-w-3xl flex-col gap-4">
-          <ToggleGroup type="single" variant="outline" size="sm" value={status} onValueChange={(v) => v && setStatus(v as ThreadStatus)} aria-label="Show"
-            className="-mx-4 w-auto self-stretch overflow-x-auto px-4 sm:mx-0 sm:self-start sm:px-0">
+          <ToggleGroup type="single" spacing={1} size="sm" value={status} onValueChange={(v) => v && setStatus(v as ThreadStatus)} aria-label="Show"
+            className="-mx-4 w-auto gap-1.5 self-stretch overflow-x-auto px-4 no-scrollbar sm:mx-0 sm:self-start sm:px-0">
             {STATUSES.map((s) => (
-              <ToggleGroupItem key={s.value} value={s.value} className="shrink-0 gap-1.5 px-2.5">
-                {s.label}{first && <span className="tabular-nums text-muted-foreground">{first.counts[s.value]}</span>}
+              <ToggleGroupItem key={s.value} value={s.value}
+                className="h-8 shrink-0 gap-1.5 rounded-full bg-surface px-3 text-sm font-normal text-muted-foreground transition-[background-color,color,scale] duration-300 ease-spring hover:bg-surface-2 hover:text-foreground active:scale-[0.96] data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">
+                {s.label}{first && <span className="tabular-nums opacity-60">{first.counts[s.value]}</span>}
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
@@ -69,12 +70,12 @@ export function ThreadsPage() {
           </div>
 
           <ErrorAlert error={list.error} />
-          {!list.data ? <Skeleton className="h-64" /> : threads.length ? (
-            <ul className="flex flex-col divide-y rounded-xl border">
+          {!list.data ? <Skeleton className="h-64 rounded-2xl bg-surface" /> : threads.length ? (
+            <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
               {threads.map((x) => <Row key={x.id} slug={slug} x={x} />)}
             </ul>
           ) : (
-            <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+            <p className="rounded-2xl bg-surface px-6 py-10 text-center text-sm text-pretty text-muted-foreground">
               {q || role || outcome || status !== 'all' ? 'No threads match.' : 'No threads yet. Roles, Claude sessions and people raise them from the Team tab.'}
             </p>
           )}
@@ -93,21 +94,19 @@ function Row({ slug, x }: { slug: string; x: ThreadItem }) {
   const closed = x.status === 'resolved'
   return (
     <li>
-      <Link to="/projects/$slug/team/threads/$thread" params={{ slug, thread: String(x.id) }} className="flex flex-col gap-1 px-3.5 py-2.5 text-sm hover:bg-accent/40">
+      <Link to="/projects/$slug/team/threads/$thread" params={{ slug, thread: String(x.id) }}
+        className="flex flex-col gap-1 rounded-xl px-3 py-2.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
         <div className="flex items-center gap-x-3">
-          <StatusLight state={closed ? 'idle' : x.needsPeople ? 'waiting' : 'live'} />
+          <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={closed ? 'idle' : x.needsPeople ? 'waiting' : 'live'} /></span>
           <span className={cn('min-w-0 flex-1 truncate font-medium', closed && 'text-muted-foreground')}>{x.title}</span>
-          {!closed && x.priority === 'blocker' && <span className="shrink-0 rounded-full bg-destructive/15 px-2 py-0.5 text-[11px] font-medium text-destructive">Blocker</span>}
-          {closed ? <OutcomeBadge as={x.closedAs} /> : x.needsPeople && <span className="shrink-0 text-xs font-medium text-attention-foreground dark:text-attention">Needs you</span>}
+          {!closed && x.priority === 'blocker' && <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">Blocker</span>}
+          {closed ? <OutcomeBadge as={x.closedAs} /> : x.needsPeople && <span className="shrink-0 text-xs font-medium text-attention-foreground">Needs you</span>}
         </div>
-        <div className="flex flex-wrap gap-x-1.5 pl-5 text-xs text-muted-foreground">
-          <span>#{x.id}</span>
-          <span>· {x.owner ? x.owner.name : 'Nobody owns it'}</span>
-          <span>· {x.messages} {x.messages === 1 ? 'message' : 'messages'}</span>
-          <span>· {relativeTime(closed && x.resolvedAt ? x.resolvedAt : x.lastAt)}</span>
+        <div className="pl-8 text-xs text-muted-foreground">
+          <span className="tabular-nums">#{x.id}</span>, {x.owner ? `${x.owner.name} owns it` : 'nobody owns it'}, {x.messages} {x.messages === 1 ? 'message' : 'messages'}, {relativeTime(closed && x.resolvedAt ? x.resolvedAt : x.lastAt)}
         </div>
         {closed && (x.closedBy || x.resolution) && (
-          <p className="line-clamp-2 pl-5 text-xs text-muted-foreground">
+          <p className="line-clamp-2 pl-8 text-xs text-muted-foreground">
             {x.closedBy && <span className="font-medium text-foreground/80">{x.closedBy}</span>}{x.closedBy && x.resolution ? ': ' : ''}{x.resolution}
           </p>
         )}

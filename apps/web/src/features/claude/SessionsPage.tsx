@@ -1,24 +1,23 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Archive, ChevronRight, Plus, Settings2, Sparkles, ChevronDown } from 'lucide-react'
+import { Archive, ArrowLeft, ChevronRight, Plus, Settings2, ChevronDown } from 'lucide-react'
 import { StatusLight } from '@/components/app/brand'
-import { PageBody, PageHeader, Section } from '@/components/app/page'
+import { Orb } from '@/components/app/orb'
+import { PageBody, PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, meQuery, unwrap } from '@/lib/api'
+import { useArrivals } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { NativeSelect } from '@/components/app/native-select'
@@ -27,7 +26,7 @@ import { projectsQuery, type SessionSharing } from '../work/data'
 import { useArchiveSession } from './ArchiveSession'
 import { ModelChoices } from './ModelChoices'
 import { groupModels, isDefaultModel, modelLabel, type ModelInfo } from './models'
-import { byFolder, commandsQuery, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, relativeTime, sessionPlace, sessionsQuery, shortPath, type PermissionMode, type Session } from './data'
+import { byFolder, commandsQuery, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, relativeTime, sessionPlace, sessionsQuery, type PermissionMode, type Session } from './data'
 
 export function SessionsPage() {
   const me = useQuery(meQuery).data!
@@ -39,6 +38,11 @@ export function SessionsPage() {
   const sessions = list.data?.sessions ?? []
   const waiting = sessions.filter((s) => s.status === 'waiting')
   const groups = byFolder(archived ? sessions : sessions.filter((s) => s.status !== 'waiting'))
+  // Claude's orb marks the sessions it's working in; each is a canvas, so only the first few get one.
+  const orbs = new Set(sessions.filter((s) => s.status === 'working').slice(0, 3).map((s) => s.id))
+  // A session that starts waiting for an answer while you look lands in "Needs you".
+  const needs = useRef<HTMLUListElement>(null)
+  useArrivals(needs, list.isSuccess && !archived ? waiting.map((s) => s.id) : undefined)
 
   return (
     <>
@@ -47,32 +51,40 @@ export function SessionsPage() {
           <Button variant="ghost" size="icon" asChild aria-label="Claude setup"><Link to="/claude/setup"><Settings2 /></Link></Button>
           <Button size="sm" onClick={() => setCreating(true)}><Plus />New</Button>
         </>} />
-      <PageBody>
+      <PageBody className="gap-10 py-6 md:py-8">
         <ErrorAlert error={list.error} />
-        {list.isPending && <div className="flex flex-col gap-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-14 rounded-xl" />)}</div>}
+        {list.isPending && (
+          <div className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-13 rounded-xl bg-surface-2" />)}</div>
+        )}
         {!archived && waiting.length > 0 && (
-          <Section title="Needs you">
-            <ItemGroup className="gap-2">
+          <Block title="Needs you" count={waiting.length}>
+            <ul ref={needs} className="flex flex-col gap-1.5">
               {waiting.map((s) => <SessionRow key={s.id} s={s} me={me.id} highlight onArchive={archive.ask} />)}
-            </ItemGroup>
-          </Section>
+            </ul>
+          </Block>
         )}
         {groups.map((g) => (
-          <SessionList key={g.key} title={<span title={g.path}>{g.label}</span>} sessions={g.sessions} me={me.id} onArchive={archived ? undefined : archive.ask} />
+          <Block key={g.key} title={<span title={g.path}>{g.label}</span>} count={g.sessions.length}>
+            <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
+              {g.sessions.map((s) => <SessionRow key={s.id} s={s} me={me.id} orb={orbs.has(s.id)} onArchive={archived ? undefined : archive.ask} />)}
+            </ul>
+          </Block>
         ))}
         {list.isSuccess && !sessions.length && (
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">{archived ? <Archive /> : <Sparkles />}</EmptyMedia>
-              <EmptyTitle>{archived ? 'Nothing archived' : 'No sessions yet'}</EmptyTitle>
-              <EmptyDescription>{archived ? 'Archived sessions show up here.' : 'Start a session and Claude works on the server as you, even after you close the app.'}</EmptyDescription>
-            </EmptyHeader>
-            {!archived && <EmptyContent><Button onClick={() => setCreating(true)}><Plus />New session</Button></EmptyContent>}
-          </Empty>
+          <div className="flex flex-col items-start gap-5 rounded-2xl bg-surface p-6 md:p-8">
+            <div className="flex max-w-prose flex-col gap-1.5">
+              <h2 className="text-lg font-semibold tracking-[-0.015em]">{archived ? 'Nothing archived' : 'Hand Claude something to do'}</h2>
+              <p className="text-sm text-pretty text-muted-foreground">
+                {archived ? 'Sessions you archive wait here, out of the way, until you need them again.'
+                  : 'Start a session and Claude works on the server as you, in a folder or a project, and keeps going after you close the app.'}
+              </p>
+            </div>
+            {!archived && <Button onClick={() => setCreating(true)}><Plus />New session</Button>}
+          </div>
         )}
-        <div>
-          <Button variant="link" size="sm" className="h-auto p-0 text-muted-foreground" onClick={() => setArchived(!archived)}>
-            {archived ? 'Back to active sessions' : 'Show archived sessions'}
+        <div className="-mt-4">
+          <Button variant="ghost" size="sm" className="-ml-3 text-muted-foreground" onClick={() => setArchived(!archived)}>
+            {archived ? <ArrowLeft /> : <Archive />}{archived ? 'Back to active sessions' : 'Show archived sessions'}
           </Button>
         </div>
       </PageBody>
@@ -84,39 +96,48 @@ export function SessionsPage() {
 
 const light = (s: Session) => (s.status === 'working' ? 'live' : s.status === 'waiting' ? 'waiting' : s.status === 'error' ? 'error' : 'idle')
 
-function SessionRow({ s, me, highlight, onArchive }: { s: Session; me: number; highlight?: boolean; onArchive?: (s: Session) => void }) {
+function Block({ title, count, children }: { title: ReactNode; count: number; children: ReactNode }) {
   return (
-    <div className={cn('flex items-center', highlight ? '' : 'border-b last:border-b-0')}>
-    <Item asChild className={cn('min-w-0 flex-1', highlight ? 'border-attention/40 bg-attention-soft' : 'rounded-none border-0')}>
-      <Link to="/claude/$id" params={{ id: s.id }}>
-        <ItemMedia><StatusLight state={light(s)} /></ItemMedia>
-        <ItemContent className="min-w-0">
-          <ItemTitle className="line-clamp-1">{s.title}</ItemTitle>
-          <ItemDescription className="line-clamp-1">
-            {s.owner.id !== me && <span className="text-foreground">{s.owner.name.split(' ')[0]}, </span>}
-            {s.status === 'working' ? 'Working' : s.status === 'waiting' ? 'Needs you' : relativeTime(s.lastActivityAt)}{highlight ? <>, {sessionPlace(s)}</> : null}
-          </ItemDescription>
-        </ItemContent>
-        <ItemActions>
-          {s.mode === 'cli' && <Badge variant="outline">CLI</Badge>}
-          {s.owner.id === me && s.audience !== 'private' && <Badge variant="secondary">{s.audience === 'people' ? `Shared with ${s.sharedWith}` : 'Shared'}</Badge>}
-          {s.owner.id !== me && <UserAvatar user={s.owner} className="size-7" textClassName="text-[11px]" />}
-          <ChevronRight className="size-4 text-muted-foreground" />
-        </ItemActions>
-      </Link>
-    </Item>
-    {onArchive && s.owner.id === me && !s.archived && (
-      <Button size="icon-sm" variant="ghost" className="mr-1.5 shrink-0 text-muted-foreground" aria-label={`Archive ${s.title}`} onClick={() => onArchive(s)}><Archive /></Button>
-    )}
-    </div>
+    <section className="flex min-w-0 flex-col gap-3">
+      <h2 className="truncate text-base font-semibold tracking-[-0.01em]">{title}<span className="ml-2 font-normal text-muted-foreground tabular-nums">{count}</span></h2>
+      {children}
+    </section>
   )
 }
 
-function SessionList({ title, sessions, me, onArchive }: { title?: React.ReactNode; sessions: Session[]; me: number; onArchive?: (s: Session) => void }) {
+/**
+ * One session on its panel. Waiting ones stand alone, amber: they're the ones asking for you. The archive button sits
+ * beside the link, inside the same row, so the row still reads as one thing under the pointer.
+ */
+function SessionRow({ s, me, highlight, orb, onArchive }: { s: Session; me: number; highlight?: boolean; orb?: boolean; onArchive?: (s: Session) => void }) {
+  const mine = s.owner.id === me
+  const what = s.status === 'working' ? (s.statusDetail || 'Working') : s.status === 'waiting' ? 'Waiting for an answer' : relativeTime(s.lastActivityAt)
   return (
-    <Section title={title}>
-      <ItemGroup className="rounded-xl border">{sessions.map((s) => <SessionRow key={s.id} s={s} me={me} onArchive={onArchive} />)}</ItemGroup>
-    </Section>
+    <li data-key={s.id} className={cn('flex items-center rounded-xl transition-[background-color,scale] duration-300 ease-spring has-[a:active]:scale-[0.99]',
+      highlight ? 'rounded-2xl bg-attention-soft hover:bg-attention-soft/70' : 'hover:bg-surface-2')}>
+      <Link to="/claude/$id" params={{ id: s.id }} className={cn('flex min-w-0 flex-1 items-center gap-3 px-3 text-sm', highlight ? 'py-3' : 'py-2.5')}>
+        <span className="flex size-5 shrink-0 items-center justify-center">
+          {orb ? <Orb state="working" size={20} label="Claude is working" /> : <StatusLight state={light(s)} />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-1 font-medium">{s.title}</span>
+          <span className={cn('line-clamp-1 text-xs', highlight ? 'text-attention-foreground' : 'text-muted-foreground')}>
+            {!mine && <span className={highlight ? undefined : 'text-foreground/80'}>{s.owner.name.split(' ')[0]}, </span>}
+            {mine ? what : what[0]!.toLowerCase() + what.slice(1)}{highlight ? <>, in {sessionPlace(s)}</> : null}
+          </span>
+        </span>
+        {(s.mode === 'cli' || (mine && s.audience !== 'private')) && (
+          <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
+            {[s.mode === 'cli' && 'CLI', mine && s.audience !== 'private' && (s.audience === 'people' ? `Shared with ${s.sharedWith}` : 'Shared')].filter(Boolean).join(', ')}
+          </span>
+        )}
+        {!mine && <UserAvatar user={s.owner} className="size-6" textClassName="text-[10px]" title={s.owner.name} />}
+        {!(onArchive && mine && !s.archived) && <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+      </Link>
+      {onArchive && mine && !s.archived && (
+        <Button size="icon-sm" variant="ghost" className="mr-1.5 shrink-0 text-muted-foreground hover:bg-foreground/5 dark:hover:bg-foreground/5" aria-label={`Archive ${s.title}`} title="Archive" onClick={() => onArchive(s)}><Archive /></Button>
+      )}
+    </li>
   )
 }
 
@@ -126,8 +147,8 @@ function Choice({ id, label, value, options, onChange, description }: {
   return (
     <Field>
       <FieldLabel id={id}>{label}</FieldLabel>
-      <ToggleGroup type="single" variant="outline" aria-labelledby={id} value={value} onValueChange={(v) => v !== undefined && onChange(v)} className="w-full flex-wrap">
-        {options.map((o) => <ToggleGroupItem key={o.value || 'default'} value={o.value} className="flex-1">{o.label}</ToggleGroupItem>)}
+      <ToggleGroup type="single" spacing={1} aria-labelledby={id} value={value} onValueChange={(v) => v !== undefined && onChange(v)} className="w-full flex-wrap rounded-2xl bg-surface p-1">
+        {options.map((o) => <ToggleGroupItem key={o.value || 'default'} value={o.value} className="min-w-fit flex-1 rounded-xl hover:bg-surface-2">{o.label}</ToggleGroupItem>)}
       </ToggleGroup>
       {description && <FieldDescription>{description}</FieldDescription>}
     </Field>

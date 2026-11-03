@@ -105,7 +105,7 @@ function PdfBar({ file, pageCount, onChange, extra }: { file: File; pageCount: n
       <FileText className="size-5 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{file.name}</div>
-        <div className="font-mono text-xs text-muted-foreground tabular-nums">{pageCount} page{pageCount === 1 ? '' : 's'} · {bytes(file.size)}</div>
+        <div className="text-xs text-muted-foreground tabular-nums">{pageCount} page{pageCount === 1 ? '' : 's'}, {bytes(file.size)}</div>
       </div>
       {extra}
       <Button type="button" size="sm" variant="ghost" onClick={onChange}><Undo2 />Change</Button>
@@ -122,7 +122,7 @@ function PageThumb({ getThumb, page, rotation = 0, className }: { getThumb: (p: 
     return () => { alive = false }
   }, [getThumb, page])
   return (
-    <div className={cn('flex items-center justify-center overflow-hidden rounded-md border bg-muted/40', className)}>
+    <div className={cn('flex items-center justify-center overflow-hidden rounded-lg bg-background', className)}>
       {url
         ? <img src={url} alt={`Page ${page}`} loading="lazy" className="max-h-full max-w-full object-contain transition-transform" style={{ transform: `rotate(${rotation}deg)` }} />
         : <Spinner className="size-4 text-muted-foreground" />}
@@ -134,18 +134,18 @@ function PageThumb({ getThumb, page, rotation = 0, className }: { getThumb: (p: 
 function PdfResult({ files, onReset }: { files: { blob: Blob; name: string }[]; onReset: () => void }) {
   if (files.length === 0) return null
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">{files.length === 1 ? 'Ready to download' : `${files.length} files ready`}</span>
-        {files.length > 1 && <Button type="button" size="sm" variant="outline" onClick={() => void downloadAll(files)}><Download />Download all</Button>}
+    <div className="flex flex-col gap-2 rounded-2xl bg-surface p-3">
+      <div className="flex items-center justify-between gap-2 pl-1">
+        <span className="text-sm font-medium">{files.length === 1 ? 'Ready to download' : `${files.length} files ready`}</span>
+        {files.length > 1 && <Button type="button" size="sm" variant="outline" className="bg-background hover:bg-background/70" onClick={() => void downloadAll(files)}><Download />Download all</Button>}
       </div>
-      <ul className="flex flex-col gap-1.5">
+      <ul className="flex flex-col gap-1">
         {files.map((f, i) => (
-          <li key={i} className="flex items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5">
+          <li key={i} className="flex items-center gap-2 rounded-xl bg-background py-1.5 pr-1.5 pl-3">
             <FileText className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
-            <span className="font-mono text-xs text-muted-foreground tabular-nums">{bytes(f.blob.size)}</span>
-            <Button type="button" size="icon-sm" variant="outline" aria-label={`Download ${f.name}`} onClick={() => downloadBlob(f.blob, f.name)}><Download /></Button>
+            <span className="text-xs text-muted-foreground tabular-nums">{bytes(f.blob.size)}</span>
+            <Button type="button" size="icon-sm" variant="ghost" aria-label={`Download ${f.name}`} onClick={() => downloadBlob(f.blob, f.name)}><Download /></Button>
           </li>
         ))}
       </ul>
@@ -219,10 +219,10 @@ export function MergePdf() {
           <li key={it.id} draggable onDragStart={dnd.onDragStart(i)} onDragOver={dnd.onDragOver(i)} onDrop={dnd.onDrop(i)}
             className="flex items-center gap-2 rounded-2xl bg-surface p-2.5">
             <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground" aria-hidden />
-            <span className="w-5 shrink-0 text-center font-mono text-xs text-muted-foreground tabular-nums">{i + 1}</span>
+            <span className="w-5 shrink-0 text-center text-xs text-muted-foreground tabular-nums">{i + 1}</span>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{it.file.name}</div>
-              <div className="font-mono text-xs text-muted-foreground tabular-nums">{it.pageCount} page{it.pageCount === 1 ? '' : 's'} · {bytes(it.file.size)}</div>
+              <div className="text-xs text-muted-foreground tabular-nums">{it.pageCount} page{it.pageCount === 1 ? '' : 's'}, {bytes(it.file.size)}</div>
             </div>
             <Button type="button" size="icon-sm" variant="ghost" aria-label="Move up" disabled={i === 0} onClick={() => dnd.move(i, -1)}><ArrowUp /></Button>
             <Button type="button" size="icon-sm" variant="ghost" aria-label="Move down" disabled={i === items.length - 1} onClick={() => dnd.move(i, 1)}><ArrowDown /></Button>
@@ -353,9 +353,9 @@ export function ExtractPages() {
               return (
                 <li key={i}>
                   <button type="button" onClick={() => toggle(i)} aria-pressed={on}
-                    className={cn('group relative w-full rounded-lg border p-1 transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none', on ? 'border-primary bg-primary/5' : 'hover:bg-muted')}>
+                    className={cn('group relative w-full rounded-xl p-1.5 transition-[background-color,box-shadow,scale] duration-300 ease-spring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none active:scale-[0.98]', on ? 'bg-surface-2 ring-2 ring-primary' : 'bg-surface hover:bg-surface-2')}>
                     <PageThumb getThumb={pdf.getThumb} page={i + 1} className="aspect-[3/4] w-full" />
-                    <span className={cn('mt-1 block text-center font-mono text-xs tabular-nums', on ? 'text-foreground' : 'text-muted-foreground')}>{i + 1}</span>
+                    <span className={cn('mt-1 block text-center text-xs tabular-nums', on ? 'text-foreground' : 'text-muted-foreground')}>{i + 1}</span>
                     {on && <span className="absolute top-2 right-2 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground">✓</span>}
                   </button>
                 </li>
@@ -420,10 +420,10 @@ export function RotatePdf() {
       {showThumbs ? (
         <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
           {Array.from({ length: ready!.pageCount }, (_, i) => (
-            <li key={i} className="flex flex-col items-center gap-1 rounded-lg border p-1.5">
+            <li key={i} className="flex flex-col items-center gap-1 rounded-xl bg-surface p-1.5">
               <PageThumb getThumb={pdf.getThumb} page={i + 1} rotation={rot[i] ?? 0} className="aspect-[3/4] w-full" />
               <div className="flex w-full items-center justify-between">
-                <span className="font-mono text-xs text-muted-foreground tabular-nums">{i + 1}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">{i + 1}</span>
                 <Button type="button" size="icon-xs" variant="ghost" aria-label={`Rotate page ${i + 1}`} onClick={() => bumpOne(i, 90)}><RotateCw /></Button>
               </div>
             </li>
@@ -494,10 +494,10 @@ export function OrganizePdf() {
           const gone = deleted.has(page)
           return (
             <li key={page} draggable={!gone} onDragStart={dnd.onDragStart(i)} onDragOver={dnd.onDragOver(i)} onDrop={dnd.onDrop(i)}
-              className={cn('flex flex-col items-center gap-1 rounded-lg border p-1.5 transition-opacity', gone ? 'opacity-40' : 'cursor-grab')}>
+              className={cn('flex flex-col items-center gap-1 rounded-xl bg-surface p-1.5 transition-opacity', gone ? 'opacity-40' : 'cursor-grab')}>
               <PageThumb getThumb={pdf.getThumb} page={page + 1} className={cn('aspect-[3/4] w-full', gone && 'grayscale')} />
               <div className="flex w-full items-center justify-between">
-                <span className="font-mono text-xs text-muted-foreground tabular-nums">{page + 1}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">{page + 1}</span>
                 <div className="flex items-center">
                   <Button type="button" size="icon-xs" variant="ghost" aria-label="Move left" disabled={i === 0} onClick={() => dnd.move(i, -1)}><ArrowUp className="-rotate-90" /></Button>
                   <Button type="button" size="icon-xs" variant="ghost" aria-label="Move right" disabled={i === order.length - 1} onClick={() => dnd.move(i, 1)}><ArrowDown className="-rotate-90" /></Button>
@@ -589,10 +589,10 @@ export function JpgToPdf() {
       <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
         {items.map((it, i) => (
           <li key={it.id} draggable onDragStart={dnd.onDragStart(i)} onDragOver={dnd.onDragOver(i)} onDrop={dnd.onDrop(i)}
-            className="group relative flex cursor-grab flex-col items-center gap-1 rounded-lg border p-1.5">
-            <div className="flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-md border bg-muted/40"><img src={it.url} alt="" className="max-h-full max-w-full object-contain" /></div>
+            className="group relative flex cursor-grab flex-col items-center gap-1 rounded-xl bg-surface p-1.5">
+            <div className="flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg bg-background"><img src={it.url} alt="" className="max-h-full max-w-full object-contain" /></div>
             <div className="flex w-full items-center justify-between">
-              <span className="font-mono text-xs text-muted-foreground tabular-nums">{i + 1}</span>
+              <span className="text-xs text-muted-foreground tabular-nums">{i + 1}</span>
               <Button type="button" size="icon-xs" variant="ghost" aria-label="Remove" onClick={() => remove(it.id)}><Trash2 /></Button>
             </div>
           </li>
@@ -671,7 +671,7 @@ export function PdfToJpg() {
         <ToolField label="Format" className="w-32"><NativeSelect value={format} onChange={(e) => setFormat(e.target.value as typeof format)}><option value="image/jpeg">JPG</option><option value="image/png">PNG</option></NativeSelect></ToolField>
         <ToolField label="Resolution" className="w-36"><NativeSelect value={String(dpi)} onChange={(e) => setDpi(Number(e.target.value))}><option value="96">96 DPI (screen)</option><option value="150">150 DPI</option><option value="300">300 DPI (print)</option></NativeSelect></ToolField>
         {format === 'image/jpeg' && (
-          <ToolField label={<span className="flex items-center gap-2">Quality <span className="font-mono text-foreground">{quality}%</span></span>} className="min-w-48 flex-1">
+          <ToolField label={<span className="flex items-center gap-2">Quality <span className="text-foreground tabular-nums">{quality}%</span></span>} className="min-w-48 flex-1">
             <input type="range" min={40} max={100} value={quality} onChange={(e) => setQuality(Number(e.target.value))} className="w-full accent-primary" />
           </ToolField>
         )}
@@ -687,10 +687,10 @@ export function PdfToJpg() {
           </div>
           <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
             {result.map((r, i) => (
-              <li key={i} className="flex flex-col items-center gap-1 rounded-lg border p-1.5">
-                <div className="flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-md border bg-muted/40"><img src={r.url} alt={r.name} loading="lazy" className="max-h-full max-w-full object-contain" /></div>
-                <span className="font-mono text-xs text-muted-foreground tabular-nums">{i + 1} · {bytes(r.blob.size)}</span>
-                <Button type="button" size="xs" variant="outline" className="w-full" onClick={() => downloadBlob(r.blob, r.name)}><Download /></Button>
+              <li key={i} className="flex flex-col items-center gap-1 rounded-xl bg-surface p-1.5">
+                <div className="flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-lg bg-background"><img src={r.url} alt={r.name} loading="lazy" className="max-h-full max-w-full object-contain" /></div>
+                <span className="text-xs text-muted-foreground tabular-nums">{i + 1}, {bytes(r.blob.size)}</span>
+                <Button type="button" size="xs" variant="outline" className="w-full bg-background hover:bg-background/70" onClick={() => downloadBlob(r.blob, r.name)}><Download /></Button>
               </li>
             ))}
           </ul>
@@ -806,10 +806,10 @@ export function WatermarkPdf() {
       <PdfBar file={pdf.state.file} pageCount={pdf.state.pageCount} onChange={pdf.reset} />
       <ToolField label="Watermark text"><Input value={text} onChange={(e) => setText(e.target.value)} placeholder="CONFIDENTIAL" className="h-9" /></ToolField>
       <div className="flex flex-wrap items-end gap-6">
-        <ToolField label={<span className="flex items-center gap-2">Opacity <span className="font-mono text-foreground">{opacity}%</span></span>} className="min-w-48 flex-1">
+        <ToolField label={<span className="flex items-center gap-2">Opacity <span className="text-foreground tabular-nums">{opacity}%</span></span>} className="min-w-48 flex-1">
           <input type="range" min={5} max={60} value={opacity} onChange={(e) => setOpacity(Number(e.target.value))} className="w-full accent-primary" />
         </ToolField>
-        <ToolField label={<span className="flex items-center gap-2">Angle <span className="font-mono text-foreground">{angle}°</span></span>} className="min-w-48 flex-1">
+        <ToolField label={<span className="flex items-center gap-2">Angle <span className="text-foreground tabular-nums">{angle}°</span></span>} className="min-w-48 flex-1">
           <input type="range" min={0} max={90} value={angle} onChange={(e) => setAngle(Number(e.target.value))} className="w-full accent-primary" />
         </ToolField>
       </div>
@@ -865,16 +865,16 @@ export function CompressPdf() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
         <FileText className="size-5 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{file.name}</div><div className="font-mono text-xs text-muted-foreground tabular-nums">{bytes(file.size)}</div></div>
+        <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{file.name}</div><div className="text-xs text-muted-foreground tabular-nums">{bytes(file.size)}</div></div>
         <Button type="button" size="sm" variant="ghost" onClick={() => { setFile(null); setResult(null) }}><Undo2 />Change</Button>
       </div>
-      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+      <div className="flex items-start gap-2 rounded-xl bg-attention-soft px-3.5 py-2.5 text-sm text-pretty text-attention-foreground">
         <RotateCw className="mt-0.5 size-4 shrink-0" />
         <span>Lossy — every page is re-rendered to an image, so text stops being selectable. Best for scanned or image-heavy PDFs. If it can't beat the original, it'll tell you.</span>
       </div>
       <div className="flex flex-wrap items-end gap-3 rounded-2xl bg-surface p-3.5">
         <ToolField label="Resolution" className="w-36"><NativeSelect value={String(dpi)} onChange={(e) => setDpi(Number(e.target.value))}><option value="72">72 DPI (small)</option><option value="120">120 DPI</option><option value="150">150 DPI</option><option value="200">200 DPI (sharp)</option></NativeSelect></ToolField>
-        <ToolField label={<span className="flex items-center gap-2">Quality <span className="font-mono text-foreground">{quality}%</span></span>} className="min-w-48 flex-1">
+        <ToolField label={<span className="flex items-center gap-2">Quality <span className="text-foreground tabular-nums">{quality}%</span></span>} className="min-w-48 flex-1">
           <input type="range" min={30} max={90} value={quality} onChange={(e) => setQuality(Number(e.target.value))} className="w-full accent-primary" />
         </ToolField>
       </div>
@@ -882,14 +882,14 @@ export function CompressPdf() {
       {busy && <ProgressBar value={done} total={total} label="Re-rendering pages…" />}
       <ToolError message={error} />
       {result && (
-        <div className={cn('flex flex-col gap-2 rounded-xl border p-3', grew ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/30 bg-emerald-500/5')}>
-          <span className={cn('text-sm font-medium', grew ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400')}>
+        <div className={cn('flex flex-col gap-2 rounded-2xl p-3.5', grew ? 'bg-attention-soft' : 'bg-surface')}>
+          <span className={cn('text-sm font-medium tabular-nums', grew && 'text-attention-foreground')}>
             {grew ? 'No smaller than the original' : `Compressed — ${bytes(file.size)} → ${bytes(result.blob.size)}`}
           </span>
           <p className="text-xs text-muted-foreground">{grew
             ? `This PDF was already efficient (${bytes(result.blob.size)}). Re-rendering didn't help — keep the original.`
             : `Saved ${Math.max(0, Math.round((1 - result.blob.size / file.size) * 100))}% at ${dpi} DPI.`}</p>
-          <Button type="button" size="sm" variant="outline" className="w-fit" onClick={() => downloadBlob(result.blob, result.name)}><Download />Download compressed PDF</Button>
+          <Button type="button" size="sm" variant="outline" className="w-fit bg-background hover:bg-background/70" onClick={() => downloadBlob(result.blob, result.name)}><Download />Download compressed PDF</Button>
         </div>
       )}
       <PrivacyNote />
@@ -944,9 +944,9 @@ export function UnlockPdf() {
       <ToolError message={error} />
       <Button type="button" className="w-fit" onClick={run} disabled={busy}>{busy ? 'Unlocking…' : 'Remove password'}</Button>
       {result && (
-        <div className="flex flex-col gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
-          <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Password removed</span>
-          <Button type="button" size="sm" variant="outline" className="w-fit" onClick={() => downloadBlob(result.blob, result.name)}><Download />Download unlocked PDF</Button>
+        <div className="flex flex-col gap-2 rounded-2xl bg-surface p-3.5">
+          <span className="text-sm font-medium">Password removed</span>
+          <Button type="button" size="sm" variant="outline" className="w-fit bg-background hover:bg-background/70" onClick={() => downloadBlob(result.blob, result.name)}><Download />Download unlocked PDF</Button>
         </div>
       )}
       <PrivacyNote />

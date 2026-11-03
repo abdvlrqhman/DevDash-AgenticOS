@@ -1,7 +1,7 @@
-import { useRef, useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { ChevronRight, Copy, Download, Ellipsis, File, Folder, FolderPlus, Link2, Lock, Pencil, Trash2, Upload } from 'lucide-react'
+import { useNavigate, useSearch } from '@tanstack/react-router'
+import { ChevronDown, ChevronRight, Copy, Download, Ellipsis, File, Folder, FolderPlus, Link2, Lock, Pencil, Trash2, Upload } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { NativeSelect } from '@/components/app/native-select'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -15,6 +15,7 @@ import { Progress } from './Progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ApiError, api, unwrap } from '@/lib/api'
+import { useArrivals } from '@/lib/motion'
 import { bytes, cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { relativeTime } from '../claude/data'
@@ -82,61 +83,81 @@ export function FilesPage() {
         <Button size="sm" onClick={() => picker.current?.click()} disabled={!dir}><Upload />Upload</Button>
         <input ref={picker} type="file" multiple hidden onChange={(e) => { if (e.target.files) void upload(e.target.files); e.target.value = '' }} />
       </>} />
-      <PageBody>
-        <Tabs value={tab ?? 'files'} onValueChange={(v) => void navigate({ to: '/files', search: { path, tab: v === 'links' ? 'links' : undefined } })} className="gap-4">
+      <PageBody className="md:py-8">
+        <Tabs value={tab ?? 'files'} onValueChange={(v) => void navigate({ to: '/files', search: { path, tab: v === 'links' ? 'links' : undefined } })} className="gap-6">
           <TabsList variant="line">
             <TabsTrigger value="files">Files</TabsTrigger>
             <TabsTrigger value="links">Share links</TabsTrigger>
           </TabsList>
-          <TabsContent value="files" className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              {q.data && (
-                <NativeSelect aria-label="Place" className="w-40 [&_select]:h-8" value={root?.id ?? ''} onChange={(e) => go(q.data.roots.find((r) => r.id === e.target.value)!.path)}>
-                  {!root && <option value="" disabled>Elsewhere</option>}
-                  {q.data.roots.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-                </NativeSelect>
-              )}
-              <nav aria-label="Folder" className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm">
-                {crumbs.map((c, i) => (
-                  <span key={c.path} className="flex items-center gap-0.5">
-                    {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground" />}
-                    <button onClick={() => go(c.path)} className={cn('rounded px-1.5 py-0.5 hover:bg-accent', i === crumbs.length - 1 ? 'font-medium' : 'text-muted-foreground')}>{c.label}</button>
-                  </span>
-                ))}
-              </nav>
-            </div>
-            {uploads.map((u) => (
-              <div key={u.name} className="flex items-center gap-3 rounded-lg border px-3 py-2 text-sm">
-                <Upload className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{u.name}</span>
-                <Progress value={u.total ? (u.done / u.total) * 100 : 100} className="w-32" />
+          <TabsContent value="files" className="flex flex-col gap-5">
+            {/* Where you are: the place and the folders above it, small; the folder you're in, big. */}
+            {q.data && (
+              <div className="flex min-w-0 flex-col gap-2">
+                <nav aria-label="Folder" className="-mx-4 flex items-center gap-0.5 overflow-x-auto px-4 text-sm md:mx-0 md:flex-wrap md:px-0">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="mr-1">{root?.label ?? 'Elsewhere'}<ChevronDown className="text-muted-foreground" /></Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {q.data.roots.map((r) => (
+                        <DropdownMenuItem key={r.id} onSelect={() => go(r.path)}>
+                          <Folder />{r.label}<span className="ml-auto max-w-40 truncate pl-3 font-mono text-[11px] text-muted-foreground">{r.path}</span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {crumbs.slice(root ? 1 : 0, -1).map((c) => (
+                    <span key={c.path} className="flex shrink-0 items-center gap-0.5">
+                      <ChevronRight className="size-3.5 text-muted-foreground/60" />
+                      <button onClick={() => go(c.path)} className="rounded-full px-2 py-0.5 text-muted-foreground transition-colors duration-150 hover:bg-surface hover:text-foreground">{c.label}</button>
+                    </span>
+                  ))}
+                </nav>
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <h2 className="min-w-0 truncate text-[1.75rem] leading-tight font-semibold tracking-[-0.03em] md:text-[2rem]">{crumbs.at(-1)?.label ?? '/'}</h2>
+                  <p className="text-sm text-muted-foreground tabular-nums">{contents(q.data.entries)}</p>
+                </div>
               </div>
-            ))}
+            )}
+            {uploads.length > 0 && (
+              <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
+                {uploads.map((u) => (
+                  <li key={u.name} className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm">
+                    <Upload className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">{u.name}</span>
+                    <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">{bytes(u.done)} of {bytes(u.total)}</span>
+                    <Progress value={u.total ? (u.done / u.total) * 100 : 100} className="w-24 sm:w-32" />
+                  </li>
+                ))}
+              </ul>
+            )}
             <ErrorAlert error={q.error} />
-            {q.isPending ? <Skeleton className="h-64" /> : q.data && (
+            {q.isPending ? <Skeleton className="h-64 rounded-2xl" /> : q.data && (
               <div
                 onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
                 onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false) }}
                 onDrop={(e) => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files.length) void upload(e.dataTransfer.files) }}
-                className={cn('overflow-hidden rounded-xl border transition-colors', dragging && 'border-ring bg-accent/40 ring-2 ring-ring/40')}>
-                {!q.data.entries.length && <p className="px-4 py-10 text-center text-sm text-muted-foreground">Empty folder. Drop files here or use Upload.</p>}
-                <ul>
+                className={cn('rounded-2xl bg-surface p-1.5 transition-[background-color,box-shadow] duration-300 ease-spring', dragging && 'bg-surface-2 ring-2 ring-ring/40')}>
+                {!q.data.entries.length && <p className="px-4 py-12 text-center text-sm text-pretty text-muted-foreground">{dragging ? 'Drop to upload here.' : 'This folder is empty. Drop files here, or use Upload.'}</p>}
+                <Rows key={dir} names={q.data.entries.map((e) => e.name)}>
                   {q.data.entries.map((e) => {
                     const p = join(dir, e.name)
                     return (
-                      <li key={e.name} className="group flex items-center gap-3 border-b px-3 py-2 text-sm last:border-b-0 hover:bg-accent/40">
-                        {e.dir ? <Folder className="size-4 shrink-0 text-muted-foreground" /> : <File className="size-4 shrink-0 text-muted-foreground" />}
+                      <li key={e.name} data-key={e.name}
+                        className="relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
+                        {e.dir ? <Folder className="size-4 shrink-0 fill-current text-muted-foreground/45" /> : <File className="size-4 shrink-0 text-muted-foreground" />}
+                        {/* The name stretches over the whole row (after:inset-0), so the row is the target; the menu sits above it. */}
                         <div className="flex min-w-0 flex-1 flex-col">
                           {e.dir
-                            ? <button className="truncate text-left" onClick={() => go(p)}>{e.name}</button>
-                            : <a className="truncate" href={`/api/files/download?${new URLSearchParams({ path: p })}`} download={e.name}
+                            ? <button className={cn(stretch, 'truncate text-left')} onClick={() => go(p)}>{e.name}</button>
+                            : <a className={cn(stretch, 'truncate')} href={`/api/files/download?${new URLSearchParams({ path: p })}`} download={e.name}
                                 onClick={(ev) => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); setViewing({ path: p }) }}>{e.name}</a>}
-                          <span className="text-xs text-muted-foreground md:hidden">{e.dir ? '' : `${bytes(e.size)}, `}{relativeTime(e.mtime)}</span>
+                          <span className="text-xs text-muted-foreground tabular-nums md:hidden">{e.dir ? '' : `${bytes(e.size)}, `}{relativeTime(e.mtime)}</span>
                         </div>
                         <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums md:block">{e.dir ? '' : bytes(e.size)}</span>
-                        <span className="hidden w-24 shrink-0 text-right text-xs text-muted-foreground md:block">{relativeTime(e.mtime)}</span>
+                        <span className="hidden w-28 shrink-0 text-right text-xs text-muted-foreground md:block">{relativeTime(e.mtime)}</span>
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label={`Actions for ${e.name}`}><Ellipsis /></Button></DropdownMenuTrigger>
+                          <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" className="relative z-10 -mr-1.5 text-muted-foreground" aria-label={`Actions for ${e.name}`}><Ellipsis /></Button></DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             {!e.dir && <DropdownMenuItem asChild><a href={`/api/files/download?${new URLSearchParams({ path: p })}`} download={e.name}><Download />Download</a></DropdownMenuItem>}
                             {!e.dir && <DropdownMenuItem onSelect={() => setSharing(p)}><Link2 />Share link</DropdownMenuItem>}
@@ -149,7 +170,7 @@ export function FilesPage() {
                       </li>
                     )
                   })}
-                </ul>
+                </Rows>
               </div>
             )}
           </TabsContent>
@@ -171,6 +192,24 @@ export function FilesPage() {
       </ResponsiveDialog>
     </>
   )
+}
+
+const stretch = 'outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-3 focus-visible:after:ring-ring/50'
+
+/** "5 folders and 6 files": what's here, as a sentence. */
+function contents(entries: Entry[]) {
+  const folders = entries.filter((e) => e.dir).length
+  const files = entries.length - folders
+  const part = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`
+  if (!entries.length) return 'Empty'
+  return [folders && part(folders, 'folder'), files && part(files, 'file')].filter(Boolean).join(' and ')
+}
+
+/** A folder's rows. Keyed by the folder, so opening another one isn't mistaken for files arriving; an upload lands. */
+function Rows({ names, children }: { names: string[]; children: ReactNode }) {
+  const list = useRef<HTMLUListElement>(null)
+  useArrivals(list, names)
+  return <ul ref={list} className="flex flex-col gap-0.5">{children}</ul>
 }
 
 function DeleteActions({ onCancel, onDelete }: { onCancel: () => void; onDelete: () => Promise<unknown> }) {
@@ -263,18 +302,18 @@ function ShareLinks() {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['shares'] }); toast.success('Link turned off') },
     onError: (e) => toast.error(e.message),
   })
-  if (q.isPending) return <Skeleton className="h-40" />
+  if (q.isPending) return <Skeleton className="h-40 rounded-2xl" />
   if (q.error) return <ErrorAlert error={q.error} />
-  if (!q.data.shares.length) return <p className="text-sm text-muted-foreground">No share links yet. Open a file's menu and choose Share link; build artifacts can be shared from a project's Builds tab.</p>
+  if (!q.data.shares.length) return <p className="text-sm text-pretty text-muted-foreground">No share links yet. To send someone a file, open its menu and choose Share link; build artifacts can be shared from a project's Builds tab.</p>
   return (
-    <ul className="overflow-hidden rounded-2xl bg-surface">
+    <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
       {q.data.shares.map((s) => (
-        <li key={s.id} className={cn('flex items-center gap-3 border-b px-3 py-2.5 text-sm last:border-b-0', !s.active && 'opacity-60')}>
+        <li key={s.id} className={cn('flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors duration-200 hover:bg-surface-2', !s.active && 'opacity-60')}>
           <Link2 className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-1.5 truncate font-medium">{s.hasPassword && <Lock className="size-3.5 shrink-0" />}{s.name}</span>
-            <span className="block truncate text-xs text-muted-foreground">
-              {bytes(s.size)}, {s.downloads}{s.maxDownloads ? ` of ${s.maxDownloads}` : ''} {s.downloads === 1 ? 'download' : 'downloads'}, {s.active ? (s.expiresAt ? `until ${new Date(s.expiresAt * 1000).toLocaleDateString()}` : 'no expiry') : 'no longer works'}, by {s.creator} {relativeTime(s.createdAt)}
+            <span className="flex items-center gap-1.5 font-medium"><span className="truncate">{s.name}</span>{s.hasPassword && <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-label="Password protected" />}</span>
+            <span className="line-clamp-2 text-xs text-muted-foreground tabular-nums sm:line-clamp-1">
+              {bytes(s.size)}, {s.downloads}{s.maxDownloads ? ` of ${s.maxDownloads}` : ''} {s.downloads === 1 ? 'download' : 'downloads'}, {s.active ? (s.expiresAt ? `works until ${new Date(s.expiresAt * 1000).toLocaleDateString()}` : 'no expiry') : 'no longer works'}, by {s.creator} {relativeTime(s.createdAt)}
             </span>
           </span>
           {s.active && <Button size="icon-sm" variant="ghost" aria-label="Copy link" onClick={() => void navigator.clipboard.writeText(s.url).then(() => toast.success('Link copied'))}><Copy /></Button>}

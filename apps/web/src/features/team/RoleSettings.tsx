@@ -77,7 +77,7 @@ export function RoleSettings({ r, project }: { r: RoleDetail['role']; project: R
         <div role="radiogroup" aria-label="Autonomy" className="grid gap-2 sm:grid-cols-2">
           {([['advisor', 'Advisor', 'Only suggests. Even tasks come to you to approve.'], ['operator', 'Operator', 'Adds tasks and notes itself; asks for everything else.']] as const).map(([v, label, hint]) => (
             <button key={v} role="radio" aria-checked={s.autonomy === v} onClick={() => set({ autonomy: v })}
-              className={cn('flex flex-col gap-0.5 rounded-xl border p-3 text-left text-sm transition-colors hover:bg-accent/40', s.autonomy === v && 'border-foreground bg-accent/40')}>
+              className={cn('flex flex-col gap-0.5 rounded-2xl bg-surface p-3 text-left text-sm transition-[background-color,box-shadow,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98]', s.autonomy === v && 'bg-surface-2 ring-[1.5px] ring-foreground')}>
               <span className="font-medium">{label}</span><span className="text-muted-foreground">{hint}</span>
             </button>
           ))}
@@ -103,7 +103,7 @@ export function RoleSettings({ r, project }: { r: RoleDetail['role']; project: R
             ['always_ask', 'Always ask', 'Never closes on its own — people get a one-tap Close?'],
           ] as const).map(([v, label, hint]) => (
             <button key={v} role="radio" aria-checked={s.selfClose === v} onClick={() => set({ selfClose: v })}
-              className={cn('flex flex-col gap-0.5 rounded-xl border p-3 text-left text-sm transition-colors hover:bg-accent/40', s.selfClose === v && 'border-foreground bg-accent/40')}>
+              className={cn('flex flex-col gap-0.5 rounded-2xl bg-surface p-3 text-left text-sm transition-[background-color,box-shadow,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98]', s.selfClose === v && 'bg-surface-2 ring-[1.5px] ring-foreground')}>
               <span className="font-medium">{label}</span><span className="text-muted-foreground">{hint}</span>
             </button>
           ))}
@@ -125,7 +125,7 @@ export function RoleSettings({ r, project }: { r: RoleDetail['role']; project: R
           </label>
         </div>
         <p className="text-xs text-muted-foreground">
-          This month: ${r.usage.costMonth.toFixed(2)} in API value · today {r.usage.autoShiftsToday} of {r.dailyLimit} shifts. On a Claude plan this counts against your plan's limits, not money.
+          This month: ${r.usage.costMonth.toFixed(2)} in API value, today {r.usage.autoShiftsToday} of {r.dailyLimit} shifts. On a Claude plan this counts against your plan's limits, not money.
         </p>
       </section>
 
@@ -139,7 +139,7 @@ export function RoleSettings({ r, project }: { r: RoleDetail['role']; project: R
 
 function Row({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4 rounded-xl border p-4">
+    <div className="flex items-start justify-between gap-4 rounded-2xl bg-surface p-4">
       <div className="text-sm"><div className="font-medium">{title}</div><div className="text-muted-foreground">{hint}</div></div>
       {children}
     </div>

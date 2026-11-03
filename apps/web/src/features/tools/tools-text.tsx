@@ -24,18 +24,18 @@ export function TextDiff() {
         <ToolField label="Changed"><Textarea value={right} onChange={(e) => setRight(e.target.value)} spellCheck={false} placeholder="Paste the changed version…" className={MONO} /></ToolField>
       </TwoPane>
       <div className="flex items-center gap-2 text-xs">
-        <Badge variant="outline" className="text-emerald-600 dark:text-emerald-400">+{adds} added</Badge>
-        <Badge variant="outline" className="text-destructive">−{removes} removed</Badge>
+        <Badge variant="secondary" className="text-live tabular-nums">+{adds} added</Badge>
+        <Badge variant="secondary" className="text-destructive tabular-nums">−{removes} removed</Badge>
       </div>
       <ToolField label="Diff">
-        <div className="overflow-auto rounded-lg border bg-muted/30 font-mono text-[13px]">
+        <div className="overflow-auto rounded-xl bg-surface py-1.5 font-mono text-[13px]">
           {ops.length === 0 || (!left && !right) ? (
             <div className="px-3 py-6 text-center text-muted-foreground">Enter text on both sides to compare.</div>
           ) : ops.map((o, i) => (
             <div key={i} className={cn('flex gap-2 px-3 py-0.5 whitespace-pre-wrap',
-              o.op === 'add' && 'bg-emerald-500/10', o.op === 'remove' && 'bg-destructive/10')}>
+              o.op === 'add' && 'bg-live/10', o.op === 'remove' && 'bg-destructive/10')}>
               <span className={cn('w-4 shrink-0 select-none text-center',
-                o.op === 'add' ? 'text-emerald-600 dark:text-emerald-400' : o.op === 'remove' ? 'text-destructive' : 'text-muted-foreground/40')}>
+                o.op === 'add' ? 'text-live' : o.op === 'remove' ? 'text-destructive' : 'text-muted-foreground/40')}>
                 {o.op === 'add' ? '+' : o.op === 'remove' ? '−' : ''}
               </span>
               <span className="min-w-0 break-words">{o.op === 'add' ? o.right : o.left}</span>
@@ -80,11 +80,11 @@ export function RegexTester() {
       <ToolField label="Test string"><Textarea value={sample} onChange={(e) => setSample(e.target.value)} spellCheck={false} placeholder="Text to search…" className="min-h-28 font-mono text-[13px]" /></ToolField>
       <ToolField label={`Matches${result?.ok ? ` (${matches.length})` : ''}`}>
         {result?.ok && matches.length === 0 ? (
-          <div className="rounded-lg border px-3 py-4 text-center text-sm text-muted-foreground">{pattern ? 'No matches.' : 'Enter a pattern.'}</div>
+          <div className="rounded-xl bg-surface px-3 py-4 text-center text-sm text-muted-foreground">{pattern ? 'No matches.' : 'Enter a pattern.'}</div>
         ) : (
-          <ul className="flex flex-col gap-1.5">
+          <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
             {matches.map((m, i) => (
-              <li key={i} className="rounded-lg border px-3 py-2 text-sm">
+              <li key={i} className="rounded-xl px-3 py-2 text-sm">
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="font-mono">{m.match || '(empty)'}</Badge>
                   <span className="text-xs text-muted-foreground">at index {m.index}</span>
@@ -117,10 +117,10 @@ export function JwtDecoder() {
       {res?.ok && (
         <>
           {res.value.expired !== null && (
-            <div className={cn('flex flex-wrap items-center gap-2 text-sm', res.value.expired ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400')}>
-              <Badge variant="outline" className={res.value.expired ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400'}>{res.value.expired ? 'Expired' : 'Valid (not expired)'}</Badge>
+            <div className={cn('flex flex-wrap items-center gap-2 text-sm', res.value.expired ? 'text-destructive' : 'text-live')}>
+              <Badge variant="secondary" className={res.value.expired ? 'text-destructive' : 'text-live'}>{res.value.expired ? 'Expired' : 'Valid (not expired)'}</Badge>
               {res.value.expiresAt && <span className="text-xs text-muted-foreground">expires {res.value.expiresAt}</span>}
-              {res.value.issuedAt && <span className="text-xs text-muted-foreground">· issued {res.value.issuedAt}</span>}
+              {res.value.issuedAt && <span className="text-xs text-muted-foreground">issued {res.value.issuedAt}</span>}
             </div>
           )}
           <p className="text-xs text-muted-foreground">Decoded only — the signature is not verified.</p>
@@ -162,10 +162,10 @@ export function LineTools() {
         </div>
       </div>
       <TwoPane>
-        <ToolField label={`Input · ${before.lines} lines`}>
+        <ToolField label={`Input, ${before.lines} lines`}>
           <Textarea value={input} onChange={(e) => setInput(e.target.value)} spellCheck={false} placeholder={'banana\napple\nbanana\ncherry'} className={MONO} />
         </ToolField>
-        <Output value={output} label={`Output · ${after.lines} lines, ${after.words} words`} />
+        <Output value={output} label={`Output, ${after.lines} lines and ${after.words} words`} />
       </TwoPane>
     </div>
   )

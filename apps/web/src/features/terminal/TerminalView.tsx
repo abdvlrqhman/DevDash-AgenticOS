@@ -8,6 +8,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { openExternal } from '../../lib/shell'
+import { scrollOnTouch } from './touch-scroll'
 
 export type Status = 'connecting' | 'live' | 'reconnecting' | 'ended'
 export type Mods = { ctrl: boolean; alt: boolean }
@@ -151,6 +152,7 @@ export function TerminalView({ path, onStatus, onMods, ref }: {
       if (!copySelection()) paste()
     }
     host.current!.addEventListener('contextmenu', onContextMenu)
+    const untouch = scrollOnTouch(term, host.current!)
 
     const sub = term.onData(typed)
     const ro = new ResizeObserver(() => {
@@ -163,6 +165,7 @@ export function TerminalView({ path, onStatus, onMods, ref }: {
     return () => {
       disposed = true
       host.current?.removeEventListener('contextmenu', onContextMenu)
+      untouch()
       clearTimeout(timer)
       ro.disconnect()
       sub.dispose()

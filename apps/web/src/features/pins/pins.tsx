@@ -150,13 +150,13 @@ export function PinnedList() {
   return (
     <section className="flex flex-col gap-2">
       <h2 className="px-1 text-xs font-medium text-muted-foreground">Pinned</h2>
-      <div className="flex flex-col divide-y rounded-lg border">
+      <div className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
         {pins.map((p) => {
           const Icon = ICON[p.kind]
           const { title, state } = live(p)
           const light = state ? LIGHT[state] : undefined
           return (
-            <Link key={`${p.kind}:${p.ref}`} to={p.url} className="flex min-h-12 items-center gap-3 px-3 py-2 text-sm">
+            <Link key={`${p.kind}:${p.ref}`} to={p.url} className="flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
               <Icon className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{title}</span>
               {p.detail && <span className="shrink-0 truncate text-xs text-muted-foreground">{p.detail}</span>}

@@ -131,7 +131,7 @@ function Workbench({ q, actionLabel, encode, children }: {
       <ul className="flex flex-col gap-2">
         {items.map((it) => (
           <li key={it.id} className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
-            <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
+            <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-background">
               <img src={it.out?.url ?? it.srcUrl} alt="" loading="lazy" className="max-h-full max-w-full object-contain"
                 onLoad={it.srcW ? undefined : (e) => measure(it.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
             </div>
@@ -141,7 +141,7 @@ function Workbench({ q, actionLabel, encode, children }: {
                 <div className="mt-0.5 text-xs text-destructive">{it.error}</div>
               ) : (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-                  <span className="font-mono tabular-nums">{it.srcW ? `${it.srcW}×${it.srcH}` : '…'} · {bytes(it.file.size)}</span>
+                  <span className="tabular-nums">{it.srcW ? `${it.srcW}×${it.srcH}` : '…'}, {bytes(it.file.size)}</span>
                   {it.out && <SavedBadge before={it.file.size} after={it.out.blob.size} outDims={`${it.out.w}×${it.out.h}`} note={it.out.note} />}
                 </div>
               )}
@@ -166,10 +166,10 @@ function SavedBadge({ before, after, outDims, note }: { before: number; after: n
   return (
     <>
       <span aria-hidden>→</span>
-      <span className="font-mono tabular-nums text-foreground">{outDims} · {bytes(after)}</span>
+      <span className="tabular-nums text-foreground">{outDims}, {bytes(after)}</span>
       {note ? <Badge variant="outline" className="text-muted-foreground">{note}</Badge>
-        : pct > 0 ? <Badge variant="outline" className="text-emerald-600 dark:text-emerald-400">{pct}% smaller</Badge>
-        : pct < 0 ? <Badge variant="outline" className="text-amber-600 dark:text-amber-400">{-pct}% larger</Badge>
+        : pct > 0 ? <Badge variant="secondary" className="tabular-nums">{pct}% smaller</Badge>
+        : pct < 0 ? <Badge variant="secondary" className="bg-attention-soft text-attention-foreground tabular-nums">{-pct}% larger</Badge>
         : null}
     </>
   )
@@ -178,7 +178,7 @@ function SavedBadge({ before, after, outDims, note }: { before: number; after: n
 function QualityField({ format, quality, setQuality }: { format: ImageFormat; quality: number; setQuality: (n: number) => void }) {
   if (!formatUsesQuality(format)) return null
   return (
-    <ToolField label={<span className="flex w-full items-center justify-between"><span>Quality</span><span className="font-mono text-foreground">{quality}%</span></span>}>
+    <ToolField label={<span className="flex w-full items-center justify-between"><span>Quality</span><span className="text-foreground tabular-nums">{quality}%</span></span>}>
       <input type="range" min={10} max={100} value={quality} onChange={(e) => setQuality(Number(e.target.value))} className="w-full accent-primary" />
     </ToolField>
   )
@@ -304,13 +304,13 @@ export function ImageResizer() {
           </div>
           <div className="flex flex-wrap gap-1.5">
             {PRESETS.map(([label, w, h]) => (
-              <button key={label} type="button" onClick={() => { setWidth(w); setHeight(h) }} className="rounded-md border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted">{label}</button>
+              <button key={label} type="button" onClick={() => { setWidth(w); setHeight(h) }} className="rounded-full bg-surface px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground">{label}</button>
             ))}
           </div>
           <p className="text-xs text-muted-foreground">Set both for an exact size, or just one to keep the aspect ratio.</p>
         </>
       ) : (
-        <ToolField label={<span className="flex w-full items-center justify-between"><span>Scale</span><span className="font-mono text-foreground">{pct}%</span></span>}>
+        <ToolField label={<span className="flex w-full items-center justify-between"><span>Scale</span><span className="text-foreground tabular-nums">{pct}%</span></span>}>
           <input type="range" min={5} max={200} value={pct} onChange={(e) => setPct(Number(e.target.value))} className="w-full accent-primary" />
         </ToolField>
       )}
@@ -372,7 +372,7 @@ export function FaviconMaker() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3 rounded-2xl bg-surface p-2.5">
-        <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
+        <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-background">
           <img src={previewUrl} alt="" className="max-h-full max-w-full object-contain" />
         </div>
         <div className="min-w-0 flex-1 truncate text-sm font-medium">{file.name}</div>
@@ -385,7 +385,7 @@ export function FaviconMaker() {
             const on = sizes.includes(s)
             return (
               <button key={s} type="button" onClick={() => toggle(s)}
-                className={cn('rounded-lg border px-3 py-1.5 font-mono text-sm transition-colors', on ? 'border-primary/40 bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted')}>{s}</button>
+                className={cn('h-8 rounded-full px-3.5 text-sm tabular-nums transition-[background-color,color,scale] duration-300 ease-spring active:scale-[0.96]', on ? 'bg-primary text-primary-foreground' : 'bg-surface text-muted-foreground hover:bg-surface-2 hover:text-foreground')}>{s}</button>
             )
           })}
         </div>
@@ -403,8 +403,8 @@ export function FaviconMaker() {
           {results.map((r) => (
             <li key={r.size} className="flex flex-col items-center gap-2 rounded-2xl bg-surface p-3">
               <div className="flex h-16 items-center justify-center"><img src={r.url} alt={`${r.size} pixel icon`} width={Math.min(r.size, 64)} height={Math.min(r.size, 64)} style={{ imageRendering: r.size <= 48 ? 'pixelated' : 'auto' }} /></div>
-              <div className="font-mono text-xs text-muted-foreground">{r.size}×{r.size} · {bytes(r.blob.size)}</div>
-              <Button type="button" size="xs" variant="outline" className="w-full" onClick={() => downloadBlob(r.blob, `icon-${r.size}.png`)}><Download />PNG</Button>
+              <div className="text-xs text-muted-foreground tabular-nums">{r.size}×{r.size}, {bytes(r.blob.size)}</div>
+              <Button type="button" size="xs" variant="outline" className="w-full bg-background hover:bg-background/70" onClick={() => downloadBlob(r.blob, `icon-${r.size}.png`)}><Download />PNG</Button>
             </li>
           ))}
         </ul>

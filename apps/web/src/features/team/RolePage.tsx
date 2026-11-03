@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { Archive, Ellipsis, MessageSquare, Pencil, Play, Trash2 } from 'lucide-react'
+import { Archive, ChevronRight, Ellipsis, MessageSquare, Pencil, Play, Trash2 } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
+import { Orb } from '@/components/app/orb'
+import { cn } from '@/lib/utils'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -57,17 +59,19 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
   })
 
   if (q.error) return <><PageHeader title="Role" back={`/projects/${slug}`} /><PageBody><ErrorAlert error={q.error} /></PageBody></>
-  if (!q.data) return <><PageHeader title="Role" back={`/projects/${slug}`} /><PageBody><Skeleton className="h-64" /></PageBody></>
+  if (!q.data) return <><PageHeader title="Role" back={`/projects/${slug}`} /><PageBody><Skeleton className="h-16 w-2/3 rounded-xl bg-surface" /><Skeleton className="h-64 rounded-2xl bg-surface" /></PageBody></>
   const { role: r, project, shifts, notebook, proposals } = q.data
+  // The page's one loud line: what the role is doing, or when it works next.
+  const now = r.shift ? `On a shift, for ${minutes(r.shift.startedAt, null)}.`
+    : r.working ? 'Working.'
+    : r.paused ? 'Paused.'
+    : r.nextShiftAt ? `Next shift ${nextLabel(r.nextShiftAt)}.`
+    : 'Idle, with no schedule.'
 
   return (
     <>
-      <PageHeader back={`/projects/${slug}`}
-        title={<span className="flex items-center gap-2.5"><RoleMark id={r.id} name={r.name} className="size-7 rounded-md text-[10px]" />{r.name}</span>}
-        description={<span className="flex items-center gap-1.5">
-          {r.working ? <><StatusLight state="live" />Working</> : r.paused ? <>Paused</> : r.nextShiftAt ? <>Next shift {nextLabel(r.nextShiftAt)}</> : <>Idle</>}
-          <span className="truncate">· {project.name}{r.model ? ` · ${r.model[0]!.toUpperCase()}${r.model.slice(1)}` : ''}</span>
-        </span>}
+      <PageHeader back={`/projects/${slug}`} title={r.name}
+        description={<span className="truncate">{project.name}{r.model ? `, on ${r.model[0]!.toUpperCase()}${r.model.slice(1)}` : ''}</span>}
         actions={<>
           <Button size="sm" variant="outline" disabled={!!r.shift || shift.isPending} onClick={() => shift.mutate()}>
             {shift.isPending ? <Spinner /> : <Play />}<span className="hidden sm:inline">Run a shift</span>
@@ -81,25 +85,29 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </>} />
-      <PageBody>
-        {r.summary && <p className="text-sm text-muted-foreground">{r.summary}</p>}
+      <PageBody className="gap-8 md:py-10">
+        <header className="flex items-start gap-4 md:gap-5">
+          <RoleMark id={r.id} name={r.name} className="size-14 rounded-2xl text-base md:size-16" />
+          <div className="flex min-w-0 flex-col gap-1.5 pt-0.5">
+            <h2 className={cn('text-[1.75rem] leading-[1.1] font-semibold tracking-[-0.03em] text-balance md:text-[2.25rem]', !r.shift && !r.working && 'text-muted-foreground')}>{now}</h2>
+            {r.summary && <p className="text-[15px] text-pretty text-muted-foreground">{r.summary}</p>}
+            {r.shift && (
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
+                <span className="flex min-w-0 items-center gap-2">
+                  <Orb state="working" size={20} label={`${r.name} is working`} />It writes a report here when it's done.
+                </span>
+                {r.shift.sessionId && <Button size="sm" variant="outline" asChild><Link to="/claude/$id" params={{ id: r.shift.sessionId }}>Watch</Link></Button>}
+              </div>
+            )}
+          </div>
+        </header>
         {proposals.length > 0 && (
-          <section className="flex flex-col gap-3">
-            <h2 className="text-sm font-semibold">Waiting for your approval</h2>
+          <section className="flex max-w-3xl flex-col gap-3">
+            <h2 className="text-base font-semibold tracking-[-0.01em]">Waiting for your approval<span className="ml-2 font-normal text-muted-foreground tabular-nums">{proposals.length}</span></h2>
             {proposals.map((x) => <ProposalCard key={x.id} x={x} showProject={false} />)}
           </section>
         )}
-        {r.shift && (
-          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-live/40 p-4">
-            <StatusLight state="live" />
-            <div className="min-w-0 flex-1">
-              <div className="font-medium">On a shift</div>
-              <div className="text-sm text-muted-foreground">Started {relativeTime(r.shift.startedAt)}. It writes a report here when it's done.</div>
-            </div>
-            {r.shift.sessionId && <Button size="sm" variant="outline" asChild><Link to="/claude/$id" params={{ id: r.shift.sessionId }}>Watch</Link></Button>}
-          </div>
-        )}
-        <Tabs defaultValue="shifts" className="gap-4">
+        <Tabs defaultValue="shifts" className="gap-6">
           <TabsList variant="line">
             <TabsTrigger value="shifts">Shifts{shifts.length > 0 && <TabCount>{shifts.length}</TabCount>}</TabsTrigger>
             <TabsTrigger value="notebook">Notebook{notebook.length > 0 && <TabCount>{notebook.length}</TabCount>}</TabsTrigger>
@@ -113,7 +121,7 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
             <div className="flex flex-col gap-3">
               <div className="flex justify-end"><Button size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil />Edit</Button></div>
               {r.instructions.trim()
-                ? <div className="rounded-xl border p-4"><Prose text={r.instructions} /></div>
+                ? <div className="max-w-3xl rounded-2xl bg-surface p-4 text-sm md:p-5"><Prose text={r.instructions} /></div>
                 : <p className="text-sm text-muted-foreground">No instructions yet. Edit the role and press Generate.</p>}
             </div>
           </TabsContent>
@@ -127,27 +135,31 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
 function Shifts({ shifts, onRun, canRun }: { shifts: RoleDetail['shifts']; onRun: () => void; canRun: boolean }) {
   if (!shifts.length) {
     return (
-      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-8 text-center">
-        <p className="font-medium">No shifts yet</p>
-        <p className="max-w-md text-sm text-muted-foreground">On a shift the role reads what changed, looks at what matters for its job, does what it can on its own and writes a report.</p>
+      <div className="flex flex-col items-center gap-2 rounded-2xl bg-surface px-6 py-10 text-center">
+        <p className="font-semibold">No shifts yet</p>
+        <p className="max-w-md text-sm text-pretty text-muted-foreground">On a shift the role reads what changed, looks at what matters for its job, does what it can on its own and writes a report.</p>
         <Button size="sm" className="mt-2" disabled={!canRun} onClick={onRun}><Play />Run the first shift</Button>
       </div>
     )
   }
   return (
-    <ol className="flex flex-col gap-3">
+    <ol className="flex max-w-3xl flex-col gap-3">
       {shifts.map((s) => (
-        <li key={s.id} className="flex flex-col gap-2 rounded-xl border p-4">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <li key={s.id} className="flex flex-col gap-2.5 rounded-2xl bg-surface p-4 md:p-5">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
             <span className="font-medium">{new Date(s.startedAt * 1000).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-            <span className="text-muted-foreground">{TRIGGER[s.trigger] ?? `${s.trigger[0]!.toUpperCase()}${s.trigger.slice(1)}`}{s.costUsd > 0 ? ` · $${s.costUsd.toFixed(2)}` : ''}</span>
-            <span className="ml-auto flex items-center gap-1.5 text-muted-foreground">
+            <span className="text-muted-foreground">{TRIGGER[s.trigger] ?? `${s.trigger[0]!.toUpperCase()}${s.trigger.slice(1)}`}{s.costUsd > 0 ? <>, <span className="tabular-nums">${s.costUsd.toFixed(2)}</span></> : ''}</span>
+            <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
               {s.status === 'running' ? <><StatusLight state="live" />Running, {minutes(s.startedAt, null)}</>
                 : s.status === 'error' ? <span className="text-destructive">Stopped with an error</span> : minutes(s.startedAt, s.endedAt)}
             </span>
           </div>
-          {s.report ? <Prose text={s.report} /> : s.status === 'running' ? <p className="text-sm text-muted-foreground">Working…</p> : null}
-          {s.sessionId && <Link to="/claude/$id" params={{ id: s.sessionId }} className="self-start text-xs text-muted-foreground hover:underline">See what it did →</Link>}
+          {s.report ? <div className="text-sm text-foreground/85"><Prose text={s.report} /></div> : s.status === 'running' ? <p className="text-sm text-muted-foreground">Working…</p> : null}
+          {s.sessionId && (
+            <Link to="/claude/$id" params={{ id: s.sessionId }} className="-mx-2 flex items-center gap-0.5 self-start rounded-full px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-surface-2 hover:text-foreground">
+              See what it did<ChevronRight className="size-3.5" />
+            </Link>
+          )}
         </li>
       ))}
     </ol>
@@ -168,16 +180,16 @@ function Notebook({ id, notes }: { id: number; notes: RoleDetail['notebook'] }) 
     onSuccess: refresh,
   })
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted-foreground">Its memory between shifts and chats: what it learned, what people told it, and what was rejected and why. It reads this every time it works.</p>
+    <div className="flex max-w-3xl flex-col gap-4">
+      <p className="text-sm text-pretty text-muted-foreground">Its memory between shifts and chats: what it learned, what people told it, and what was rejected and why. It reads this every time it works.</p>
       <form className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={(e) => { e.preventDefault(); if (body.trim()) add.mutate() }}>
         <Textarea rows={2} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} placeholder="Tell it something to remember, e.g. never post on Fridays." className="min-h-10 flex-1" aria-label="New note" />
         <Button type="submit" disabled={!body.trim() || add.isPending}>Add note</Button>
       </form>
       {notes.length > 0 && (
-        <ul className="flex flex-col divide-y rounded-xl border">
+        <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
           {notes.map((n) => (
-            <li key={n.id} className="flex items-start gap-2 px-3.5 py-2.5 text-sm">
+            <li key={n.id} className="flex items-start gap-2 rounded-xl py-2 pr-1.5 pl-3 text-sm">
               <div className="min-w-0 flex-1">
                 <p className="whitespace-pre-wrap">{n.body}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{n.by ? `From ${n.by}` : 'It noted'}, {relativeTime(n.at)}</p>

@@ -83,7 +83,7 @@ export function PasswordTool() {
   useEffect(gen, [length, sets])
   return (
     <div className="flex flex-col gap-4">
-      <ToolField label={<span className="flex w-full items-center justify-between"><span>Length</span><span className="font-mono text-foreground">{length}</span></span>}>
+      <ToolField label={<span className="flex w-full items-center justify-between"><span>Length</span><span className="text-foreground tabular-nums">{length}</span></span>}>
         <input type="range" min={4} max={128} value={length} onChange={(e) => setLength(Number(e.target.value))} className="w-full accent-primary" />
       </ToolField>
       <ToolField label="Character sets">
@@ -92,7 +92,7 @@ export function PasswordTool() {
             const on = sets[c.key]
             return (
               <button key={c.key} type="button" onClick={() => setSets({ ...sets, [c.key]: !on })}
-                className={cn('rounded-lg border px-3 py-1.5 font-mono text-sm transition-colors', on ? 'border-primary/40 bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted')}>
+                className={cn('h-8 rounded-full px-3.5 font-mono text-sm transition-[background-color,color,scale] duration-300 ease-spring active:scale-[0.96]', on ? 'bg-primary text-primary-foreground' : 'bg-surface text-muted-foreground hover:bg-surface-2 hover:text-foreground')}>
                 {c.label}
               </button>
             )
@@ -160,7 +160,7 @@ export function QrTool() {
       </ToolField>
       <div className="flex flex-col items-center gap-3">
         {error ? <ToolError message={error} /> : (
-          <div className="flex size-48 items-center justify-center rounded-xl border bg-white p-2">
+          <div className="flex size-48 items-center justify-center rounded-2xl bg-white p-2 ring-1 ring-foreground/5">
             {dataUrl ? <img src={dataUrl} alt="QR code" className="size-full" /> : <span className="text-xs text-muted-foreground">QR appears here</span>}
           </div>
         )}

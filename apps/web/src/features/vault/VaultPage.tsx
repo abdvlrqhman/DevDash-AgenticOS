@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 're
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Ellipsis, Eye, EyeOff, ExternalLink, KeyRound, Lock, LockOpen, Plus, RefreshCw, Search, ShieldCheck, StickyNote, Trash2, Users } from 'lucide-react'
 import { toast } from '@/lib/toast'
-import { PageHeader } from '@/components/app/page'
+import { PageHeader, pageCol } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -42,15 +42,22 @@ export function VaultPage() {
   const [restoring, setRestoring] = useState(!session.unlocked)
   useEffect(() => { if (restoring) void vault.restore(user.id).finally(() => setRestoring(false)) }, [restoring, user.id])
 
-  if (v.error) return <Shell><div className="p-4"><ErrorAlert error={v.error} /></div></Shell>
-  if (!v.data || restoring) return <Shell><div className="p-4"><Skeleton className="h-48" /></div></Shell>
+  if (v.error) return <Shell><div style={pageCol()} className="page-col py-6"><ErrorAlert error={v.error} /></div></Shell>
+  if (!v.data || restoring) return <Shell><div style={pageCol()} className="page-col py-6"><Skeleton className="h-48 rounded-2xl" /></div></Shell>
   if (!v.data.setup) return <Shell><Setup userId={user.id} /></Shell>
   if (!session.unlocked) return <Shell><Unlock userId={user.id} me={v.data} /></Shell>
   return <Unlocked userId={user.id} publicKey={v.data.publicKey} />
 }
 
-const Shell = ({ children, actions }: { children: ReactNode; actions?: ReactNode }) => (
-  <div className="flex h-full flex-col"><PageHeader title="Vault" description="Only you can open it: encrypted on your device" actions={actions} />{children}</div>
+const Shell = ({ children, actions, description = 'Only you can open it: encrypted on your device' }: { children: ReactNode; actions?: ReactNode; description?: ReactNode }) => (
+  <div className="flex h-full flex-col"><PageHeader title="Vault" description={description} actions={actions} />{children}</div>
+)
+
+/** The item's first letter on a tone tile (a note gets the note icon): the one mark each item has. */
+const Monogram = ({ item, className }: { item: ItemValue; className?: string }) => (
+  <span aria-hidden className={cn('flex size-8 shrink-0 items-center justify-center rounded-lg bg-background text-xs font-semibold', className)}>
+    {item.type === 'note' ? <StickyNote className="size-[1.1em]" /> : item.name.slice(0, 1).toUpperCase()}
+  </span>
 )
 
 /** Opens every vault this member holds a key for; gives new teammates the team key; replaces the key after someone left. */
@@ -111,11 +118,13 @@ function Setup({ userId }: { userId: number }) {
   })
   const mismatch = again.length > 0 && again !== pw
   return (
-    <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10">
-      <div className="flex flex-col gap-2">
-        <ShieldCheck className="size-8" />
-        <h2 className="text-xl font-semibold tracking-tight">Set up your vault</h2>
-        <p className="text-sm text-muted-foreground">Passwords, 2FA codes and secrets for you and the team. Everything is encrypted on your device with a vault password only you know. The server stores scrambled data it cannot read.</p>
+    <div className="mx-auto flex w-full max-w-md flex-col gap-8 px-4 py-10 md:py-16">
+      <div className="flex flex-col gap-4">
+        <span className="flex size-16 items-center justify-center rounded-full bg-surface"><ShieldCheck className="size-7" strokeWidth={1.75} /></span>
+        <div className="flex flex-col gap-2">
+          <h2 className="text-[1.75rem] leading-[1.1] font-semibold tracking-[-0.03em] md:text-[2rem]">Set up your vault</h2>
+          <p className="text-sm text-pretty text-muted-foreground">Passwords, 2FA codes and secrets for you and the team. Everything is encrypted on your device with a vault password only you know. The server stores scrambled data it cannot read.</p>
+        </div>
       </div>
       <form onSubmit={(e: FormEvent) => { e.preventDefault(); if (ack && pw && pw === again) create.mutate() }}>
         <FieldGroup>
@@ -129,7 +138,7 @@ function Setup({ userId }: { userId: number }) {
             <Input id="vp2" type="password" autoComplete="new-password" className="h-10" value={again} onChange={(e) => setAgain(e.target.value)} aria-invalid={mismatch} />
             {mismatch && <FieldDescription className="text-destructive">These don't match.</FieldDescription>}
           </Field>
-          <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+          <label className="flex items-start gap-3 rounded-xl bg-surface p-3.5 text-sm text-pretty">
             <Checkbox checked={ack} onCheckedChange={(v) => setAck(v === true)} className="mt-0.5" />
             <span>I understand nobody can recover this password, not even an admin. If I forget it, my personal vault is gone (team items stay with my teammates).</span>
           </label>
@@ -152,17 +161,20 @@ function Unlock({ userId, me }: { userId: number; me: { salt: string; iterations
     onError: () => setPw(''),
   })
   return (
-    <div className="mx-auto flex w-full max-w-sm flex-col gap-5 px-4 py-14">
-      <div className="flex flex-col items-center gap-2 text-center">
-        <span className="flex size-12 items-center justify-center rounded-full bg-muted"><Lock className="size-5" /></span>
-        <h2 className="text-lg font-semibold">Unlock your vault</h2>
-        <p className="text-sm text-muted-foreground">Once unlocked, this device remembers it for a while, so you don't type it every time.</p>
+    // The lock is the page: one big closed padlock, one field, one button.
+    <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-8 px-4 py-12 md:py-20">
+      <div className="flex flex-col items-center gap-5 text-center">
+        <span className="flex size-24 items-center justify-center rounded-full bg-surface"><Lock className="size-9" strokeWidth={1.75} /></span>
+        <div className="flex flex-col gap-2">
+          <h2 className="text-[2rem] leading-[1.05] font-semibold tracking-[-0.035em] text-balance">Your vault is locked</h2>
+          <p className="text-sm text-pretty text-muted-foreground">Type your vault password to open it. This device then remembers it for a while, so you don't type it every time.</p>
+        </div>
       </div>
-      <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); if (pw) open.mutate() }}>
-        <Input type="password" aria-label="Vault password" placeholder="Vault password" autoComplete="current-password" autoFocus className="h-10" value={pw} onChange={(e) => setPw(e.target.value)} />
-        <RememberFor />
+      <form className="flex w-full flex-col gap-3" onSubmit={(e) => { e.preventDefault(); if (pw) open.mutate() }}>
+        <Input type="password" aria-label="Vault password" placeholder="Vault password" autoComplete="current-password" autoFocus className="h-11" value={pw} onChange={(e) => setPw(e.target.value)} />
         <ErrorAlert error={open.error} />
-        <Button type="submit" className="h-10" disabled={!pw || open.isPending}>{open.isPending ? <Spinner /> : <LockOpen />}Unlock</Button>
+        <Button type="submit" className="h-11" disabled={!pw || open.isPending}>{open.isPending ? <Spinner /> : <LockOpen />}Unlock</Button>
+        <div className="mt-2 rounded-xl bg-surface py-2 pr-2 pl-3.5"><RememberFor /></div>
       </form>
     </div>
   )
@@ -207,7 +219,7 @@ function Unlocked({ userId, publicKey }: { userId: number; publicKey: string }) 
           <DropdownMenuItem onSelect={() => setEditing({ item: null, type: 'note' })}><StickyNote />Secure note</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button size="sm" variant="outline" onClick={() => vault.lock()}><Lock /><span className="hidden sm:inline">Lock</span></Button>
+      <Button size="sm" variant="outline" onClick={() => vault.lock()}><Lock />Lock</Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label="Vault options"><Ellipsis /></Button></DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
@@ -220,42 +232,56 @@ function Unlocked({ userId, publicKey }: { userId: number; publicKey: string }) 
   )
 
   const detail = current && key && v && (
-    <ItemDetail item={current} onEdit={() => setEditing({ item: current, type: current.value.type })} vaultId={v.id} keyVersion={key.version} onDeleted={() => setSelected(null)} />
+    <ItemDetail item={current} onEdit={() => setEditing({ item: current, type: current.value.type })} vaultId={v.id} keyVersion={key.version} onDeleted={() => setSelected(null)} inDialog={mobile} />
   )
 
   return (
-    <Shell actions={header}>
-      <div className="flex min-h-0 flex-1">
-        <div className={cn('flex min-h-0 w-full flex-col gap-3 p-4 lg:w-96 lg:shrink-0 lg:border-r')}>
-          <ToggleGroup type="single" variant="outline" size="sm" value={kind} onValueChange={(x) => { if (x) { setKind(x as typeof kind); setSelected(null) } }} className="w-full">
-            <ToggleGroupItem value="personal" className="flex-1"><Lock />Personal</ToggleGroupItem>
-            <ToggleGroupItem value="team" className="flex-1"><Users />Team</ToggleGroupItem>
+    <Shell actions={header} description={<span className="flex items-center gap-1"><LockOpen className="size-3 shrink-0" />Unlocked on this device</span>}>
+      <div style={pageCol()} className="page-col flex min-h-0 w-full flex-1 gap-10 py-4 md:py-6">
+        <div className="flex min-h-0 w-full flex-col gap-3 lg:w-88 lg:shrink-0">
+          <ToggleGroup type="single" size="sm" spacing={1} value={kind} onValueChange={(x) => { if (x) { setKind(x as typeof kind); setSelected(null) } }} className="w-full rounded-full bg-surface p-1">
+            <ToggleGroupItem value="personal" className={segment}><Lock />Personal</ToggleGroupItem>
+            <ToggleGroupItem value="team" className={segment}><Users />Team</ToggleGroupItem>
           </ToggleGroup>
-          <InputGroup>
-            <InputGroupAddon><Search /></InputGroupAddon>
-            <InputGroupInput aria-label="Search the vault" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
-          </InputGroup>
           <ErrorAlert error={vaults.error ?? items.error} />
-          {vaults.data && v && !key && <p className="rounded-lg border p-3 text-sm text-muted-foreground">You'll get the team vault's key the next time a teammate who has it unlocks their vault.</p>}
-          {items.isPending && key && <Skeleton className="h-40" />}
-          {items.data && !items.data.length && <p className="py-8 text-center text-sm text-muted-foreground">{kind === 'team' ? 'Nothing shared yet. Logins here are available to the whole team.' : 'Nothing saved yet.'}</p>}
-          <ul className="-mx-1 flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-            {shown.map((i) => (
-              <li key={i.id}>
-                <button onClick={() => setSelected(i.id)} className={cn('flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-accent', selected === i.id && 'bg-accent')}>
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-xs font-semibold uppercase">
-                    {i.value.type === 'note' ? <StickyNote className="size-4" /> : i.value.name.slice(0, 1)}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium">{i.value.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{i.value.type === 'login' ? i.value.username || hostOf(i.value.url) || 'Login' : 'Secure note'}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          {vaults.data && v && !key && <p className="rounded-xl bg-surface px-3.5 py-3 text-sm text-pretty text-muted-foreground">You'll get the team vault's key the next time a teammate who has it unlocks their vault.</p>}
+          {items.isPending && key && <Skeleton className="h-40 rounded-2xl" />}
+          {items.data && (
+            // One panel: the search on top, the items under it; it scrolls inside when the list is long.
+            <div className="flex min-h-0 flex-col gap-1 rounded-2xl bg-surface p-1.5">
+              <div className="relative shrink-0">
+                <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input aria-label="Search the vault" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} className="h-9 border-transparent bg-background pl-9 dark:bg-background" />
+              </div>
+              {!items.data.length && <p className="px-3 py-8 text-center text-sm text-pretty text-muted-foreground">{kind === 'team' ? 'Nothing shared yet. Logins saved here are there for the whole team.' : 'Nothing saved yet. Add a login or a secure note with New.'}</p>}
+              {items.data.length > 0 && !shown.length && <p className="px-3 py-8 text-center text-sm text-muted-foreground">Nothing matches “{q.trim()}”.</p>}
+              <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+                {shown.map((i) => (
+                  <li key={i.id}>
+                    <button onClick={() => setSelected(i.id)} aria-current={selected === i.id || undefined}
+                      className={cn('flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]', selected === i.id && 'bg-surface-2')}>
+                      <Monogram item={i.value} />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{i.value.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{i.value.type === 'login' ? i.value.username || hostOf(i.value.url) || 'Login' : 'Secure note'}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-        {!mobile && <div className="hidden min-w-0 flex-1 overflow-y-auto p-6 lg:block">{detail ?? <p className="pt-20 text-center text-sm text-muted-foreground">Pick an item to see it.</p>}</div>}
+        {!mobile && (
+          <div className="hidden min-w-0 flex-1 overflow-y-auto lg:block">
+            {detail ?? (
+              <div className="flex flex-col items-center gap-3 pt-24 text-center text-sm text-muted-foreground">
+                <span className="flex size-12 items-center justify-center rounded-full bg-surface"><KeyRound className="size-5" /></span>
+                Pick a login or a note to see it.
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {mobile && <ResponsiveDialog open={!!current} onOpenChange={(o) => !o && setSelected(null)} title={current?.value.name ?? ''}>{detail}</ResponsiveDialog>}
       {editing && v && key && <ItemEditor type={editing.type} item={editing.item} vaultId={v.id} vaultKey={key} onClose={(id) => { setEditing(null); if (id) setSelected(id) }} />}
@@ -265,11 +291,13 @@ function Unlocked({ userId, publicKey }: { userId: number; publicKey: string }) 
 }
 
 const hostOf = (url?: string) => { try { return url ? new URL(url.includes('://') ? url : `https://${url}`).host : '' } catch { return url ?? '' } }
+const segment = 'flex-1 rounded-full text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground dark:data-[state=on]:bg-surface-2'
 
+/** One field of an item on the detail panel: label, value, and copy (and show, for secrets). */
 function Row({ label, value, secret, mono, action }: { label: string; value: string; secret?: boolean; mono?: boolean; action?: ReactNode }) {
   const [show, setShow] = useState(false)
   return (
-    <div className="flex items-center gap-2 border-b py-2.5 last:border-b-0">
+    <div className="flex items-center gap-1 rounded-xl py-2 pr-2 pl-3 transition-colors duration-200 hover:bg-surface-2">
       <div className="min-w-0 flex-1">
         <div className="text-xs text-muted-foreground">{label}</div>
         <div className={cn('truncate text-sm select-text', (mono || secret) && 'font-mono')} data-selectable>{secret && !show ? '•'.repeat(Math.min(16, value.length)) : value}</div>
@@ -291,7 +319,7 @@ function TotpRow({ secret }: { secret: string }) {
     const i = setInterval(tick, 1000)
     return () => { alive = false; clearInterval(i) }
   }, [secret])
-  if (error) return <div className="border-b py-2.5 text-sm text-destructive">{error}</div>
+  if (error) return <div className="rounded-xl px-3 py-2.5 text-sm text-destructive">{error}</div>
   if (!t) return null
   return (
     <Row label="2FA code" value={t.code} mono action={
@@ -303,7 +331,7 @@ function TotpRow({ secret }: { secret: string }) {
   )
 }
 
-function ItemDetail({ item, onEdit, vaultId, onDeleted }: { item: Item; onEdit: () => void; vaultId: number; keyVersion: number; onDeleted: () => void }) {
+function ItemDetail({ item, onEdit, vaultId, onDeleted, inDialog }: { item: Item; onEdit: () => void; vaultId: number; keyVersion: number; onDeleted: () => void; inDialog?: boolean }) {
   const qc = useQueryClient()
   const del = useMutation({
     mutationFn: () => unwrap(api.api.vault.vaults[':id'].items[':item'].$delete({ param: { id: String(vaultId), item: item.id } })),
@@ -312,25 +340,32 @@ function ItemDetail({ item, onEdit, vaultId, onDeleted }: { item: Item; onEdit: 
   })
   const v = item.value
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-4 pb-4">
+    <div className={cn('flex w-full max-w-xl flex-col gap-5 pb-4', !inDialog && 'pt-1')}>
       <div className="flex items-center gap-3">
-        <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{v.name}</h2>
+        {/* In the phone sheet the sheet's own title already names it. */}
+        {inDialog ? <span className="flex-1" /> : <>
+          <Monogram item={v} className="size-12 rounded-2xl bg-surface text-lg" />
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-2xl leading-tight font-semibold tracking-[-0.025em]">{v.name}</h2>
+            <p className="truncate text-sm text-muted-foreground">{v.type === 'login' ? hostOf(v.url) || 'Login' : 'Secure note'}</p>
+          </div>
+        </>}
         <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label="Item options"><Ellipsis /></Button></DropdownMenuTrigger>
-          <DropdownMenuContent align="end"><DropdownMenuSeparator className="hidden" /><DropdownMenuItem variant="destructive" onSelect={() => del.mutate()}><Trash2 />Delete</DropdownMenuItem></DropdownMenuContent>
+          <DropdownMenuContent align="end"><DropdownMenuItem variant="destructive" onSelect={() => del.mutate()}><Trash2 />Delete</DropdownMenuItem></DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <div className="rounded-xl border px-4">
+      <div className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
         {v.type === 'login' && <>
           {v.username && <Row label="Username" value={v.username} />}
           {v.password && <Row label="Password" value={v.password} secret />}
           {v.totp && <TotpRow secret={v.totp} />}
           {v.url && <Row label="Website" value={v.url} action={<Button size="icon-sm" variant="ghost" aria-label="Open website" onClick={() => openExternal(v.url!.includes('://') ? v.url! : `https://${v.url}`)}><ExternalLink /></Button>} />}
         </>}
-        {v.notes && <div className="border-b py-2.5 last:border-b-0"><div className="text-xs text-muted-foreground">Notes</div><p className="text-sm whitespace-pre-wrap select-text" data-selectable>{v.notes}</p></div>}
+        {v.notes && <div className="rounded-xl px-3 py-2.5"><div className="text-xs text-muted-foreground">Notes</div><p className="text-sm whitespace-pre-wrap select-text" data-selectable>{v.notes}</p></div>}
       </div>
-      <p className="text-xs text-muted-foreground">Changed {relativeTime(item.updatedAt)}{item.updatedBy ? ` by ${item.updatedBy}` : ''}.</p>
+      <p className="px-1 text-xs text-muted-foreground">Changed {relativeTime(item.updatedAt)}{item.updatedBy ? ` by ${item.updatedBy}` : ''}.</p>
     </div>
   )
 }
@@ -427,7 +462,7 @@ function RememberFor() {
   const [m, setM] = useState(rememberMinutes)
   return (
     <label className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-muted-foreground">Keep unlocked on this device for</span>
+      <span className="text-muted-foreground">Keep unlocked here for</span>
       <NativeSelect aria-label="Keep unlocked for" className="w-32 [&_select]:h-8" value={m} onChange={(e) => { const v = Number(e.target.value); setM(v); setRememberMinutes(v) }}
         onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
         {REMEMBER_OPTIONS.map((o) => <option key={o.minutes} value={o.minutes}>{o.label}</option>)}

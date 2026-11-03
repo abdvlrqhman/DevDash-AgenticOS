@@ -13,6 +13,7 @@ import * as tailscale from './tailscale.ts'
 import * as storage from './storage.ts'
 import { ops as git } from './git.ts'
 import { startJanitor } from './janitor.ts'
+import { startTeamFiles } from './team-files.ts'
 import * as files from './files.ts'
 import * as memory from './memory.ts'
 import * as mentions from './mentions.ts'
@@ -263,3 +264,5 @@ server.on('listening', () => console.log(`devdash agent for ${process.env.USER} 
 // Periodically prune stale, provably-safe Claude Code subagent worktrees so they stop filling the shared disk.
 // Session worktrees are only cleaned up once the server says no session or service uses them.
 startJanitor(async () => ((await rpc('worktrees.inUse', {})) as { paths?: string[] }).paths ?? [])
+// The member's files in the shared projects stay readable and writable by the team (team-files.ts).
+startTeamFiles()

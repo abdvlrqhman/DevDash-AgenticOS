@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import { CheckCheck, ListChecks, Plus, RotateCcw, SendHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react'
+import { CheckCheck, ChevronRight, ListChecks, Plus, RotateCcw, SendHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { initials, StatusLight } from '@/components/app/brand'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -17,6 +17,7 @@ import { Prose } from '../claude/Prose'
 import { ProposalCard } from './Approvals'
 import { CLOSED_AS, MESSAGE_KINDS, threadQuery, useLiveTeam, type ThreadDetail } from './data'
 import { OutcomeBadge, RoleMark } from './TeamTab'
+import { statusLabel } from '../work/data'
 
 export function ThreadPage() {
   const { slug, thread } = useParams({ from: '/app/projects/$slug/team/threads/$thread' })
@@ -66,8 +67,10 @@ function ThreadView({ slug, id }: { slug: string; id: number }) {
       <PageHeader back={`/projects/${slug}`} title={t.title}
         description={<span className="flex items-center gap-1.5">
           <StatusLight state={!open ? 'idle' : t.needsPeople ? 'waiting' : 'live'} />
-          {!open ? (declined ? CLOSED_AS[t.closedAs!].label : 'Resolved') : t.needsPeople ? 'Waiting for people' : 'Open'}
-          <span className="truncate">· {t.owner ? `${t.owner.name} owns it` : 'Nobody owns it'}{t.roles.length > 1 ? ` · with ${t.roles.filter((r) => r.id !== t.owner?.id).map((r) => r.name).join(', ')}` : ''}</span>
+          <span className="truncate">
+            {!open ? (declined ? CLOSED_AS[t.closedAs!].label : 'Resolved') : t.needsPeople ? 'Waiting for people' : 'Open'}
+            , {t.owner ? `${t.owner.name} owns it` : 'nobody owns it'}{t.roles.length > 1 ? `, with ${t.roles.filter((r) => r.id !== t.owner?.id).map((r) => r.name).join(', ')}` : ''}
+          </span>
         </span>}
         actions={open
           ? <div className="flex gap-2">
@@ -78,23 +81,23 @@ function ThreadView({ slug, id }: { slug: string; id: number }) {
               <Button size="sm" variant="outline" disabled={resolve.isPending} onClick={() => resolve.mutate()}><CheckCheck />Resolve</Button>
             </div>
           : !declined && <Button size="sm" variant="outline" disabled={reopen.isPending} onClick={() => reopen.mutate()}><RotateCcw />Reopen</Button>} />
-      <PageBody>
-        <div className="flex max-w-3xl flex-col gap-5">
+      <PageBody className="md:py-8">
+        <div className="flex max-w-3xl flex-col gap-6">
           {open && t.priority === 'blocker' && (
-            <p className="flex items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
-              <TriangleAlert className="size-4 shrink-0" />Blocker — the owning role treats this as top priority.
+            <p className="flex items-center gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
+              <TriangleAlert className="size-4 shrink-0" />Blocker: the owning role treats this as top priority.
             </p>
           )}
           {open && t.needsPeople && (
-            <div className="rounded-xl border border-attention/40 bg-attention-soft px-4 py-3 text-sm text-attention-foreground dark:bg-attention/10 dark:text-attention">
-              {t.ask && <p className="text-base font-semibold">Decision needed: {t.ask}</p>}
+            <div className="rounded-2xl bg-attention-soft px-4 py-3.5 text-sm text-attention-foreground">
+              {t.ask && <p className="text-lg leading-snug font-semibold tracking-[-0.015em] text-balance">Decision needed: {t.ask}</p>}
               <p className={cn(t.ask && 'mt-1 opacity-90')}>
                 {t.owner ? 'The roles need you to decide. Reply to settle it; they carry on after you.' : 'No role owns this. Reply, or resolve it.'}
               </p>
             </div>
           )}
           {declined && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-muted/40 px-4 py-3 text-sm">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl bg-surface px-4 py-3 text-sm">
               <OutcomeBadge as={t.closedAs} />
               <p className="min-w-0 flex-1">
                 <span className="font-medium">{t.closedBy ?? 'A role'}</span> closed this{t.resolvedAt ? ` ${relativeTime(t.resolvedAt)}` : ''}{t.resolution ? <>: <span className="text-muted-foreground">{t.resolution}</span></> : '.'}
@@ -119,8 +122,8 @@ function ThreadView({ slug, id }: { slug: string; id: number }) {
           </form>
           {t.resolution && !declined && <p className="text-sm text-muted-foreground">Outcome: {t.resolution}{t.closedBy ? ` (${t.closedBy})` : ''}</p>}
           <p className="text-xs text-muted-foreground">
-            Opened by {t.openedBy}, {relativeTime(t.createdAt)}. <Link to="/projects/$slug/team/threads" params={{ slug }} className="hover:underline">All threads</Link>
-            {' · '}<Link to="/projects/$slug" params={{ slug }} className="hover:underline">Back to the team</Link>
+            Opened by {t.openedBy}, {relativeTime(t.createdAt)}. <Link to="/projects/$slug/team/threads" params={{ slug }} className="underline underline-offset-4 hover:text-foreground">All threads</Link>
+            {' or '}<Link to="/projects/$slug" params={{ slug }} className="underline underline-offset-4 hover:text-foreground">back to the team</Link>.
           </p>
         </div>
       </PageBody>
@@ -139,15 +142,15 @@ function LinkedTasks({ slug, tasks, onLink, onUnlink, busy }: {
     return <button className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => setAdding(true)}><Plus className="size-3.5" />Link a task</button>
   }
   return (
-    <div className="flex flex-col gap-2 rounded-xl border bg-muted/30 px-4 py-3">
+    <div className="flex flex-col gap-2 rounded-2xl bg-surface px-4 py-3">
       <h3 className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><ListChecks className="size-3.5" />Tasks for this thread</h3>
       <ul className="flex flex-col gap-1">
         {tasks.map((x) => (
           <li key={x.number} className="flex items-center gap-2 text-sm">
-            <Link to="/tasks/$slug/$number" params={{ slug: x.slug, number: String(x.number) }} className="flex min-w-0 flex-1 items-center gap-2 hover:underline">
-              <span className={cn('font-mono text-xs', x.done && 'text-muted-foreground line-through')}>{x.slug}#{x.number}</span>
+            <Link to="/tasks/$slug/$number" params={{ slug: x.slug, number: String(x.number) }} className="flex min-w-0 flex-1 items-center gap-2 underline-offset-4 hover:underline">
+              <span className={cn('text-xs text-muted-foreground tabular-nums', x.done && 'line-through')}>{x.slug}#{x.number}</span>
               <span className="truncate">{x.title}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{x.status}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{statusLabel(x.status)}</span>
             </Link>
             <Button size="icon-sm" variant="ghost" aria-label={`Unlink ${x.slug}#${x.number}`} disabled={busy} onClick={() => onUnlink(x.number)}><X /></Button>
           </li>
@@ -157,7 +160,7 @@ function LinkedTasks({ slug, tasks, onLink, onUnlink, busy }: {
         <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); submit() }}>
           <span className="text-sm text-muted-foreground">{slug}#</span>
           <input autoFocus type="number" min={1} value={n} onChange={(e) => setN(e.target.value)} aria-label="Task number"
-            className="h-8 w-20 rounded-md border bg-background px-2 text-sm" placeholder="10" />
+            className="h-8 w-20 rounded-xl border bg-background px-2.5 text-sm" placeholder="10" />
           <Button type="submit" size="sm" disabled={!n || busy}>Link</Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => { setAdding(false); setN('') }}>Cancel</Button>
         </form>
@@ -173,7 +176,7 @@ function Message({ m }: { m: ThreadDetail['messages'][number] }) {
   return (
     <li className="flex gap-3">
       {m.role ? <RoleMark id={m.role.id} name={m.author} className="size-8 rounded-lg text-[10px]" />
-        : m.sessionId ? <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><SquareTerminal className="size-4" /></div>
+        : m.sessionId ? <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-muted-foreground"><SquareTerminal className="size-4" /></div>
         : <Avatar className="size-8"><AvatarFallback className="text-[11px]">{initials(m.author)}</AvatarFallback></Avatar>}
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
@@ -183,9 +186,11 @@ function Message({ m }: { m: ThreadDetail['messages'][number] }) {
         </div>
         <Prose text={m.body} />
         {m.evidence && (
-          <details className="rounded-lg border bg-muted/30 text-sm">
-            <summary className="cursor-pointer px-3 py-1.5 text-muted-foreground">Evidence</summary>
-            <div className="px-3 pb-2"><Prose text={m.evidence} /></div>
+          <details className="group rounded-xl bg-surface text-sm">
+            <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3 py-2 text-muted-foreground transition-colors duration-150 hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="size-4 shrink-0 transition-transform duration-300 ease-spring group-open:rotate-90" />Evidence
+            </summary>
+            <div className="px-3 pb-2 pl-9"><Prose text={m.evidence} /></div>
           </details>
         )}
       </div>

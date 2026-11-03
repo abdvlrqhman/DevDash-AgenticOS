@@ -1,19 +1,19 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, UserPlus, Ellipsis, UserMinus } from 'lucide-react'
+import { Check, Copy, UserPlus, Ellipsis, Mail, UserMinus } from 'lucide-react'
 import { toast } from '@/lib/toast'
-import { PageBody, PageHeader, Section } from '@/components/app/page'
+import { PageBody, PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
-import { Badge } from '@/components/ui/badge'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, meQuery, unwrap } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 
 const membersQuery = { queryKey: ['members'], queryFn: () => unwrap(api.api.members.$get()) }
@@ -29,55 +29,63 @@ export function MembersPage() {
   return (
     <>
       <PageHeader title="Members" actions={me.role === 'admin' && <Button size="sm" onClick={() => setInviting(true)}><UserPlus />Invite</Button>} />
-      <PageBody>
+      <PageBody className="gap-12 py-8 md:py-12">
         <ErrorAlert error={error} />
-        <Section title={data ? `${users.length} ${users.length === 1 ? 'member' : 'members'}` : 'Members'}>
-          <ItemGroup className="rounded-xl border">
+        {/* The people are the page: each one a card with their face first, as many across as fit without cutting emails. */}
+        <Block title="Team" count={data ? users.length : undefined}>
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(18rem,100%),1fr))] gap-2">
+            {!data && [0, 1, 2].map((i) => <li key={i}><Skeleton className="h-[5.5rem] rounded-2xl" /></li>)}
             {users.map((u) => (
-              <Item key={u.id} className="rounded-none border-0 border-b last:border-b-0">
-                <ItemMedia><UserAvatar user={u} className="size-9" /></ItemMedia>
-                <ItemContent>
-                  <ItemTitle>{u.name}{u.id === me.id && <span className="font-normal text-muted-foreground">(you)</span>}</ItemTitle>
-                  <ItemDescription className="truncate">{u.username}, {u.email}</ItemDescription>
-                </ItemContent>
-                <ItemActions className="gap-1.5">
-                  {me.role === 'admin' && !u.provisioned_at && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Badge variant={u.provision_error ? 'destructive' : 'secondary'}>{u.provision_error ? 'Server account failed' : 'Setting up'}</Badge>
-                      </TooltipTrigger>
-                      {u.provision_error && <TooltipContent>{u.provision_error}</TooltipContent>}
-                    </Tooltip>
+              <li key={u.id} className="flex items-center gap-4 rounded-2xl bg-surface p-4">
+                <UserAvatar user={u} className="size-12" textClassName="text-sm" />
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="truncate font-medium">{u.name}{u.id === me.id && <span className="font-normal text-muted-foreground"> (you)</span>}</div>
+                  <div className="truncate text-xs text-muted-foreground">{u.username}, {u.email}</div>
+                  {(u.role === 'admin' || (me.role === 'admin' && !u.provisioned_at)) && (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {u.role === 'admin' && <Tag>Admin</Tag>}
+                      {me.role === 'admin' && !u.provisioned_at && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Tag className={cn(u.provision_error && 'bg-destructive/10 text-destructive')}>{u.provision_error ? 'Server account failed' : 'Setting up'}</Tag>
+                          </TooltipTrigger>
+                          {u.provision_error && <TooltipContent>{u.provision_error}</TooltipContent>}
+                        </Tooltip>
+                      )}
+                    </div>
                   )}
-                  {u.role === 'admin' && <Badge variant="outline">Admin</Badge>}
-                  {me.role === 'admin' && u.id !== me.id && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label={`Options for ${u.name}`}><Ellipsis /></Button></DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem variant="destructive" onSelect={() => setRemoving({ id: u.id, name: u.name })}><UserMinus />Remove from the team</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                  {me.role === 'admin' && u.id === me.id && <span aria-hidden className="size-7 shrink-0 pointer-coarse:size-9" />}
-                </ItemActions>
-              </Item>
+                </div>
+                {me.role === 'admin' && u.id !== me.id && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="icon-sm" variant="ghost" className="-mr-1.5 self-start hover:bg-surface-2 dark:hover:bg-surface-2" aria-label={`Options for ${u.name}`}><Ellipsis /></Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem variant="destructive" onSelect={() => setRemoving({ id: u.id, name: u.name })}><UserMinus />Remove from the team</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </li>
             ))}
-          </ItemGroup>
-        </Section>
+          </ul>
+        </Block>
         {!!data?.invites.length && (
-          <Section title="Invited">
-            <ItemGroup className="rounded-xl border">
+          <Block title="Invited" count={data.invites.length}>
+            <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
               {data.invites.map((i) => (
-                <Item key={i.id} className="rounded-none border-0 border-b last:border-b-0">
-                  <ItemContent>
-                    <ItemTitle>{i.email}</ItemTitle>
-                    <ItemDescription>{i.username}</ItemDescription>
-                  </ItemContent>
-                  <ItemActions><Badge variant="secondary">Expires in {daysLeft(i.expires_at)} days</Badge></ItemActions>
-                </Item>
+                <li key={i.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-muted-foreground"><Mail className="size-4" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{i.email}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{i.username}</span>
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                    Expires in {daysLeft(i.expires_at)} {daysLeft(i.expires_at) === 1 ? 'day' : 'days'}
+                  </span>
+                </li>
               ))}
-            </ItemGroup>
-          </Section>
+            </ul>
+          </Block>
         )}
       </PageBody>
       {removing && <RemoveMember member={removing} onClose={() => setRemoving(null)} />}
@@ -85,6 +93,20 @@ export function MembersPage() {
     </>
   )
 }
+
+function Block({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-col gap-3">
+      <h2 className="text-base font-semibold tracking-[-0.01em]">{title}{count !== undefined && <span className="ml-2 font-normal text-muted-foreground tabular-nums">{count}</span>}</h2>
+      {children}
+    </section>
+  )
+}
+
+/** A quiet word on a card: a role, or how their server account is coming along. */
+const Tag = ({ className, ...props }: React.ComponentProps<'span'>) => (
+  <span {...props} className={cn('rounded-full bg-background px-2 py-0.5 text-[11px] font-medium text-muted-foreground', className)} />
+)
 
 function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const qc = useQueryClient()
@@ -121,7 +143,7 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
       description={invite.data ? 'Send it privately. It works once and expires in 7 days.' : 'They get their own login, 2FA and Linux account on the server.'}>
       {invite.data ? (
         <div className="flex flex-col gap-3">
-          <code className="block rounded-md bg-muted px-3 py-2 font-mono text-xs break-all">{invite.data.link}</code>
+          <code className="block rounded-xl bg-surface px-3 py-2.5 font-mono text-xs break-all">{invite.data.link}</code>
           <div className="flex gap-2">
             <Button className="flex-1" onClick={() => copy(invite.data.link)}>{copied ? <Check /> : <Copy />}{copied ? 'Copied' : 'Copy link'}</Button>
             <Button variant="outline" onClick={reset}>Invite another</Button>
@@ -136,15 +158,15 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             </Field>
             <Field>
               <FieldLabel htmlFor="inv-user">Username</FieldLabel>
-              <Input id="inv-user" required pattern="[a-z][a-z0-9\-]{1,30}" className="h-10 font-mono" value={username}
+              <Input id="inv-user" required pattern="[a-z][a-z0-9\-]{1,30}" className="h-10" value={username}
                 onChange={(e) => { setTouched(true); setUsername(e.target.value.toLowerCase()) }} />
               <FieldDescription>Also their Linux user on the server. Lowercase letters, digits and dashes. Can't be changed later.</FieldDescription>
             </Field>
             <Field>
               <FieldLabel>Role</FieldLabel>
-              <ToggleGroup type="single" variant="outline" value={role} onValueChange={(v) => v && setRole(v as 'member' | 'admin')} className="w-full">
-                <ToggleGroupItem value="member" className="flex-1">Member</ToggleGroupItem>
-                <ToggleGroupItem value="admin" className="flex-1">Admin</ToggleGroupItem>
+              <ToggleGroup type="single" spacing={1} value={role} onValueChange={(v) => v && setRole(v as 'member' | 'admin')} className="w-full rounded-full bg-surface p-1">
+                <ToggleGroupItem value="member" className="flex-1 rounded-full hover:bg-surface-2">Member</ToggleGroupItem>
+                <ToggleGroupItem value="admin" className="flex-1 rounded-full hover:bg-surface-2">Admin</ToggleGroupItem>
               </ToggleGroup>
               <FieldDescription>{role === 'admin' ? 'Admins invite people and can open the root shell.' : 'Members use everything except admin tools.'}</FieldDescription>
             </Field>

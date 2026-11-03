@@ -42,7 +42,7 @@ export function CopyButton({ value, className, label = 'Copy', size = 'sm', vari
   const iconOnly = size === 'icon-sm'
   return (
     <Button type="button" size={size} variant={variant} onClick={copy} disabled={!value}
-      aria-label={label} className={cn(done && 'text-emerald-600 dark:text-emerald-400', className)}>
+      aria-label={label} className={className}>
       {done ? <Check /> : <Copy />}{!iconOnly && (done ? 'Copied' : label)}
     </Button>
   )
@@ -72,7 +72,7 @@ export function Output({ value, label = 'Output', mono = true, className, placeh
     <ToolField label={label}>
       <div className="relative">
         <pre className={cn(
-          'max-h-[28rem] min-h-16 overflow-auto rounded-lg border bg-muted/40 px-3 py-2.5 pr-14 text-sm break-words whitespace-pre-wrap',
+          'max-h-[28rem] min-h-16 overflow-auto rounded-xl bg-surface px-3.5 py-3 pr-14 text-sm break-words whitespace-pre-wrap',
           mono && 'font-mono', !value && 'text-muted-foreground', className,
         )}>{value || placeholder}</pre>
         {value && <CopyButton value={value} size="icon-sm" className="absolute top-2 right-2 bg-background" />}
@@ -86,7 +86,7 @@ export function Output({ value, label = 'Output', mono = true, className, placeh
 export function ToolError({ message }: { message?: string | null }) {
   if (!message) return null
   return (
-    <div role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+    <div role="alert" className="flex items-start gap-2 rounded-xl bg-destructive/10 px-3.5 py-2.5 text-sm text-destructive">
       <TriangleAlert className="mt-0.5 size-4 shrink-0" />
       <span className="min-w-0">{message}</span>
     </div>

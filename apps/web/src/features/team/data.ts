@@ -47,19 +47,20 @@ export const threadsQuery = (slug: string, f: ThreadFilter) => infiniteQueryOpti
 })
 export type ThreadItem = InferResponseType<typeof api.api.team.projects[':slug']['threads']['$get']>['threads'][number]
 export type CloseAs = 'done' | 'declined' | 'duplicate' | 'not_needed' | 'elsewhere'
-/** How a thread ended, in words, with a calm color each. */
+/** How a thread ended, in words. The words carry it; the tone is one quiet step, so status colors keep their meaning. */
 export const CLOSED_AS: Record<CloseAs, { label: string; tone: string }> = {
-  done: { label: 'Done', tone: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' },
-  declined: { label: 'Declined', tone: 'bg-amber-500/15 text-amber-800 dark:text-amber-300' },
-  duplicate: { label: 'Duplicate', tone: 'bg-violet-500/15 text-violet-700 dark:text-violet-300' },
-  not_needed: { label: 'Not needed', tone: 'bg-slate-500/15 text-slate-700 dark:text-slate-300' },
-  elsewhere: { label: 'Handled elsewhere', tone: 'bg-sky-500/15 text-sky-700 dark:text-sky-300' },
+  done: { label: 'Done', tone: 'bg-surface-2 text-foreground' },
+  declined: { label: 'Declined', tone: 'bg-surface-2 text-muted-foreground' },
+  duplicate: { label: 'Duplicate', tone: 'bg-surface-2 text-muted-foreground' },
+  not_needed: { label: 'Not needed', tone: 'bg-surface-2 text-muted-foreground' },
+  elsewhere: { label: 'Handled elsewhere', tone: 'bg-surface-2 text-muted-foreground' },
 }
+/** An alert is an error and a request needs people (status colors); the rest are words on a quiet step. */
 export const MESSAGE_KINDS: Record<string, { label: string; tone: string }> = {
-  alert: { label: 'Alert', tone: 'bg-destructive/15 text-destructive' },
-  request: { label: 'Request', tone: 'bg-attention-soft text-attention-foreground dark:bg-attention/15 dark:text-attention' },
-  question: { label: 'Question', tone: 'bg-sky-500/15 text-sky-700 dark:text-sky-300' },
-  fyi: { label: 'FYI', tone: 'bg-muted text-muted-foreground' },
+  alert: { label: 'Alert', tone: 'bg-destructive/10 text-destructive' },
+  request: { label: 'Request', tone: 'bg-attention-soft text-attention-foreground' },
+  question: { label: 'Question', tone: 'bg-surface-2 text-foreground' },
+  fyi: { label: 'FYI', tone: 'bg-surface-2 text-muted-foreground' },
   reply: { label: '', tone: '' },
 }
 
@@ -114,16 +115,11 @@ export function nextLabel(at: number) {
   return days === 0 ? `today ${time}` : days === 1 ? `tomorrow ${time}` : `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
 }
 
-const TONES = [
-  'bg-sky-500/15 text-sky-700 dark:text-sky-300',
-  'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
-  'bg-amber-500/15 text-amber-800 dark:text-amber-300',
-  'bg-violet-500/15 text-violet-700 dark:text-violet-300',
-  'bg-rose-500/15 text-rose-700 dark:text-rose-300',
-  'bg-teal-500/15 text-teal-700 dark:text-teal-300',
-]
-/** Each role keeps its own color. */
-export const roleTone = (id: number) => TONES[id % TONES.length]!
+/**
+ * A role's mark, in ink like people's avatars: its initials tell roles apart, and colors stay free for status (running,
+ * needs you, errors). The id is kept so a role could get its own tone again in one place.
+ */
+export const roleTone = (_id: number) => 'bg-surface-2 text-foreground'
 /** "Marketing – Social" → "MS", "CTO" → "CTO". */
 export const roleMark = (name: string) => {
   const words = name.split(/[\s–-]+/).filter((w) => /\w/.test(w))

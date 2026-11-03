@@ -1,10 +1,10 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { ExternalLink, Eye, Pencil, Play, RotateCw, Square, Trash2 } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
-import { PageHeader, pageCol } from '@/components/app/page'
+import { PageBody, PageHeader, pageCol } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
@@ -13,6 +13,7 @@ import { openExternal } from '@/lib/shell'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, unwrap } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { PinButton } from '../pins/pins'
 import { ErrorAlert } from '../auth/LoginPage'
 import { TerminalView, type Status } from '../terminal/TerminalView'
@@ -50,51 +51,81 @@ function ServicePageView() {
   })
 
   if (list.isSuccess && !s) {
-    return <><PageHeader title={name} back="/services" /><div className="p-4"><ErrorAlert error={new Error(`There is no service called ${name}.`)} /></div></>
+    return (
+      <><PageHeader title={name} back="/services" />
+        <PageBody className="items-start gap-4 py-8">
+          <p className="text-sm text-pretty text-muted-foreground"><span className="font-medium text-foreground">There's no service called {name}.</span> Someone may have removed it, or the link has a typo.</p>
+          <Button variant="outline" size="sm" asChild><Link to="/services">All services</Link></Button>
+        </PageBody>
+      </>
+    )
   }
-  if (!s) return <><PageHeader title={name} back="/services" /><div className="p-4"><Skeleton className="h-40" /></div></>
+  if (!s) return <><PageHeader title={name} back="/services" /><PageBody className="py-8"><Skeleton className="h-24 w-72 rounded-2xl" /><Skeleton className="h-80 rounded-2xl" /></PageBody></>
 
   const st = stateOf(s)
   const hasOutput = s.state !== 'stopped' && s.state !== 'unknown'
   return (
-    <div className="flex h-full flex-col">
-      <PageHeader back="/services" title={<span className="font-mono">{s.name}</span>}
-        description={<span className="flex items-center gap-1.5"><StatusLight state={st.light} />{st.label}</span>}
+    // Below xl the page scrolls (state, then the log at a fixed height, then the details); from xl it fits the screen.
+    <div className="flex min-h-full flex-col xl:h-full">
+      <PageHeader back="/services" title={s.name}
         actions={<>
           <PinButton kind="service" id={s.name} />
           {s.previewUrl && <Button size="sm" variant="outline" asChild><Link to="/services/$name/view" params={{ name: s.name }}><Eye /><span className="hidden sm:inline">View</span></Link></Button>}
           {s.previewUrl && <Button size="sm" variant="outline" onClick={() => openExternal(s.previewUrl!)}><ExternalLink /><span className="hidden sm:inline">Open</span></Button>}
           {s.canControl && <>
-          {s.desired === 'stopped'
-            ? <Button size="sm" disabled={act.isPending} onClick={() => act.mutate('start')}><Play />Start</Button>
-            : <>
-                <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate('restart')}><RotateCw /><span className="hidden sm:inline">Restart</span></Button>
-                <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate('stop')}><Square /><span className="hidden sm:inline">Stop</span></Button>
-              </>}
-          <Button size="icon-sm" variant="ghost" aria-label="Edit service" onClick={() => setEditing(true)}><Pencil /></Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Remove service" onClick={() => setRemoving(true)}><Trash2 /></Button>
+            <Button size="icon-sm" variant="ghost" aria-label="Edit service" onClick={() => setEditing(true)}><Pencil /></Button>
+            <Button size="icon-sm" variant="ghost" aria-label="Remove service" onClick={() => setRemoving(true)}><Trash2 /></Button>
           </>}
         </>} />
 
-      <dl style={pageCol()} className="page-col grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 border-b py-3 text-sm">
-        <dt className="text-muted-foreground">Port</dt>
-        <dd className="font-mono">{s.port} <span className="font-sans text-muted-foreground">{s.listening ? 'listening on 127.0.0.1' : 'not listening'}</span></dd>
-        {s.previewUrl && <><dt className="text-muted-foreground">Address</dt><dd className="flex items-center gap-2"><button className="truncate font-mono text-left underline-offset-4 hover:underline" onClick={() => openExternal(s.previewUrl!)}>{s.previewUrl.replace(/^https:\/\//, '').replace(/\/$/, '')}</button><span className="shrink-0 text-xs text-muted-foreground">{s.public ? 'anyone with the link' : 'members only'}</span></dd></>}
-        <dt className="text-muted-foreground">Command</dt><dd className="font-mono break-all">{s.command}</dd>
-        <dt className="text-muted-foreground">Folder</dt><dd className="font-mono break-all">{s.cwd}</dd>
-        <dt className="text-muted-foreground">Owner</dt><dd>{s.owner.name}</dd>
-        {s.session && <><dt className="text-muted-foreground">Started by</dt><dd><Link to="/claude/$id" params={{ id: s.session.id }} className="underline underline-offset-4">Claude in {s.session.title}</Link></dd></>}
-        <dt className="text-muted-foreground">Options</dt>
-        <dd>{[s.autostart ? 'starts with the server' : 'manual start', s.restart ? 'restarts on crash' : 'no restart on crash', envCount(s.env) ? `${envCount(s.env)} environment variable${envCount(s.env) === 1 ? '' : 's'}` : null].filter(Boolean).join(', ')}</dd>
-        {s.error && <><dt className="text-muted-foreground">Problem</dt><dd className="text-destructive">{s.error}</dd></>}
-        {s.state === 'crashed' && <><dt className="text-muted-foreground">Exit code</dt><dd className="font-mono">{s.exitCode ?? 'unknown'}</dd></>}
-      </dl>
+      <div style={pageCol()} className="page-col flex min-h-0 flex-1 flex-col gap-6 py-6 md:py-8 xl:grid xl:grid-cols-[minmax(0,1fr)_20rem] xl:grid-rows-[auto_minmax(0,1fr)] xl:gap-x-8">
+        {/* The page's one loud thing: what state it's in, and the buttons that change it. */}
+        <section className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between xl:col-span-2">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <h2 className={cn('flex items-start gap-3 text-[1.75rem] leading-[1.1] font-semibold tracking-[-0.03em] text-balance md:text-[2.25rem]', s.state === 'crashed' && 'text-destructive')}>
+              <StatusLight state={st.light} className="mt-[0.3em] size-3.5 rounded-[4px] md:size-4" />{st.label}
+            </h2>
+            <p className="max-w-[60ch] text-[15px] text-pretty text-muted-foreground">{stateDetail(s)}</p>
+            {s.error && <p className="max-w-[60ch] text-sm text-pretty text-destructive">{s.error}</p>}
+          </div>
+          {s.canControl && (
+            <div className="flex shrink-0 gap-2">
+              {s.desired === 'stopped'
+                ? <Button disabled={act.isPending} onClick={() => act.mutate('start')}><Play />Start</Button>
+                : <>
+                    <Button variant="outline" disabled={act.isPending} onClick={() => act.mutate('restart')}><RotateCw />Restart</Button>
+                    <Button variant="outline" disabled={act.isPending} onClick={() => act.mutate('stop')}><Square />Stop</Button>
+                  </>}
+            </div>
+          )}
+        </section>
 
-      <div style={pageCol()} className="page-col canvas flex min-h-0 flex-1 flex-col"><div className="relative my-2 min-h-0 flex-1 overflow-hidden rounded-lg bg-term-bg p-2 md:my-4">
-        {hasOutput
-          ? <TerminalView key={`${s.name}:${s.state === 'crashed'}`} path={`/api/services/${s.name}/logs`} onStatus={setLogStatus} />
-          : <p className="flex h-full items-center justify-center px-6 text-center text-sm text-term-fg/70">Stopped. Its output shows here while it runs.</p>}
-      </div></div>
+        <div aria-label="Output" className="relative -mx-2 h-[62svh] min-h-80 overflow-hidden rounded-2xl bg-term-bg p-2.5 md:mx-0 xl:h-auto xl:min-h-0">
+          {hasOutput
+            ? <TerminalView key={`${s.name}:${s.state === 'crashed'}`} path={`/api/services/${s.name}/logs`} onStatus={setLogStatus} />
+            : <p className="flex h-full items-center justify-center px-6 text-center text-sm text-term-fg/70">Stopped. Its output shows here while it runs.</p>}
+        </div>
+
+        <dl className="grid content-start gap-0.5 rounded-2xl bg-surface p-1.5 text-sm sm:grid-cols-2 xl:max-h-full xl:grid-cols-1 xl:self-start xl:overflow-y-auto">
+          <Fact label="Port"><span className="tabular-nums">{s.port}</span><span className="text-muted-foreground">, {s.listening ? 'listening on 127.0.0.1' : 'not listening'}</span></Fact>
+          {s.previewUrl && (
+            <Fact label="Address">
+              <button className="max-w-full text-left break-all underline decoration-muted-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground" onClick={() => openExternal(s.previewUrl!)}>
+                {s.previewUrl.replace(/^https:\/\//, '').replace(/\/$/, '')}
+              </button>
+              <span className="block text-xs text-muted-foreground">{s.public ? 'Anyone with the link can open it' : 'Members only'}</span>
+            </Fact>
+          )}
+          <Fact label="Command" wide><code className="font-mono text-[13px] break-all">{s.command}</code></Fact>
+          <Fact label="Folder" wide><code className="font-mono text-[13px] break-all">{s.cwd}</code></Fact>
+          <Fact label="Owner">{s.owner.name}</Fact>
+          {s.session && <Fact label="Started by"><Link to="/claude/$id" params={{ id: s.session.id }} className="underline decoration-muted-foreground/40 underline-offset-4 hover:decoration-foreground">Claude in {s.session.title}</Link></Fact>}
+          <Fact label="Options" wide>
+            {[s.autostart ? 'Starts with the server' : 'Manual start', s.restart ? 'restarts on crash' : 'no restart on crash', envCount(s.env) ? `${envCount(s.env)} environment variable${envCount(s.env) === 1 ? '' : 's'}` : null].filter(Boolean).join(', ')}
+          </Fact>
+          {s.state === 'crashed' && <Fact label="Exit code"><span className="tabular-nums">{s.exitCode ?? 'unknown'}</span></Fact>}
+        </dl>
+      </div>
 
       {editing && <EditService s={s} onClose={() => setEditing(false)} />}
 
@@ -157,5 +188,30 @@ function EditService({ s, onClose }: { s: Service; onClose: () => void }) {
     </ResponsiveDialog>
   )
 }
+
+/** What the state means for this service, and what to do about it. */
+function stateDetail(s: Service): ReactNode {
+  switch (s.state) {
+    case 'running':
+      return s.listening ? `Answering on port ${s.port}.` : <>Port {s.port} isn't answering yet. It needs to listen on <code className="font-mono text-[13px]">$PORT</code>.</>
+    case 'starting':
+      return `Coming up on port ${s.port}.`
+    case 'crashed':
+      return s.restart ? 'It crashed 5 times in 10 minutes, so it isn\'t restarted any more. Its output says why; start it again once it\'s fixed.'
+        : 'It exited and isn\'t set to restart. Its output says why.'
+    case 'stopped':
+      return `Port ${s.port} stays reserved for it.`
+    default:
+      return 'Checking on it…'
+  }
+}
+
+/** One detail of the service: a quiet label over its value. `wide` spans both columns where there are two. */
+const Fact = ({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) => (
+  <div className={cn('flex min-w-0 flex-col gap-0.5 rounded-xl px-3 py-2.5', wide && 'sm:col-span-2 xl:col-span-1')}>
+    <dt className="text-xs text-muted-foreground">{label}</dt>
+    <dd className="min-w-0 break-words">{children}</dd>
+  </div>
+)
 
 const envCount = (env: string | null) => (env ?? '').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).length

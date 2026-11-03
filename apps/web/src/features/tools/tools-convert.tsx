@@ -42,7 +42,7 @@ export function JsonFormatter() {
           )}
         </div>
         {res && !res.ok && <ToolError message={res.error} />}
-        {res?.ok && res.value !== '' && <span className="text-xs text-emerald-600 dark:text-emerald-400">Valid JSON</span>}
+        {res?.ok && res.value !== '' && <span className="text-xs text-muted-foreground">Valid JSON</span>}
         <Output value={res?.ok ? res.value : ''} label="Result" />
       </div>
     </TwoPane>
@@ -120,7 +120,7 @@ export function Base64Tool() {
           </ToolField>
           {mode === 'enc' && (
             file
-              ? <p className="flex items-center gap-2 text-xs text-muted-foreground"><Upload className="size-3.5" />{file.name} · {bytes(file.size)} <button className="underline" onClick={() => setFile(null)}>clear</button></p>
+              ? <p className="flex items-center gap-2 text-xs text-muted-foreground"><Upload className="size-3.5" />{file.name}, {bytes(file.size)} <button className="underline" onClick={() => setFile(null)}>clear</button></p>
               : <p className="flex items-center gap-2 text-xs text-muted-foreground"><Upload className="size-3.5" />…or drop a file onto the box to encode its bytes.</p>
           )}
         </div>
@@ -308,13 +308,13 @@ export function ColorTool() {
         </ToolField>
         <ToolField label="Picker">
           <input type="color" aria-label="Colour picker" value={rgb ? toHex({ ...rgb, a: 1 }) : '#000000'}
-            onChange={(e) => setInput(e.target.value)} className="h-9 w-16 cursor-pointer rounded-lg border bg-transparent p-1" />
+            onChange={(e) => setInput(e.target.value)} className="h-9 w-16 cursor-pointer rounded-xl bg-surface p-1" />
         </ToolField>
       </TwoPane>
       {res && !res.ok && <ToolError message={res.error} />}
       {rgb && hsl && (
         <div className="flex flex-col gap-4 sm:flex-row">
-          <div className="h-28 w-full rounded-xl border sm:w-40" style={{ background: toRgbString(rgb) }} />
+          <div className="h-28 w-full rounded-2xl ring-1 ring-foreground/10 ring-inset sm:w-40" style={{ background: toRgbString(rgb) }} />
           <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2">
             {([
               ['HEX', toHex(rgb)],
