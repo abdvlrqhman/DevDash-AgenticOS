@@ -98,6 +98,17 @@ export function config(o: { rulesFile: string; mcp: Record<string, { type: 'loca
   }
 }
 
+/**
+ * OpenCode's own commands, offered before a session has said which it has (it reports its list, the project's and the
+ * member's custom commands included, once it starts). A prompt that starts with one runs it.
+ */
+export const COMMANDS = [
+  { name: 'init', description: 'Guided AGENTS.md setup' },
+  { name: 'review', description: 'Review changes, defaults to uncommitted', argumentHint: '[commit|branch|pr]' },
+  { name: 'goal', description: 'Keep working until an objective is met', argumentHint: '<objective> | pause | resume | clear' },
+  { name: 'compact', description: 'Compact the session' },
+]
+
 export const acpArgs = ['acp']
 /** Its terminal app on the same session. */
 export const cliArgs = (nativeId: string) => [STANDALONE, '--session', nativeId]

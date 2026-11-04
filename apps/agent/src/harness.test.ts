@@ -103,3 +103,15 @@ test("Don't ask isn't Bypass: nothing runs on its own but reads", async () => {
   assert.equal(autoAllowed('dontAsk', 'Bash'), false)
   assert.equal(autoAllowed('auto', 'Bash'), false) // no classifier here: like Ask
 })
+
+test("a prompt naming a command is kept as one; anything else, or a teammate's, is left as it is", async () => {
+  const { commandText, notACommand } = await import('./harness.ts')
+  const cmds = [{ name: 'review' }, { name: 'team/review' }]
+  assert.deepEqual(commandText([{ type: 'text', text: '/review src/auth.ts' }], cmds), [{ type: 'text', text: '<command-name>/review</command-name>\n<command-args>src/auth.ts</command-args>' }])
+  assert.deepEqual(commandText([{ type: 'text', text: '/team/review' }], cmds), [{ type: 'text', text: '<command-name>/team/review</command-name>\n<command-args></command-args>' }])
+  assert.equal(commandText([{ type: 'text', text: '/etc/hosts is broken' }], cmds), null) // not one of its commands
+  assert.equal(commandText([{ type: 'text', text: 'please /review' }], cmds), null)
+  assert.equal(commandText([{ type: 'text', text: '/review' }, { type: 'image' }], cmds), null) // with an image: a message
+  assert.deepEqual(notACommand([{ type: 'text', text: '/review' }]), [{ type: 'text', text: 'A teammate wrote:' }, { type: 'text', text: '/review' }])
+  assert.deepEqual(notACommand([{ type: 'text', text: 'hi' }]), [{ type: 'text', text: 'hi' }])
+})

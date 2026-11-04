@@ -35,7 +35,10 @@ type Agent = {
   cliArgs: (nativeId: string) => string[]
   loginArgs: string[]
   modeFor: (permissionMode: string) => string
+  /** Its commands before a session reports its own. */
+  commands: Command[]
 }
+type Command = { name: string; description: string; argumentHint?: string }
 
 export const AGENTS: Record<string, Agent> = {
   opencode: {
@@ -43,7 +46,7 @@ export const AGENTS: Record<string, Agent> = {
     profileNames: opencode.profileNames, createProfile: opencode.createProfile, profileEnv: opencode.profileEnv,
     providers: opencode.providers, models: opencode.models,
     sessionEnv: ({ nativeId, ...o }) => ({ OPENCODE_CONFIG_CONTENT: JSON.stringify(opencode.config(o)), ...(nativeId ? { DEVDASH_OPENCODE_SESSION: nativeId } : {}) }),
-    acpArgs: opencode.acpArgs, cliArgs: opencode.cliArgs, loginArgs: opencode.loginArgs, modeFor: opencode.modeFor,
+    acpArgs: opencode.acpArgs, cliArgs: opencode.cliArgs, loginArgs: opencode.loginArgs, modeFor: opencode.modeFor, commands: opencode.COMMANDS,
   },
 }
 export const isAcp = (harness: unknown): harness is string => typeof harness === 'string' && Object.hasOwn(AGENTS, harness)
@@ -63,13 +66,15 @@ type Chat = {
   /** A child session's (subagent's) own transcriber, nested under the Task step that started it. */
   children: Map<string, Transcriber>
   status: Status; pending: Map<string, Pending>; guest: Guest | null; lastActive: number
-  queue: { content: unknown[]; uuid: string }[]; turn: boolean; lastTaken: number
+  queue: { content: unknown[]; uuid: string; guest: boolean }[]; turn: boolean; lastTaken: number
   /** The session's total cost so far (the agent reports it), its context, and its config options (model, mode). */
   cost: number | null; model: string | null; config: Config[]; fresh: boolean; mcpNames: string[]
   replay: Record<string, unknown>[] | null
   /** Set while DevDash stops it: the turn it cuts short ends as stopped, not as an error. */
   stopping: boolean
   /** What "Always allow" covers in this session (alwaysKey). */
+  /** The commands it has (its own report, else the agent's built-ins). */
+  commands: Command[]
   always: Set<string>
   /** The effort levels last reported for its model, to report only changes. */
   effortsSent?: string
@@ -135,6 +140,28 @@ export function toPrompt(content: unknown[]): Record<string, unknown>[] {
     }
     return []
   })
+}
+
+/**
+ * A prompt that names one of the session's commands ("/review src/auth.ts"), as the transcript text Claude Code writes
+ * for a command, which the web shows as one; null for anything else. Pure, so it is unit-tested.
+ */
+export function commandText(content: unknown[], commands: { name: string }[]): unknown[] | null {
+  const texts = content.filter((b) => (b as { type?: string }).type === 'text')
+  if (texts.length !== 1 || content.length !== 1) return null
+  const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(((texts[0] as { text?: string }).text ?? '').trim())
+  if (!m || !commands.some((x) => x.name === m[1])) return null
+  return [{ type: 'text', text: `<command-name>/${m[1]}</command-name>\n<command-args>${m[2]?.trim() ?? ''}</command-args>` }]
+}
+
+/**
+ * A teammate's message never runs a command: a custom command can run shell blocks outside the agent's permission
+ * flow, so the guest gate would never see them. A prompt starting with "/" runs one, so theirs never starts with it.
+ * (The server already puts its note about the teammate first; this keeps it so whatever comes first.)
+ */
+export function notACommand(prompt: Record<string, unknown>[]): Record<string, unknown>[] {
+  const first = prompt[0] as { type?: string; text?: string } | undefined
+  return first?.type === 'text' && first.text?.trimStart().startsWith('/') ? [{ type: 'text', text: 'A teammate wrote:' }, ...prompt] : prompt
 }
 
 /** What runs without asking in each permission mode, like Claude Code's: reads always, edits in Accept edits, all in Bypass. */
@@ -233,7 +260,7 @@ async function startChat(l: Launch): Promise<Chat> {
   c = {
     launch: { ...l, started: true }, agent, child, rpc, sessionId: l.nativeId ?? '', t: t(l.nativeId ?? ''), children: new Map(),
     status: 'idle', pending: new Map(), guest: null, lastActive: Date.now(), queue: [], turn: false, lastTaken: 0,
-    cost: null, model: l.model ?? null, config: [], fresh: !l.started, mcpNames: Object.keys(mcp), replay: null, stopping: false, always: loadAlways(l.id),
+    cost: null, model: l.model ?? null, config: [], fresh: !l.started, mcpNames: Object.keys(mcp), replay: null, stopping: false, always: loadAlways(l.id), commands: agent.commands,
     childTranscriber: t, done: exited.then(() => {}),
   }
   const chat = c
@@ -361,7 +388,13 @@ function update(c: Chat, p: Record<string, unknown>) {
       reportEfforts(c)
       return
     case 'available_commands_update':
-      if (Array.isArray(u.availableCommands)) commandCache.set(`${c.launch.harness}:${c.launch.profile}`, (u.availableCommands as { name: string; description?: string }[]).map((x) => ({ name: x.name, description: x.description ?? '' })))
+      // Built-in, the member's and the project's own commands; the composer offers them, a prompt naming one runs it.
+      if (Array.isArray(u.availableCommands)) {
+        c.commands = (u.availableCommands as { name: string; description?: string; input?: { hint?: string } | null }[]).map((x) => ({
+          name: x.name, description: x.description ?? '', ...(x.input?.hint ? { argumentHint: x.input.hint } : {}),
+        }))
+        commandCache.set(`${c.launch.harness}:${c.launch.profile}`, c.commands)
+      }
       return
     default:
       transcriberFor(c, u).update(u)
@@ -492,7 +525,8 @@ async function runTurns(c: Chat) {
       setStatus(c, c.launch.id, 'working')
       const started = Date.now()
       try {
-        const r = await c.rpc.request<{ stopReason: string; usage?: Usage }>('session/prompt', { sessionId: c.sessionId, prompt: toPrompt(next.content) })
+        const prompt = next.guest ? notACommand(toPrompt(next.content)) : toPrompt(next.content)
+        const r = await c.rpc.request<{ stopReason: string; usage?: Usage }>('session/prompt', { sessionId: c.sessionId, prompt })
         for (const t of c.children.values()) t.flush()
         c.t.end({ stopReason: r.stopReason, durationMs: Date.now() - started, costUsd: c.cost, usage: r.usage, fresh: c.fresh })
       } catch (err) {
@@ -544,8 +578,10 @@ export const send = (l: Launch, content: unknown[], uuid: string, guest: Guest |
   c.launch = { ...c.launch, guestCaps: l.guestCaps ?? [] }
   if (guest) c.guest = guest
   else if (!c.turn) endGuest(c)
-  keep(l.id, [{ type: 'user', uuid, parent_tool_use_id: null, message: { role: 'user', content } }])
-  c.queue.push({ content, uuid })
+  // A command is kept as Claude Code keeps one, so the conversation shows it as a command, not as words to the model.
+  const command = guest ? null : commandText(content, c.commands)
+  keep(l.id, [{ type: 'user', uuid, parent_tool_use_id: null, message: { role: 'user', content: command ?? content } }])
+  c.queue.push({ content, uuid, guest: !!guest })
   c.lastActive = Date.now()
   setStatus(c, l.id, 'working')
   void runTurns(c)
@@ -691,7 +727,7 @@ export const snapshot = () => [...chats.values()].map((c) => ({
 export const pendingFor = (id: string) => [...(chats.get(id)?.pending.values() ?? [])].map(({ resolve: _, ...p }) => p)
 export const busy = () => [...chats.values()].some((c) => c.status === 'working' || c.status === 'waiting')
 
-const commandCache = new Map<string, { name: string; description: string }[]>()
+const commandCache = new Map<string, Command[]>()
 const modelCache = new Map<string, { at: number; models: { value: string; displayName: string; description?: string; group?: string }[] }>()
 /** Commands and models for a profile of an agent: its models from every provider the profile has connected. */
 export async function commandsAndModels(harness: string, profile: string) {
@@ -704,7 +740,7 @@ export async function commandsAndModels(harness: string, profile: string) {
     const listed = ids.map((v) => ({ value: v, displayName: v.split('/').slice(1).join('/'), description: v, group: v.split('/')[0] }))
     modelCache.set(key, { at: Date.now(), models: [{ value: '', displayName: 'Default', description: `${agent.name}'s own default` }, ...listed] })
   }
-  return { commands: commandCache.get(key) ?? [{ name: 'compact', description: 'Compact the session' }], models: modelCache.get(key)!.models }
+  return { commands: commandCache.get(key) ?? agent.commands, models: modelCache.get(key)!.models }
 }
 
 /** Each ACP agent, whether it's installed, and its profiles with the providers each has connected. */

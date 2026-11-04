@@ -11,6 +11,7 @@ test("a member's private files in a shared project open to the team; keys and to
     const project = join(root, 'shop')
     mkdirSync(join(project, 'backend'), { recursive: true })
     mkdirSync(join(project, 'node_modules', 'pkg'), { recursive: true })
+    chmodSync(project, 0o2775) // a checkout is the team's already, whatever the umask (GitHub's runners use 022)
     const env = join(project, 'backend', '.env')
     const key = join(project, 'deploy.pem')
     const dep = join(project, 'node_modules', 'pkg', 'secret.txt')

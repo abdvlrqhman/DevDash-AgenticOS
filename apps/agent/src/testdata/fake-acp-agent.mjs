@@ -5,6 +5,9 @@
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
+// Only `opencode acp` is an agent; other subcommands (`opencode models`) have nothing to say here.
+if (process.argv[2] !== 'acp') process.exit(0)
+
 const log = (x) => process.env.FAKE_ACP_LOG && appendFileSync(process.env.FAKE_ACP_LOG, `${JSON.stringify(x)}\n`)
 log({ config: process.env.OPENCODE_CONFIG_CONTENT ? JSON.parse(process.env.OPENCODE_CONFIG_CONTENT) : null })
 const send = (m) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...m })}\n`)
@@ -13,15 +16,23 @@ const waiting = new Map()
 const ask = (method, params) => new Promise((resolve) => { const id = next++; waiting.set(id, resolve); send({ id, method, params }) })
 const update = (sessionId, u) => send({ method: 'session/update', params: { sessionId, update: u } })
 const model = { id: 'model', category: 'model', currentValue: 'fake/one', options: [{ value: 'fake/one' }, { value: 'fake/two' }] }
+// Like OpenCode, it says which commands the session has once it exists.
+const commands = (sessionId) => setTimeout(() => update(sessionId, { sessionUpdate: 'available_commands_update', availableCommands: [
+  { name: 'review', description: 'Review changes', input: { hint: '[commit|branch|pr]' } }, { name: 'compact', description: 'Compact the session' },
+] }), 5)
 
 const handlers = {
   initialize: () => ({ protocolVersion: 1, agentCapabilities: { loadSession: true } }),
-  'session/new': () => ({ sessionId: 'ses_fake', configOptions: [model] }),
-  'session/load': () => ({ configOptions: [model] }),
+  'session/new': () => { commands('ses_fake'); return { sessionId: 'ses_fake', configOptions: [model] } },
+  'session/load': (p) => { commands(p.sessionId); return { configOptions: [model] } },
   'session/set_config_option': (p) => { model.currentValue = p.value; return { configOptions: [model] } },
   'session/delete': () => ({}),
   'session/prompt': async (p) => {
     const text = p.prompt.map((b) => b.text ?? '').join(' ')
+    if (text.startsWith('/compact')) {
+      update(p.sessionId, { sessionUpdate: 'session_info_update', _meta: { 'opencode/compaction': { status: 'completed', messageId: 'msg_c', reason: 'manual' } } })
+      return { stopReason: 'end_turn' }
+    }
     const cmd = /run `([^`]+)`/.exec(text)?.[1]
     if (cmd) {
       const call = `call_${next}`

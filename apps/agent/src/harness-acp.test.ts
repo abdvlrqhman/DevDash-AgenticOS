@@ -64,3 +64,30 @@ test('a Chat turn: the shell call is asked as Bash, "Always allow" keeps the nex
   ])
   await H.stop(l.id)
 })
+
+test("OpenCode's commands: offered with their hints, kept as commands, /compact noted; a teammate's message never runs one", async () => {
+  const events: Record<string, unknown>[] = []
+  let ended: (() => void) | undefined
+  H.setEmitter((e) => {
+    events.push(e)
+    if (e.ev === 'claude.msg' && (e.msg as { type?: string }).type === 'result') ended?.()
+  })
+  const turn = (l: Parameters<typeof H.send>[0], text: string, guest: { id: number; name: string } | null = null) =>
+    new Promise<void>((done) => { ended = done; void H.send(l, [{ type: 'text', text }], randomUUID(), guest) })
+  const l = { id: randomUUID(), harness: 'opencode', nativeId: null, cwd: dir, profile: 'default', model: null, permissionMode: 'bypassPermissions' as const, started: false, ownerName: 'Ann' }
+  rmSync(logFile, { force: true })
+  await turn(l, 'hello')
+  const { commands } = await H.commandsAndModels('opencode', 'default')
+  assert.deepEqual(commands.find((c) => c.name === 'review'), { name: 'review', description: 'Review changes', argumentHint: '[commit|branch|pr]' })
+
+  await turn(l, '/compact')
+  assert.ok(events.some((e) => e.ev === 'claude.msg' && (e.msg as { subtype?: string }).subtype === 'compact_boundary'), 'the compaction is noted')
+  const kept = H.history(l, {}).messages as { message?: { content?: { text?: string }[] } }[]
+  assert.ok(kept.some((m) => m.message?.content?.[0]?.text === '<command-name>/compact</command-name>\n<command-args></command-args>'), 'shown as a command')
+
+  // A teammate's "/review" reaches the agent as words, not as a command.
+  await turn(l, '/review main', { id: 2, name: 'Bob' })
+  const prompts = received().filter((m) => m.method === 'session/prompt').map((m) => (m.params!.prompt as { text?: string }[])[0]!.text)
+  assert.deepEqual(prompts, ['hello', '/compact', 'A teammate wrote:'])
+  await H.stop(l.id)
+})
