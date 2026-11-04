@@ -1098,6 +1098,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const r = await agents.request<{ profiles: unknown[]; agents?: AgentInfo[] }>(user.username, { op: 'claude.profiles' })
       return { profiles: r.profiles, agents: r.agents ?? [], defaults: repo.defaults(user.id) }
     },
+    /** The last step of a browser sign-in in the member's terminal tab (agent harness.ts finishSignIn), delivered as them. */
+    finishSignIn: (user: User, url: string) => agents.request<{ ok: boolean }>(user.username, { op: 'agent.signin.finish', url }, 20_000),
     createProfile: (user: User, name: string, harness: Harness = 'claude') => agents.request(user.username, { op: 'claude.profile.create', name, ...(harness !== 'claude' ? { harness } : {}) }),
     memoryHealth: (user: User) => memoryHealth(agents, user.username),
     restartMemory: async (user: User) => {

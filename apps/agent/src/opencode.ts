@@ -53,7 +53,8 @@ export async function providers(profile: string): Promise<string[]> {
   } catch {
     return []
   }
-  const names = (Array.isArray(list) ? list : []).map((e) => {
+  // [{ id, name, connections: [...] }] in 2.2.5: what has at least one connection (a key, an account, an env variable).
+  const names = (Array.isArray(list) ? list : []).filter((e) => !Array.isArray((e as { connections?: unknown })?.connections) || (e as { connections: unknown[] }).connections.length > 0).map((e) => {
     const o = (e ?? {}) as Record<string, unknown>
     return [o.name, o.provider, o.providerID, o.integration, o.id].find((v) => typeof v === 'string') as string | undefined
   })
@@ -112,7 +113,12 @@ export const COMMANDS = [
 export const acpArgs = ['acp']
 /** Its terminal app on the same session. */
 export const cliArgs = (nativeId: string) => [STANDALONE, '--session', nativeId]
-/** Its own sign-in, in a terminal tab: pick a provider, paste a key or follow its link. */
-export const loginArgs = ['auth', 'login', STANDALONE]
+/**
+ * Its own sign-in, in a terminal tab: `login` picks any provider; `acct` is the OpenCode account (its Console plans, a
+ * code to enter on any device), `go` the OpenCode Go subscription's key. Every one works from a server's terminal, except
+ * browser sign-ins that return to this machine (Sign in with ChatGPT): harness.ts finishSignIn takes their last step.
+ */
+export const SIGN_INS: Record<string, string | null> = { login: null, acct: 'opencode', go: 'opencode-go' }
+export const loginArgs = (target: string | null) => ['auth', 'login', ...(target ? [target] : []), STANDALONE]
 /** OpenCode's agents for DevDash's permission modes: Plan reads and plans, the rest build. */
 export const modeFor = (permissionMode: string) => (permissionMode === 'plan' ? 'plan' : 'build')

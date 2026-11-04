@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { LogIn, Plus, RotateCw } from 'lucide-react'
+import { ChevronDown, LogIn, Plus, RotateCw } from 'lucide-react'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -79,7 +80,7 @@ export function SetupPage() {
           </p>
         </Group>
         {!q.isPending && profiles.length > 0 && <MemorySection profiles={profiles} />}
-        {q.data && <OpenCodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 'opencode')} onConnect={(p) => navigate({ to: '/terminal', search: { open: `oc-login-${p}` } })} />}
+        {q.data && <OpenCodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 'opencode')} onConnect={(p, kind) => navigate({ to: '/terminal', search: { open: `oc-${kind}-${p}` } })} />}
         {q.data && <DefaultsCard profiles={profiles} agents={q.data.agents as Agent[]} initial={q.data.defaults} />}
       </PageBody>
     </>
@@ -87,7 +88,14 @@ export function SetupPage() {
 }
 
 /** OpenCode: whether it's installed, and per profile the model providers it connected (their keys stay in the member's account). */
-function OpenCodeSection({ agent, onConnect }: { agent: Agent | undefined; onConnect: (profile: string) => void }) {
+/** OpenCode's sign-ins (agent opencode.ts SIGN_INS): its own account, its Go subscription's key, or any provider. */
+const SIGN_INS = [
+  { kind: 'acct', label: 'OpenCode account', hint: 'Zen and your Console plans: enter a code on any device' },
+  { kind: 'go', label: 'OpenCode Go', hint: 'Paste the key from opencode.ai/console' },
+  { kind: 'login', label: 'Another provider', hint: 'Anthropic, OpenAI or ChatGPT, GitHub Copilot, Google, OpenRouter…' },
+] as const
+
+function OpenCodeSection({ agent, onConnect }: { agent: Agent | undefined; onConnect: (profile: string, kind: string) => void }) {
   const qc = useQueryClient()
   const [name, setName] = useState('')
   const create = useMutation({
@@ -115,9 +123,20 @@ function OpenCodeSection({ agent, onConnect }: { agent: Agent | undefined; onCon
                   <span className="block truncate font-medium">{p.name === 'default' ? 'Default' : p.name}</span>
                   <span className="block text-sm text-pretty text-muted-foreground">{p.providers.length ? p.providers.join(', ') : 'No provider connected. Its free models still work.'}</span>
                 </span>
-                <Button size="sm" variant={p.providers.length ? 'ghost' : 'default'} className={p.providers.length ? 'hover:bg-surface-2 dark:hover:bg-surface-2' : undefined} onClick={() => onConnect(p.name)}>
-                  <LogIn />{p.providers.length ? 'Connect another' : 'Connect a provider'}
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant={p.providers.length ? 'ghost' : 'default'} className={p.providers.length ? 'hover:bg-surface-2 dark:hover:bg-surface-2' : undefined}>
+                      <LogIn />{p.providers.length ? 'Connect another' : 'Sign in'}<ChevronDown />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-72">
+                    {SIGN_INS.map((x) => (
+                      <DropdownMenuItem key={x.kind} className="flex-col items-start gap-0" onSelect={() => onConnect(p.name, x.kind)}>
+                        <span>{x.label}</span><span className="text-xs text-muted-foreground">{x.hint}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </li>
             ))}
           </ul>
@@ -131,11 +150,43 @@ function OpenCodeSection({ agent, onConnect }: { agent: Agent | undefined; onCon
           </form>
           <ErrorAlert error={create.error} />
           <p className="text-sm text-pretty text-muted-foreground">
-            Connecting opens a terminal running OpenCode's own sign-in: pick a provider, then paste its API key or follow its link. The key is saved in your account only, never in DevDash. OpenCode {agent.version}.
+            Signing in opens a terminal running OpenCode's own sign-in: enter the code it shows on any device, or paste a key. Keys and tokens are saved in your account only, never in DevDash. OpenCode {agent.version}.
           </p>
+          <FinishSignIn />
         </>
       )}
     </Group>
+  )
+}
+
+/**
+ * Sign in with ChatGPT (and other browser sign-ins) returns the browser to an address on this server, which the person's
+ * own device can't open: they paste it here and their agent delivers it to the sign-in waiting in the terminal.
+ */
+function FinishSignIn() {
+  const qc = useQueryClient()
+  const [url, setUrl] = useState('')
+  const finish = useMutation({
+    mutationFn: () => unwrap(api.api.claude['signin-callback'].$post({ json: { url } })),
+    onSuccess: () => {
+      toast.success('Signed in. The terminal tab finishes by itself.')
+      setUrl('')
+      void qc.invalidateQueries({ queryKey: profilesQuery.queryKey })
+    },
+  })
+  return (
+    <form onSubmit={(e: FormEvent) => { e.preventDefault(); if (url.trim()) finish.mutate() }} className="flex flex-col gap-2 rounded-2xl bg-surface px-4 py-3.5">
+      <Field>
+        <FieldLabel htmlFor="oc-callback">Signed in with a browser, and it ended on a page that won't open?</FieldLabel>
+        <FieldDescription>Sign in with ChatGPT sends your browser back to this server (http://127.0.0.1:…). Copy that page's address from the address bar and paste it here.</FieldDescription>
+        <div className="flex gap-2">
+          <Input id="oc-callback" placeholder="http://127.0.0.1:…/auth/callback?code=…" value={url} className="h-9 font-mono text-xs" spellCheck={false} autoCapitalize="none"
+            onChange={(e) => setUrl(e.target.value)} />
+          <Button type="submit" variant="outline" className="h-9" disabled={!url.trim() || finish.isPending}>{finish.isPending && <Spinner />}Finish</Button>
+        </div>
+      </Field>
+      <ErrorAlert error={finish.error} />
+    </form>
   )
 }
 

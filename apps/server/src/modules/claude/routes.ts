@@ -141,6 +141,7 @@ export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMi
       c.json(await claude.commands(c.get('user'), c.req.valid('query').profile, c.req.valid('query').harness)))
     .get('/profiles', async (c) => c.json(await claude.profiles(c.get('user'))))
     .get('/usage/:profile', async (c) => c.json({ usage: await claude.usage(c.get('user'), c.req.param('profile')) }))
+    .post('/signin-callback', json(z.object({ url: z.string().min(1).max(4000) })), async (c) => c.json(await claude.finishSignIn(c.get('user'), c.req.valid('json').url)))
     .post('/profiles', json(z.object({ name: z.string().max(21), harness: Harness.default('claude') })), async (c) => {
       await claude.createProfile(c.get('user'), c.req.valid('json').name, c.req.valid('json').harness)
       return c.json({ ok: true })

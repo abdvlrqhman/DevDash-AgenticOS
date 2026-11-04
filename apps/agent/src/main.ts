@@ -48,10 +48,10 @@ async function ensureTerminal(name: string, cols: number, rows: number) {
       + ' || { echo; echo "GitHub sign-in did not finish."; read -r -p "Press Enter to close this tab. " _; }'
     return void (await tmux(...base, '-e', 'BROWSER=echo', 'bash', '-lc', script))
   }
-  // Another agent's sign-in (oc-login-<profile>: OpenCode's), else a Claude profile's (login-<profile>).
-  const other = /^oc-login-(.+)$/.exec(name)
+  // OpenCode's sign-ins (oc-<kind>-<profile>: any provider, its own account, its Go key), else a Claude profile's.
+  const other = /^oc-(login|acct|go)-(.+)$/.exec(name)
   if (other) {
-    const { env, args } = harness.loginCommand('opencode', other[1]!)
+    const { env, args } = harness.loginCommand('opencode', other[2]!, other[1]!)
     return void (await tmux(...base, ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), ...args))
   }
   if (name.startsWith('login-')) {
@@ -131,6 +131,7 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'claude.memory.health': async () => ({ health: await memory.health(claude.profileNames()) }),
   'claude.memory.restart': async () => (await memory.restart(claude.profileNames()), { ok: true }),
   'claude.usage': async (r) => ({ usage: await claude.usage(str(r.profile, 'profile')) }),
+  'agent.signin.finish': (r) => harness.finishSignIn(str(r.url, 'url')),
   'claude.profile.create': (r) => ((harness.isAcp(r.harness) ? harness.createProfile(r.harness, str(r.name, 'name')) : claude.createProfile(str(r.name, 'name'))), { ok: true }),
   'fs.dir': async (r) => ({ path: await services.dir(r.path) }),
   'fs.roots': () => files.ops.roots(),

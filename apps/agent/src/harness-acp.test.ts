@@ -91,3 +91,27 @@ test("OpenCode's commands: offered with their hints, kept as commands, /compact 
   assert.deepEqual(prompts, ['hello', '/compact', 'A teammate wrote:'])
   await H.stop(l.id)
 })
+
+test('sign-ins: each kind opens its own OpenCode sign-in in the profile, and a browser sign-in is finished from DevDash', async () => {
+  const { createServer } = await import('node:http')
+  assert.deepEqual(H.loginCommand('opencode', 'default', 'acct').args.slice(1), ['auth', 'login', 'opencode', '--standalone'])
+  assert.deepEqual(H.loginCommand('opencode', 'default', 'go').args.slice(1), ['auth', 'login', 'opencode-go', '--standalone'])
+  assert.deepEqual(H.loginCommand('opencode', 'work', 'login'), { env: { OPENCODE_DB: join(dir, '.opencode-profiles', 'work', 'opencode.db') }, args: [join(dir, 'bin', 'opencode'), 'auth', 'login', '--standalone'] })
+  assert.throws(() => H.loginCommand('opencode', 'default', 'shell'), /unknown sign-in/)
+
+  // Only a local sign-in address with its code: nothing else on the machine, nothing outside it.
+  for (const bad of ['https://127.0.0.1:41879/cb?code=1', 'http://example.com:41879/cb?code=1', 'http://127.0.0.1/cb?code=1', 'http://127.0.0.1:22/?x=1', 'http://127.0.0.1:41879/cb', 'not a url']) {
+    assert.throws(() => H.signInCallback(bad), Error, bad)
+  }
+  assert.equal(H.signInCallback(' http://localhost:41879/auth/callback?code=abc&state=s ').port, '41879')
+
+  // The sign-in waiting in the terminal gets the code.
+  let got = ''
+  const server = createServer((req, res) => { got = req.url ?? ''; res.end('Signed in') }).listen(0, '127.0.0.1')
+  await new Promise((r) => server.once('listening', r))
+  const port = (server.address() as { port: number }).port
+  assert.deepEqual(await H.finishSignIn(`http://127.0.0.1:${port}/auth/callback?code=abc&state=s`), { ok: true })
+  assert.equal(got, '/auth/callback?code=abc&state=s')
+  server.close()
+  await assert.rejects(H.finishSignIn(`http://127.0.0.1:${port}/auth/callback?code=abc`), /No sign-in is waiting/)
+})

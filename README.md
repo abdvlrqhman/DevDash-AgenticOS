@@ -54,8 +54,10 @@ Every session is a real coding agent, run as the member who started it.
 - **Two ways to work.** A chat view with tool steps, diffs, subagents, to-do lists, permission prompts, questions and
   file links that open in a viewer, or the agent's own terminal app (the Claude Code CLI, OpenCode's TUI). Switch a
   session between them any time.
-- **Your own accounts.** Each member signs in to their own Claude plan and their own OpenCode providers, with optional
-  extra profiles for each. Cost, tokens and context are shown per session, and Claude plan limits too.
+- **Your own accounts.** Each member signs in to their own Claude plan, and to OpenCode with its own account, an OpenCode
+  Go subscription or any provider (ChatGPT, GitHub Copilot, API keys), with optional extra profiles for each. Sign-ins
+  run in a terminal tab with a code to enter on any device. Cost, tokens and context are shown per session, and Claude
+  plan limits too.
 - **Shared on your terms.** Keep a session private, share it with the whole team or with chosen people, read-only or
   with permission to type. Comments, live viewers and "ask to join" included.
 - **A worktree per session.** A session can get a fresh worktree on its own branch. When it's done, *Ready to review*

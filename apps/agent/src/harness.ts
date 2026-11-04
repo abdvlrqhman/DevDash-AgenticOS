@@ -33,7 +33,9 @@ type Agent = {
   sessionEnv: (o: Parameters<typeof opencode.config>[0] & { nativeId?: string }) => Record<string, string>
   acpArgs: string[]
   cliArgs: (nativeId: string) => string[]
-  loginArgs: string[]
+  loginArgs: (target: string | null) => string[]
+  /** Its sign-ins by kind (login: any provider), as the integration each opens. */
+  signIns: Record<string, string | null>
   modeFor: (permissionMode: string) => string
   /** Its commands before a session reports its own. */
   commands: Command[]
@@ -46,7 +48,7 @@ export const AGENTS: Record<string, Agent> = {
     profileNames: opencode.profileNames, createProfile: opencode.createProfile, profileEnv: opencode.profileEnv,
     providers: opencode.providers, models: opencode.models,
     sessionEnv: ({ nativeId, ...o }) => ({ OPENCODE_CONFIG_CONTENT: JSON.stringify(opencode.config(o)), ...(nativeId ? { DEVDASH_OPENCODE_SESSION: nativeId } : {}) }),
-    acpArgs: opencode.acpArgs, cliArgs: opencode.cliArgs, loginArgs: opencode.loginArgs, modeFor: opencode.modeFor, commands: opencode.COMMANDS,
+    acpArgs: opencode.acpArgs, cliArgs: opencode.cliArgs, loginArgs: opencode.loginArgs, signIns: opencode.SIGN_INS, modeFor: opencode.modeFor, commands: opencode.COMMANDS,
   },
 }
 export const isAcp = (harness: unknown): harness is string => typeof harness === 'string' && Object.hasOwn(AGENTS, harness)
@@ -807,11 +809,40 @@ export function createProfile(harness: string, name: string) {
   agentOf(harness).createProfile(name)
 }
 
-/** The agent's own sign-in, run in a terminal tab (login-<harness>-<profile>). */
-export function loginCommand(harness: string, profile: string) {
+/** The agent's own sign-in of a kind (its `signIns`), run in a terminal tab (oc-<kind>-<profile>). */
+export function loginCommand(harness: string, profile: string, kind = 'login') {
   if (!PROFILE_RE.test(profile)) throw new Error('invalid profile')
   const a = agentOf(harness)
-  return { env: a.profileEnv(profile), args: [a.bin, ...a.loginArgs] }
+  if (!Object.hasOwn(a.signIns, kind)) throw new Error('unknown sign-in')
+  return { env: a.profileEnv(profile), args: [a.bin, ...a.loginArgs(a.signIns[kind]!)] }
+}
+
+/**
+ * A browser sign-in started on this server (Sign in with ChatGPT) sends the browser back to http://127.0.0.1:<port>/…,
+ * which is the server, not the person's device, so that page never opens. They paste the address their browser ended
+ * on; this checks it is such a local sign-in address (and nothing else on the machine). Pure, so it is unit-tested.
+ */
+export function signInCallback(raw: string): URL {
+  let u: URL
+  try {
+    u = new URL(raw.trim())
+  } catch {
+    throw new Error("That isn't an address. Copy the whole address from your browser's address bar.")
+  }
+  if (u.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname) || Number(u.port) < 1024) {
+    throw new Error('That isn\'t a sign-in on this server: the address starts with http://127.0.0.1: or http://localhost: and a port.')
+  }
+  if (!u.search) throw new Error('That address has no sign-in code in it. Copy it again from the page your browser couldn\'t open.')
+  return u
+}
+/** Delivers that last step to the sign-in waiting in the member's terminal tab, as the member. */
+export async function finishSignIn(raw: string) {
+  const u = signInCallback(raw)
+  const res = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(15_000) }).catch(() => {
+    throw new Error('No sign-in is waiting at that address any more. Start it again from Agent setup.')
+  })
+  if (res.status >= 400) throw new Error(`The sign-in didn't take it (${res.status}). Start it again from Agent setup.`)
+  return { ok: true }
 }
 
 setInterval(() => {
