@@ -49,7 +49,7 @@ export function Requests({ sessionId, requests, canAnswer, isOwner, owner, waiti
 export function requestSummary(req: PendingRequest): string {
   if (req.toolName === 'AskUserQuestion') {
     const q = (req.input.questions as { question?: string }[] | undefined)?.[0]?.question
-    return q || 'Claude has a question'
+    return q || 'A question for you'
   }
   if (req.toolName === 'ExitPlanMode') return 'Plan ready to review'
   if (req.ownerOnly) return `${req.askedBy?.name ?? 'A teammate'} asked for ${req.toolName}`
@@ -81,7 +81,7 @@ function QuestionCard({ sessionId, req, disabled, waitingOn }: { sessionId: stri
   return (
     <Card className={waitingCard}>
       <CardHeader className="px-4">
-        <CardTitle className="flex items-center gap-2 text-sm"><StatusLight state="waiting" /><CircleHelp className="size-4" />Claude has a question</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-sm"><StatusLight state="waiting" /><CircleHelp className="size-4" />A question for you</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-5 px-4">
         {questions.map((q, qi) => (

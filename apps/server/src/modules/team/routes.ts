@@ -3,14 +3,17 @@ import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
 import { TRIGGERS } from './schedule.ts'
-import { CLOSE_AS, MESSAGE_KINDS, MODELS, type TeamService } from './service.ts'
+import { HARNESSES } from '../claude/service.ts'
+import { CLOSE_AS, MESSAGE_KINDS, type TeamService } from './service.ts'
 import { SOURCE_KINDS } from './sources.ts'
 
 const RoleInput = z.object({
   name: z.string().trim().min(1).max(60),
   summary: z.string().trim().max(300).default(''),
   instructions: z.string().max(20_000).default(''),
-  model: z.enum(MODELS).nullable().default(null),
+  harness: z.enum(HARNESSES).default('claude'),
+  // Checked for its agent by the service (roleModel): a Claude family, or OpenCode's provider/model.
+  model: z.string().max(160).nullable().default(null),
 })
 const Slot = z.object({ days: z.array(z.number().int().min(0).max(6)).min(1).max(7), at: z.string().regex(/^\d{1,2}:\d{2}$/) })
 const Message = z.object({

@@ -39,6 +39,7 @@ import { useArchiveSession } from './ArchiveSession'
 import { ShareDialog, sharingLabel } from './ShareDialog'
 import { Requests, requestSummary } from './Requests'
 import { PlanUsage } from './Usage'
+import { agentName, HARNESS, harnessOf } from './harness'
 import { servicesQuery, stateOf } from '../services/data'
 import { tailnetStatusQuery } from '../network/NetworkPage'
 import { buildTranscript, mergePage, mergeRaw, sessionFacts, touchedFiles, type Raw } from './transcript'
@@ -51,7 +52,7 @@ const termSize = () => ({ cols: Math.max(40, Math.min(220, Math.floor(innerWidth
 
 /** One view per session: switching sessions mounts a fresh one, so no messages or requests carry over. */
 export function SessionPage() {
-  const { id } = useParams({ from: '/app/claude/$id' })
+  const { id } = useParams({ from: '/app/sessions/$id' })
   return <SessionView key={id} id={id} />
 }
 
@@ -246,12 +247,12 @@ function SessionView({ id }: { id: string }) {
   if (info.error) {
     return (
       <>
-        <PageHeader title="Session" back="/claude" />
+        <PageHeader title="Session" back="/sessions" />
         <div className="p-4"><ErrorAlert error={info.error} /></div>
       </>
     )
   }
-  if (!s) return <><PageHeader title="Session" back="/claude" /><div className="flex flex-col gap-3 p-4">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div></>
+  if (!s) return <><PageHeader title="Session" back="/sessions" /><div className="flex flex-col gap-3 p-4">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div></>
 
   const canSend = info.data!.canSend
   const role = info.data!.role // a team role's session: shown as the role, not the account the team runs on
@@ -267,7 +268,7 @@ function SessionView({ id }: { id: string }) {
   return (
     <FileViewerProvider cwd={s.cwd} username={s.owner.username} touched={touched}>
     <div className="flex h-full flex-col">
-      <PageHeader back="/claude" backOnSmall
+      <PageHeader back="/sessions" backOnSmall
         title={s.title}
         description={
           <span className="flex items-center gap-1.5">
@@ -315,18 +316,18 @@ function SessionView({ id }: { id: string }) {
                 // Only when you scrolled up (or everything fits): not in the moment the page opens at the top.
                 auto={() => { const el = scroller.current; return !!el && (!stick.current || el.scrollHeight <= el.clientHeight + 8) }} />}
               <ErrorAlert error={history.error} />
-              {!s.started && !raw.length && <p className="py-10 text-center text-muted-foreground">Tell Claude what to work on.</p>}
+              {!s.started && !raw.length && <p className="py-10 text-center text-muted-foreground">Tell {agentName(s.harness)} what to work on.</p>}
               <SubagentCtx.Provider value={subagentCtx}>
                 <div ref={transcript}><Blocks blocks={blocks} senders={history.data?.senders} live={working || s.status === 'waiting'} /></div>
               </SubagentCtx.Provider>
-              <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} />
+              <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} agent={agentName(s.harness)} />
               {s.status === 'error' && s.statusDetail && <ErrorAlert error={s.statusDetail} />}
               <Requests sessionId={id} requests={pending} canAnswer={canSend} isOwner={isOwner} owner={s.owner.name} waitingOn={canSend ? undefined : s.owner.name} afterPlanApproved={afterPlanApproved} />
             </div>
           </div>
           <div className="bg-background px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-6 md:pb-4">
             <div className="mx-auto max-w-4xl">
-              <Composer sessionId={id} profile={s.profile} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
+              <Composer sessionId={id} profile={s.profile} harness={harnessOf(s)} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
                 disabledReason={canSend ? undefined : <WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} />}
                 footer={<SessionChips s={s} isOwner={isOwner} canSend={canSend} working={working} onUpdate={(v) => update.mutate(v)}
                   onCompact={() => void send('/compact', []).catch((err: Error) => toast.error(err.message))} />} />
@@ -341,8 +342,8 @@ function SessionView({ id }: { id: string }) {
       {isOwner && <TailnetDialog open={tailnet} onOpenChange={setTailnet} s={s} onUpdate={(v) => update.mutateAsync(v)} />}
       {isOwner && <ShareDialog open={share} onOpenChange={setShare} s={s} me={me.id} people={info.data!.people} writers={info.data!.writers} onSaved={() => void info.refetch()} />}
       {isOwner && (
-        <ResponsiveDialog open={usage} onOpenChange={setUsage} title="Usage" description="This session's own cost and tokens, and your Claude plan's limits (the same as /usage in Claude Code).">
-          <PlanUsage profile={s.profile} sessionId={s.id} className="pb-2 text-sm" />
+        <ResponsiveDialog open={usage} onOpenChange={setUsage} title="Usage" description={HARNESS[harnessOf(s)].planLimits ? "This session's own cost and tokens, and your Claude plan's limits (the same as /usage in Claude Code)." : "This session's own cost and tokens, as its model provider prices them."}>
+          <PlanUsage profile={s.profile} sessionId={s.id} className="pb-2 text-sm" limits={HARNESS[harnessOf(s)].planLimits} />
         </ResponsiveDialog>
       )}
     </div>
@@ -372,7 +373,7 @@ function Earlier({ loading, onLoad, root, auto }: { loading: boolean; onLoad: ()
 }
 
 /** Only this re-renders while Claude types, at most once per frame (see live-text.ts). */
-const LiveText = memo(function LiveText({ store, working, since, onGrow }: { store: LiveTextStore; working: boolean; since?: number; onGrow: () => void }) {
+const LiveText = memo(function LiveText({ store, working, since, onGrow, agent = 'Claude' }: { store: LiveTextStore; working: boolean; since?: number; onGrow: () => void; agent?: string }) {
   const text = useSyncExternalStore(store.subscribe, store.get)
   const grow = useRef(onGrow)
   grow.current = onGrow
@@ -380,7 +381,7 @@ const LiveText = memo(function LiveText({ store, working, since, onGrow }: { sto
   if (text) return <Prose text={text} />
   return working ? (
     <p className="flex items-center gap-2.5 py-1 text-sm text-muted-foreground">
-      <Orb state="working" size={20} />Claude is working… <Elapsed since={since} />
+      <Orb state="working" size={20} />{agent} is working… <Elapsed since={since} />
     </p>
   ) : null
 })
@@ -451,13 +452,14 @@ function SessionAside({ s, blocks, isOwner }: { s: Session; blocks: ReturnType<t
       {isOwner && (
         <section className="flex flex-col gap-2">
           <h2 className="font-medium">Usage</h2>
-          <PlanUsage profile={s.profile} sessionId={s.id} />
+          <PlanUsage profile={s.profile} sessionId={s.id} limits={HARNESS[harnessOf(s)].planLimits} />
         </section>
       )}
       <section className="flex flex-col gap-2">
         <h2 className="font-medium">Details</h2>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
           <dt className="text-muted-foreground">Folder</dt><dd className="truncate font-mono" title={s.cwd}>{shortPath(s.cwd, s.owner.username)}</dd>
+          <dt className="text-muted-foreground">Agent</dt><dd>{HARNESS[harnessOf(s)].label}</dd>
           <dt className="text-muted-foreground">Profile</dt><dd>{s.profile}</dd>
           <dt className="text-muted-foreground">Model</dt><dd>{s.model ?? 'Default'}</dd>
           <dt className="text-muted-foreground">Permissions</dt><dd>{modeLabel(s.permissionMode)}</dd>
@@ -481,7 +483,7 @@ function CliView({ id, onEnded }: { id: string; onEnded: () => void }) {
         {status === 'ended' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-term-bg/95 px-6 text-center text-term-fg">
             <SquareTerminal className="size-5" />
-            <p>Claude CLI exited. The conversation continues in Chat.</p>
+            <p>The CLI exited. The conversation continues in Chat.</p>
           </div>
         )}
       </div>
@@ -497,8 +499,11 @@ type Updater = (v: {
 
 /** Model, effort and permissions, changed in place from the chip row. */
 function ModelMenu({ s, disabled, isOwner, onUpdate }: { s: Session; disabled: boolean; isOwner: boolean; onUpdate: Updater }) {
-  const models = useQuery({ ...commandsQuery(s.profile), enabled: !disabled }).data?.models as ModelInfo[] | undefined
-  const list: ModelInfo[] = models?.length ? models : FALLBACK_MODELS
+  const agent = HARNESS[harnessOf(s)]
+  const models = useQuery({ ...commandsQuery(s.profile, harnessOf(s)), enabled: !disabled }).data?.models as ModelInfo[] | undefined
+  const list: ModelInfo[] = models?.length ? models : harnessOf(s) === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
+  // Claude Code's levels for its model; another agent's are its model's own, reported while the session runs.
+  const levels = harnessOf(s) === 'claude' ? effortLevels(list, s.model, EFFORTS) : s.efforts ?? []
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={disabled}>
@@ -520,7 +525,7 @@ function ModelMenu({ s, disabled, isOwner, onUpdate }: { s: Session; disabled: b
           <DropdownMenuSubTrigger>Permissions: {modeLabel(s.permissionMode)}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-72">
             <DropdownMenuRadioGroup value={s.permissionMode} onValueChange={(v) => onUpdate({ permissionMode: v as PermissionMode })}>
-              {PERMISSION_MODES.map((p) => (
+              {PERMISSION_MODES.filter((p) => agent.modes.includes(p.value)).map((p) => (
                 <DropdownMenuRadioItem key={p.value} value={p.value} className="items-start">
                   <span className="flex flex-col"><span>{p.label}</span><span className="text-xs text-muted-foreground">{p.hint}</span></span>
                 </DropdownMenuRadioItem>
@@ -528,21 +533,21 @@ function ModelMenu({ s, disabled, isOwner, onUpdate }: { s: Session; disabled: b
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        <DropdownMenuSub>
+        {agent.effort && (harnessOf(s) === 'claude' || levels.length > 0) && <DropdownMenuSub>
           <DropdownMenuSubTrigger>Effort: {s.effort ?? 'auto'}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <DropdownMenuRadioGroup value={s.effort ?? ''} onValueChange={(v) => onUpdate({ effort: (v || null) as Effort | null })}>
               <DropdownMenuRadioItem value="">Auto</DropdownMenuRadioItem>
-              {effortLevels(list, s.model, EFFORTS).map((e) => <DropdownMenuRadioItem key={e} value={e} className="capitalize">{e}</DropdownMenuRadioItem>)}
+              {levels.map((e) => <DropdownMenuRadioItem key={e} value={e} className="capitalize">{e}</DropdownMenuRadioItem>)}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <p className="px-2 py-1.5 text-xs text-muted-foreground">{s.mode === 'cli' ? 'In the CLI it applies when the CLI next opens; use /effort to change it right away.' : 'Applies right away, even mid-answer.'}</p>
           </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSeparator />
-        <SwitchRow label="Fast mode" checked={s.fastMode} onChange={(v) => onUpdate({ fastMode: v })}
-          hint={`${FAST_HINT}${s.mode === 'cli' ? ' In the CLI it applies when the CLI next opens; /fast switches it now.' : ''}`} />
-        {isOwner && (
+        </DropdownMenuSub>}
+        {(agent.fast || (agent.remote && isOwner)) && <DropdownMenuSeparator />}
+        {agent.fast && <SwitchRow label="Fast mode" checked={s.fastMode} onChange={(v) => onUpdate({ fastMode: v })}
+          hint={`${FAST_HINT}${s.mode === 'cli' ? ' In the CLI it applies when the CLI next opens; /fast switches it now.' : ''}`} />}
+        {isOwner && agent.remote && (
           <SwitchRow label="Remote Control" checked={s.remoteControl} onChange={(v) => onUpdate({ remoteControl: v })}
             hint={`${REMOTE_HINT}${s.mode === 'cli' ? ' In the CLI it applies when the CLI next opens; /remote-control switches it now.' : ''}`} />
         )}
@@ -565,7 +570,7 @@ function SessionMenu({ s, isOwner, canSend, access, onUpdate, onShare, onRename,
   s: Session; isOwner: boolean; canSend: boolean; access?: string; onUpdate: Updater; onShare: () => void; onRename: () => void; onUsage: () => void; onTailnet: () => void
 }) {
   const navigate = useNavigate()
-  const archive = useArchiveSession(() => void navigate({ to: '/claude' }))
+  const archive = useArchiveSession(() => void navigate({ to: '/sessions' }))
   return (
     <>
     {archive.dialog}
@@ -589,13 +594,13 @@ function SessionMenu({ s, isOwner, canSend, access, onUpdate, onShare, onRename,
           </>
         ) : (
           <p className="px-2 py-1.5 text-sm text-muted-foreground">
-            {s.owner.name} shared this session. Claude runs as {s.owner.name}
+            {s.owner.name} shared this session. {agentName(s.harness)} runs as {s.owner.name}
             {access === 'full' ? '; you have full access.' : canSend ? `; you can ask it, and ${s.owner.name} approves anything that uses their access.` : '.'}
           </p>
         )}
         <DropdownMenuSeparator />
         <PinMenuItem kind="session" id={s.id} />
-        <DropdownMenuItem asChild><Link to="/claude/setup">Claude setup</Link></DropdownMenuItem>
+        <DropdownMenuItem asChild><Link to="/sessions/setup">Agent setup</Link></DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
     </>
@@ -679,7 +684,7 @@ function TailnetDialog({ open, onOpenChange, s, onUpdate }: {
                 </div>
               ))}
               <Button type="button" size="sm" variant="outline" className="self-start" disabled={mcps.length >= 8} onClick={() => setMcps((v) => [...v, { name: '', url: '' }])}><Plus />Add MCP</Button>
-              <FieldDescription>MCP servers on your tailnet (e.g. IDA Pro), each exposed to this session over the proxy and named for Claude. Hosts must be tailnet addresses (100.x or a *.ts.net name). Up to 8.</FieldDescription>
+              <FieldDescription>MCP servers on your tailnet (e.g. IDA Pro), each exposed to this session over the proxy and named for the agent. Hosts must be tailnet addresses (100.x or a *.ts.net name). Up to 8.</FieldDescription>
             </Field>
           )}
           <ErrorAlert error={error} />

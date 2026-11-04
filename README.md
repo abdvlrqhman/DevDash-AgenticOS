@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/hero-dark.png">
-  <img alt="DevDash: a Claude Code session running in DevDash, next to the team's other sessions" src=".github/assets/hero-light.png">
+  <img alt="DevDash: a coding agent's session running in DevDash, next to the team's other sessions on Claude Code and OpenCode" src=".github/assets/hero-light.png">
 </picture>
 
 <br>
@@ -27,10 +27,10 @@ turns a single server into that place:
 
 - **One environment for everyone.** Projects are shared git checkouts on the server. Each agent session can work in its
   own git worktree, so parallel work never collides.
-- **Agents are teammates, not tabs.** Start Claude Code from the browser or your phone, watch it work live, share the
-  session with a colleague, answer its questions, and pick up the result as a branch, a pull request or a merge.
-- **Everyone stays separate.** Each person is a real Linux user with their own home, shell, Claude login, cloud storage
-  and private network. DevDash itself never runs as root.
+- **Agents are teammates, not tabs.** Start Claude Code or OpenCode from the browser or your phone, watch it work live,
+  share the session with a colleague, answer its questions, and pick up the result as a branch, a pull request or a merge.
+- **Everyone stays separate.** Each person is a real Linux user with their own home, shell, agent logins, cloud
+  storage and private network. DevDash itself never runs as root.
 - **You own it.** One server, one domain, free for noncommercial use. No SaaS account and no data leaving your machine, except what
   you choose to connect.
 
@@ -42,21 +42,26 @@ turns a single server into that place:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/agents-dark.png">
-  <img alt="A Claude Code session in DevDash: tool steps with a diff, test results, a teammate's message, to-dos, changed files and usage" src=".github/assets/agents-light.png">
+  <img alt="A session in DevDash: tool steps with a diff, test results, a teammate's message, to-dos, changed files and usage; beside it, a phone starting a new session with OpenCode picked as the agent" src=".github/assets/agents-light.png">
 </picture>
 
-Every session is Claude Code itself, run as the member who started it.
+Every session is a real coding agent, run as the member who started it.
 
-- **Two ways to work.** A chat view built on the Claude Agent SDK, with tool steps, diffs, subagents, to-do lists and
-  file links that open in a viewer, or the real Claude Code CLI in a terminal. Switch a session between them any time.
-- **Your own Claude account.** Each member signs in to their own Claude plan, with optional extra profiles. Cost,
-  tokens, context and plan limits are shown per session.
+- **Your choice of agent.** Each session runs Claude Code, or OpenCode with any model provider: Anthropic, OpenAI,
+  Google, OpenRouter, GitHub Copilot, local models and more. Pick it per session; team roles pick theirs too. DevDash
+  drives Claude Code through its Agent SDK and OpenCode over the [Agent Client Protocol](https://agentclientprotocol.com),
+  so more ACP agents can follow.
+- **Two ways to work.** A chat view with tool steps, diffs, subagents, to-do lists, permission prompts, questions and
+  file links that open in a viewer, or the agent's own terminal app (the Claude Code CLI, OpenCode's TUI). Switch a
+  session between them any time.
+- **Your own accounts.** Each member signs in to their own Claude plan and their own OpenCode providers, with optional
+  extra profiles for each. Cost, tokens and context are shown per session, and Claude plan limits too.
 - **Shared on your terms.** Keep a session private, share it with the whole team or with chosen people, read-only or
   with permission to type. Comments, live viewers and "ask to join" included.
 - **A worktree per session.** A session can get a fresh worktree on its own branch. When it's done, *Ready to review*
   shows the diff and opens a GitHub pull request or merges it on the server.
 - **Project instructions** apply to every new session in a project, like a Claude Project.
-- **Team roles (optional).** AI team members per project (CEO, CTO, marketing and so on) with goals, schedules,
+- **Team roles (optional).** AI team members per project (CEO, CTO, marketing and so on), on Claude Code or OpenCode, with goals, schedules,
   triggers, threads, approvals and a shared notebook. Switch them off server-wide with `DEVDASH_TEAM=0`.
 
 ### Workspace
@@ -82,7 +87,7 @@ Everything the team and its agents work on, in one place.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/ops-dark.png">
-  <img alt="The Server page with a deploy request from a teammate's Claude session, health and backups, in front of the services list" src=".github/assets/ops-light.png">
+  <img alt="The Server page with a deploy request from a teammate's session, health, backups and the agents' versions, in front of the services list" src=".github/assets/ops-light.png">
 </picture>
 
 The server takes care of itself.
@@ -99,7 +104,7 @@ The server takes care of itself.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/devices-dark.png">
-  <img alt="DevDash on a desktop window and two phones: a Claude session and the task board" src=".github/assets/devices-light.png">
+  <img alt="DevDash on a desktop window and two phones: a session and the task board" src=".github/assets/devices-light.png">
 </picture>
 
 - **Web:** any modern browser, installable as an app.
@@ -126,7 +131,7 @@ The server takes care of itself.
   served from a separate origin.
 - **`devdash-server`** holds accounts, sessions, projects, tasks, notes, files, notifications and deploys in SQLite. It
   runs as its own unprivileged user.
-- **`devdash-agent@<member>`** runs as each member's Linux user: Claude Code, terminals, services, files, git, Drive and
+- **`devdash-agent@<member>`** runs as each member's Linux user: Claude Code, OpenCode, terminals, services, files, git, Drive and
   Tailscale all happen with that person's own permissions. It talks to the server over a local socket.
 - **`devdash-helper`** is the only part that runs as root. It accepts a handful of validated operations: creating users,
   starting the shared browser and deploying.
@@ -134,10 +139,10 @@ The server takes care of itself.
 | Part | Stack | Where |
 | --- | --- | --- |
 | Server | Node 24, Hono, built-in `node:sqlite`, TypeScript run directly by Node | [`apps/server`](apps/server) |
-| Agent | Node 24, Claude Agent SDK, node-pty, tmux; one systemd service per member | [`apps/agent`](apps/agent) |
+| Agent | Node 24, Claude Agent SDK, Agent Client Protocol (OpenCode), node-pty, tmux; one systemd service per member | [`apps/agent`](apps/agent) |
 | Web app | React, TanStack Router and Query, Tailwind CSS, shadcn/ui, Vite | [`apps/web`](apps/web) |
 | Native apps | Tauri 2 (Windows, Android, iOS), with small Kotlin and Swift additions | [`apps/shell`](apps/shell) |
-| Claude plugin | MCP tools that let agents use tasks, notes, services and more | [`packages/claude-plugin`](packages/claude-plugin) |
+| Agent plugins | MCP tools that let agents use tasks, notes, services and more; status from the agents' terminal apps | [`packages/claude-plugin`](packages/claude-plugin), [`packages/opencode-plugin`](packages/opencode-plugin) |
 | Host setup | Bash, systemd units, Caddy | [`deploy`](deploy) |
 
 ## Self-hosting
@@ -150,8 +155,9 @@ The server takes care of itself.
 - Optional: **Docker**, for the shared remote browser.
 
 The setup installs Node 24, Caddy, the GitHub CLI, rclone and Tailscale (pinned and checksum-verified where
-applicable) and configures SSH hardening, a firewall, swap and automatic security updates. Claude Code is installed and
-kept up to date from the *Server* page; each member then signs in with their own Claude account.
+applicable) and configures SSH hardening, a firewall, swap and automatic security updates. The coding agents,
+Claude Code and OpenCode, are installed and kept up to date from the *Server* page, one click each; members then sign
+in to their own Claude account or OpenCode providers on *Agent setup*.
 
 ### Install
 
@@ -251,11 +257,12 @@ services, the root helper) need a real install.
 ```
 apps/
   server/         HTTP API, WebSockets, SQLite migrations, admin CLI
-  agent/          per-member agent: Claude Code, terminals, services, files, git
+  agent/          per-member agent: Claude Code, OpenCode, terminals, services, files, git
   web/            the web app
   shell/          Tauri desktop and mobile apps (Kotlin and Swift additions in android/ and plugins/)
 packages/
-  claude-plugin/  MCP tools and skills DevDash gives to Claude Code
+  claude-plugin/  MCP tools and skills DevDash gives to agents (OpenCode gets the same MCP tools)
+  opencode-plugin/ the status of OpenCode's terminal app, for DevDash
 deploy/           host bootstrap, installer, systemd units, Caddyfile, root helper, deploy scripts
 ```
 

@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { api, unwrap } from '@/lib/api'
 import { openExternal } from '@/lib/shell'
 import { cn } from '@/lib/utils'
+import { agentName } from './harness'
 import type { Session } from './data'
 
 // Why fast mode isn't serving, from Claude Code's fast_mode_disabled_reason.
@@ -119,7 +120,7 @@ export function SessionChips({ s, isOwner, canSend, working, onUpdate, onCompact
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
               <div className={cn('h-full rounded-full bg-foreground', ctx.percent >= 90 ? 'bg-destructive' : ctx.percent >= 75 && 'bg-attention')} style={{ width: `${Math.min(100, ctx.percent)}%` }} />
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">{k(ctx.tokens)} of {k(ctx.max)} tokens, as of Claude's last answer. When it fills up, Claude compacts the conversation by itself.</p>
+            <p className="mt-2 text-xs text-muted-foreground">{k(ctx.tokens)} of {k(ctx.max)} tokens, as of the last answer. When it fills up, {agentName(s.harness)} compacts the conversation by itself.</p>
             {canSend && (
               <Button size="sm" variant="outline" className="mt-3 w-full" disabled={working} onClick={onCompact}>
                 Compact now
@@ -147,7 +148,7 @@ export function SessionChips({ s, isOwner, canSend, working, onUpdate, onCompact
           <PopoverContent align="start" className="w-80 text-sm">
             <p className="font-medium">Reaching your tailnet</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              This session's ssh, curl and frida reach your private devices by their 100.x addresses. Claude's own Anthropic traffic is not proxied.
+              This session's ssh, curl and frida reach your private devices by their 100.x addresses. The agent's own traffic to its model provider is not proxied.
             </p>
             {s.tailnetMcps?.length ? <p className="mt-2 break-all text-xs text-muted-foreground">MCP: <span className="font-mono">{s.tailnetMcps.map((m) => m.name).join(', ')}</span></p> : null}
           </PopoverContent>

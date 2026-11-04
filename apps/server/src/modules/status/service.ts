@@ -36,53 +36,73 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
       return { id: target.split('/').pop() ?? target, since: Math.floor(statSync(target).mtimeMs / 1000) }
     } catch { return null }
   }
-  // The version of the Claude Code binary DevDash runs (asked once per update, not on every page load).
-  let claude: { at: number; version: string | null } = { at: 0, version: null }
-  async function claudeVersion() {
-    if (Date.now() - claude.at < 10 * 60_000) return claude.version
-    const out = await run('/opt/devdash/claude/current/bin/claude', ['--version'], { timeout: 10_000 }).then((r) => r.stdout, () => '')
-    claude = { at: Date.now(), version: out.match(/\d+\.\d+\.\d+/)?.[0] ?? null }
-    return claude.version
-  }
-
-  // Claude Code comes from the Agent SDK package (deploy/claude-update.sh); the installed SDK version names its folder.
-  const installedSdk = () => { try { return readlinkSync('/opt/devdash/claude/current').split('/').pop() ?? null } catch { return null } }
-  let latest: { at: number; version: string | null } = { at: 0, version: null }
-  async function latestSdk() {
-    if (Date.now() - latest.at < 60 * 60_000) return latest.version
-    const v = await fetch('https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/latest', { signal: AbortSignal.timeout(5000) })
-      .then((r) => r.json() as Promise<{ version?: string }>).then((j) => j.version ?? null, () => null)
-    latest = { at: Date.now(), version: v ?? latest.version }
-    return latest.version
-  }
   const helper = <T>(cmd: string, timeoutMs = 15_000) => requestLine<{ ok: boolean; error?: string } & T>(join(runDir, 'helper.sock'), { cmd }, timeoutMs)
     .then((r) => { if (!r.ok) throw new Error(r.error ?? `${cmd} failed`); return r })
-  const askUpdating = () => helper<{ state: string; result: string }>('claude-update-status').then((r) => r.state === 'activating' || r.state === 'active', () => false)
-  // Each helper call starts a root process: the Server page (polled every 15 s) reuses the answer for 30 s.
-  let updatingSeen = { at: 0, value: false }
-  async function updating() {
-    if (watching) return true
-    if (Date.now() - updatingSeen.at > 30_000) updatingSeen = { at: Date.now(), value: await askUpdating() }
-    return updatingSeen.value
-  }
 
-  // After an update finishes: read the version again, and let agents restart onto the new SDK once no turn runs.
-  let watching = false
-  async function watchUpdate() {
-    if (watching) return
-    watching = true
-    try {
-      const started = Date.now()
-      do {
-        await new Promise((r) => setTimeout(r, 5000))
-      } while ((await askUpdating()) && Date.now() - started < 20 * 60_000)
-      claude = { at: 0, version: null }
-      updatingSeen = { at: 0, value: false }
-      await agents.upgradeAll((members.all() as { username: string }[]).map((m) => m.username))
-    } finally {
-      watching = false
+  /**
+   * A coding agent installed for everyone in /opt/devdash/<name> (deploy/<name>-update.sh): the version it runs (asked
+   * once per update, not on every page load), the installed and newest package versions, and its install/update job.
+   */
+  function agentInstall(o: { name: string; bin: string; pkg: string; afterUpdate?: () => Promise<unknown> }) {
+    let running: { at: number; version: string | null } = { at: 0, version: null }
+    let latest: { at: number; version: string | null } = { at: 0, version: null }
+    async function version() {
+      if (Date.now() - running.at < 10 * 60_000) return running.version
+      const out = await run(o.bin, ['--version'], { timeout: 10_000 }).then((r) => r.stdout, () => '')
+      running = { at: Date.now(), version: out.match(/\d+\.\d+\.\d+/)?.[0] ?? null }
+      return running.version
+    }
+    // The installed package version names its folder.
+    const installed = () => { try { return readlinkSync(`/opt/devdash/${o.name}/current`).split('/').pop() ?? null } catch { return null } }
+    async function newest() {
+      if (Date.now() - latest.at < 60 * 60_000) return latest.version
+      const v = await fetch(`https://registry.npmjs.org/${o.pkg}/latest`, { signal: AbortSignal.timeout(5000) })
+        .then((r) => r.json() as Promise<{ version?: string }>).then((j) => j.version ?? null, () => null)
+      latest = { at: Date.now(), version: v ?? latest.version }
+      return latest.version
+    }
+    const askUpdating = () => helper<{ state: string; result: string }>(`${o.name}-update-status`).then((r) => r.state === 'activating' || r.state === 'active', () => false)
+    // Each helper call starts a root process: the Server page (polled every 15 s) reuses the answer for 30 s.
+    let updatingSeen = { at: 0, value: false }
+    let watching = false
+    async function updating() {
+      if (watching) return true
+      if (Date.now() - updatingSeen.at > 30_000) updatingSeen = { at: Date.now(), value: await askUpdating() }
+      return updatingSeen.value
+    }
+    // After an update finishes: read the version again, then whatever the agent needs (Claude: agents restart onto it).
+    async function watch() {
+      if (watching) return
+      watching = true
+      try {
+        const started = Date.now()
+        do {
+          await new Promise((r) => setTimeout(r, 5000))
+        } while ((await askUpdating()) && Date.now() - started < 20 * 60_000)
+        running = { at: 0, version: null }
+        updatingSeen = { at: 0, value: false }
+        await o.afterUpdate?.()
+      } finally {
+        watching = false
+      }
+    }
+    return {
+      version,
+      state: async () => ({ installed: installed(), latest: await newest(), updating: await updating() }),
+      async update() {
+        if (await askUpdating()) return
+        await helper(`${o.name}-update`)
+        void watch().catch((err) => console.error(`${o.name} update:`, err))
+      },
     }
   }
+  // Claude Code comes from the Agent SDK package; agents restart onto a new one once no turn runs.
+  const claude = agentInstall({
+    name: 'claude', bin: '/opt/devdash/claude/current/bin/claude', pkg: '@anthropic-ai/claude-agent-sdk',
+    afterUpdate: () => agents.upgradeAll((members.all() as { username: string }[]).map((m) => m.username)),
+  })
+  // OpenCode starts a new process per session, so a new version applies to the next session by itself.
+  const opencode = agentInstall({ name: 'opencode', bin: '/opt/devdash/opencode/current/bin/opencode', pkg: '@opencode/cli' })
 
   return {
     release,
@@ -103,8 +123,9 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
       return {
         host: { uptime: Math.floor(uptime()), load: loadavg(), cpus: cpus().length, memory: memory(), disk: disk() },
         software: {
-          devdash: version, release: release(), claude: await claudeVersion(), node: process.versions.node,
-          claudeSdk: { installed: installedSdk(), latest: await latestSdk(), updating: await updating() },
+          devdash: version, release: release(), claude: await claude.version(), node: process.versions.node,
+          claudeSdk: await claude.state(),
+          opencode: { version: await opencode.version(), ...(await opencode.state()) },
         },
         backup: backup ? JSON.parse(backup) as { at: number; ok: boolean; snapshot: string; bytes: number; offsite: boolean; note: string } : null,
         agents: agentStates,
@@ -115,11 +136,9 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
     },
 
     /** Admins: Claude Code to the latest version for everyone. Running sessions keep their version until they restart. */
-    async updateClaude() {
-      if (await askUpdating()) return
-      await helper('claude-update')
-      void watchUpdate().catch((err) => console.error('claude update:', err))
-    },
+    updateClaude: () => claude.update(),
+    /** Admins: install OpenCode, or update it to the latest version, for everyone. */
+    updateOpencode: () => opencode.update(),
 
     async backupNow() {
       const r = await requestLine<{ ok: boolean; error?: string }>(join(runDir, 'helper.sock'), { cmd: 'backup-run' }, 30_000)

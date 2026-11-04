@@ -13,6 +13,7 @@ import { ErrorAlert } from '../auth/LoginPage'
 import { useMembers } from '../work/TaskBits'
 import type { Person } from './Collab'
 import type { Session } from './data'
+import { agentName } from './harness'
 
 type Audience = 'private' | 'everyone' | 'people'
 export type SharedPerson = Person & { canSend: boolean; full?: boolean }
@@ -46,8 +47,8 @@ const AUDIENCE: { value: Audience; label: string }[] = [
 ]
 
 /** One line for who can see a session, e.g. "Shared with 2 people". Empty when only the owner can. */
-export function sharingLabel(s: Pick<Session, 'audience' | 'sharedWith' | 'sharedCanSend'>) {
-  if (s.audience === 'everyone') return s.sharedCanSend ? 'shared, others can ask Claude' : 'shared'
+export function sharingLabel(s: Pick<Session, 'audience' | 'sharedWith' | 'sharedCanSend'> & { harness?: string }) {
+  if (s.audience === 'everyone') return s.sharedCanSend ? `shared, others can ask ${agentName(s.harness)}` : 'shared'
   if (s.audience === 'people') return `shared with ${s.sharedWith} ${s.sharedWith === 1 ? 'person' : 'people'}`
   return ''
 }
@@ -122,7 +123,7 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
             <>
               <label className="flex cursor-pointer items-center justify-between gap-3 text-sm">
                 <span className="flex flex-col gap-0.5">
-                  <span>Everyone can ask Claude</span>
+                  <span>Everyone can ask {agentName(s.harness)}</span>
                   <span className="text-xs text-muted-foreground">What would use your accounts or private files waits for your approval, unless you share it below.</span>
                 </span>
                 <Switch checked={everyoneCanSend} onCheckedChange={setEveryoneCanSend} />
@@ -202,7 +203,7 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
                 ))}
               </div>
               <FieldDescription>
-                Off: Claude asks you each time. Other commands run, and Claude never does anything for them that harms you.
+                Off: {agentName(s.harness)} asks you each time. Other commands run, and {agentName(s.harness)} never does anything for them that harms you.
                 {s.project && (follow
                   ? <> Your settings for {s.project.name}.</>
                   : <> Just this session. <button type="button" className="underline underline-offset-4 hover:text-foreground" onClick={() => setFollow(true)}>Use my {s.project.name} settings</button></>)}
@@ -212,7 +213,7 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
 
           <ErrorAlert error={error} />
           <p className="text-xs text-muted-foreground">
-            {audience === 'private' ? 'Only you can see this session.' : 'Claude runs as you. When others ask it for something that would use your access, you decide.'}
+            {audience === 'private' ? 'Only you can see this session.' : `${agentName(s.harness)} runs as you. When others ask it for something that would use your access, you decide.`}
           </p>
           <Button type="submit" className="h-10" disabled={save.isPending || emptyPick}>
             {save.isPending ? 'Saving…' : emptyPick ? 'Pick at least one person' : 'Save'}

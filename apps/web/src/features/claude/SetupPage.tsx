@@ -15,9 +15,12 @@ import { api, unwrap } from '@/lib/api'
 import { ErrorAlert } from '../auth/LoginPage'
 import { FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, type PermissionMode } from './data'
 import { describeMemory, memoryQuery } from './memory'
+import { HARNESS, HARNESSES, harnessOf } from './harness'
 
 type Profile = { name: string; loggedIn: boolean; authMethod: string | null; email: string | null; plan: string | null; memory: boolean }
-type Defaults = { profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
+type Defaults = { harness: string; profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
+/** Another coding agent on this server, as the member's agent sees it (apps/agent/src/harness.ts). */
+type Agent = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[] }
 
 const profileName = (p: Profile) => (p.name === 'default' ? 'Default' : p.name)
 
@@ -28,7 +31,7 @@ export function SetupPage() {
   const profiles = (q.data?.profiles as Profile[] | undefined) ?? []
   const [name, setName] = useState('')
   const create = useMutation({
-    mutationFn: () => unwrap(api.api.claude.profiles.$post({ json: { name } })),
+    mutationFn: () => unwrap(api.api.claude.profiles.$post({ json: { name, harness: 'claude' } })),
     onSuccess: () => {
       toast.success(`Profile ${name} added`)
       setName('')
@@ -39,9 +42,9 @@ export function SetupPage() {
 
   return (
     <>
-      <PageHeader title="Claude setup" back="/claude" />
+      <PageHeader title="Agent setup" back="/sessions" />
       <PageBody className="gap-12 py-8 md:py-12">
-        <Group title="Profiles" description="A profile is its own Claude configuration: settings, skills, agents, plugins, memory and sign-in. The same Claude account can sign in to any number of profiles.">
+        <Group title="Claude Code profiles" description="A profile is its own Claude configuration: settings, skills, agents, plugins, memory and sign-in. The same Claude account can sign in to any number of profiles.">
           <ErrorAlert error={q.error} />
           {/* Whether Claude can work at all: each profile's sign-in, the boldest thing on the page. */}
           {q.isPending ? <Skeleton className="h-[4.5rem] rounded-2xl" /> : (
@@ -76,9 +79,63 @@ export function SetupPage() {
           </p>
         </Group>
         {!q.isPending && profiles.length > 0 && <MemorySection profiles={profiles} />}
-        {q.data && <DefaultsCard profiles={profiles} initial={q.data.defaults} />}
+        {q.data && <OpenCodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 'opencode')} onConnect={(p) => navigate({ to: '/terminal', search: { open: `oc-login-${p}` } })} />}
+        {q.data && <DefaultsCard profiles={profiles} agents={q.data.agents as Agent[]} initial={q.data.defaults} />}
       </PageBody>
     </>
+  )
+}
+
+/** OpenCode: whether it's installed, and per profile the model providers it connected (their keys stay in the member's account). */
+function OpenCodeSection({ agent, onConnect }: { agent: Agent | undefined; onConnect: (profile: string) => void }) {
+  const qc = useQueryClient()
+  const [name, setName] = useState('')
+  const create = useMutation({
+    mutationFn: () => unwrap(api.api.claude.profiles.$post({ json: { name, harness: 'opencode' } })),
+    onSuccess: () => {
+      toast.success(`OpenCode profile ${name} added`)
+      setName('')
+      void qc.invalidateQueries({ queryKey: profilesQuery.queryKey })
+    },
+  })
+  return (
+    <Group title="OpenCode profiles" description="OpenCode is an open-source coding agent that works with any model provider: Anthropic, OpenAI, Google, OpenRouter, GitHub Copilot, local models and more. Each profile has its own provider sign-ins and sessions. Pick OpenCode as the agent when you start a session.">
+      {!agent?.installed ? (
+        <div className="flex items-center gap-3 rounded-2xl bg-surface px-4 py-3.5 text-sm">
+          <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state="idle" /></span>
+          <span className="min-w-0 flex-1"><span className="block font-medium">Not installed</span><span className="block text-muted-foreground">An admin can install it from the Server page.</span></span>
+        </div>
+      ) : (
+        <>
+          <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
+            {agent.profiles.map((p) => (
+              <li key={p.name} className="flex items-center gap-3 rounded-xl px-3 py-3">
+                <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={p.providers.length ? 'live' : 'idle'} /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{p.name === 'default' ? 'Default' : p.name}</span>
+                  <span className="block text-sm text-pretty text-muted-foreground">{p.providers.length ? p.providers.join(', ') : 'No provider connected. Its free models still work.'}</span>
+                </span>
+                <Button size="sm" variant={p.providers.length ? 'ghost' : 'default'} className={p.providers.length ? 'hover:bg-surface-2 dark:hover:bg-surface-2' : undefined} onClick={() => onConnect(p.name)}>
+                  <LogIn />{p.providers.length ? 'Connect another' : 'Connect a provider'}
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <form onSubmit={(e: FormEvent) => { e.preventDefault(); if (name) create.mutate() }} className="flex items-end gap-2">
+            <Field className="flex-1">
+              <FieldLabel htmlFor="new-oc-profile">New OpenCode profile</FieldLabel>
+              <Input id="new-oc-profile" placeholder="work" value={name} maxLength={21} className="h-9"
+                onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} />
+            </Field>
+            <Button type="submit" variant="outline" className="h-9" disabled={!name || create.isPending}><Plus />Add</Button>
+          </form>
+          <ErrorAlert error={create.error} />
+          <p className="text-sm text-pretty text-muted-foreground">
+            Connecting opens a terminal running OpenCode's own sign-in: pick a provider, then paste its API key or follow its link. The key is saved in your account only, never in DevDash. OpenCode {agent.version}.
+          </p>
+        </>
+      )}
+    </Group>
   )
 }
 
@@ -102,7 +159,7 @@ const pill = 'rounded-xl'
 /** Per profile: Claude Code's own memory (the default) or claude-mem on top of it. */
 function MemorySection({ profiles }: { profiles: Profile[] }) {
   return (
-    <Group title="Memory" description="Claude Code remembers through CLAUDE.md files and its own auto memory. claude-mem adds to that: it records what Claude does and brings the relevant parts back in later sessions, searchable across projects. It summarizes in the background with your Claude plan, and new sessions pick the change up.">
+    <Group title="Claude Code memory" description="Claude Code remembers through CLAUDE.md files and its own auto memory. claude-mem adds to that: it records what Claude does and brings the relevant parts back in later sessions, searchable across projects. It summarizes in the background with your Claude plan, and new sessions pick the change up.">
       <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
         {profiles.map((p) => <MemoryRow key={p.name} profile={p} />)}
       </ul>
@@ -184,12 +241,12 @@ function MemoryRow({ profile: p }: { profile: Profile }) {
   )
 }
 
-function DefaultsCard({ profiles, initial }: { profiles: Profile[]; initial: Defaults }) {
+function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles: Profile[]; agents: Agent[]; initial: Defaults }) {
   const qc = useQueryClient()
   const [d, setD] = useState(initial)
   useEffect(() => setD(initial), [initial])
   const save = useMutation({
-    mutationFn: (next: Defaults) => unwrap(api.api.claude.defaults.$put({ json: { ...next, effort: null, permission_mode: next.permission_mode as PermissionMode } })),
+    mutationFn: (next: Defaults) => unwrap(api.api.claude.defaults.$put({ json: { ...next, harness: harnessOf(next), effort: null, permission_mode: next.permission_mode as PermissionMode } })),
     onSuccess: () => {
       toast.success('Defaults saved')
       void qc.invalidateQueries({ queryKey: profilesQuery.queryKey })
@@ -200,6 +257,8 @@ function DefaultsCard({ profiles, initial }: { profiles: Profile[]; initial: Def
     setD(next)
     save.mutate(next)
   }
+  const harness = harnessOf(d)
+  const profiles = harness === 'claude' ? claudeProfiles.map((p) => p.name) : agents.find((a) => a.harness === harness)?.profiles.map((p) => p.name) ?? ['default']
   const Row = ({ id, label, value, options, onPick, description }: { id: string; label: string; value: string; options: { value: string; label: string }[]; onPick: (v: string) => void; description?: string }) => (
     <Field>
       <FieldLabel id={id}>{label}</FieldLabel>
@@ -213,10 +272,12 @@ function DefaultsCard({ profiles, initial }: { profiles: Profile[]; initial: Def
     <Group title="Defaults for new sessions" description="You can change any of these per session.">
       <div className="rounded-2xl bg-surface p-4 md:p-5">
         <FieldGroup>
-          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v })} options={profiles.map((p) => ({ value: p.name, label: profileName(p) }))} />}
-          <Row id="d-model" label="Model" value={d.model ?? ''} onPick={(v) => set({ model: v || null })} options={FALLBACK_MODELS.map((m) => ({ value: m.value, label: m.displayName }))} />
+          <Row id="d-agent" label="Agent" value={harness} onPick={(v) => set({ harness: v, profile: 'default', model: null, permission_mode: HARNESS[harnessOf({ harness: v })].modes.includes(d.permission_mode as PermissionMode) ? d.permission_mode : 'bypassPermissions' })}
+            options={HARNESSES.map((h) => ({ value: h, label: HARNESS[h].label }))} />
+          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v })} options={profiles.map((p) => ({ value: p, label: p === 'default' ? 'Default' : p }))} />}
+          {harness === 'claude' && <Row id="d-model" label="Model" value={d.model ?? ''} onPick={(v) => set({ model: v || null })} options={FALLBACK_MODELS.map((m) => ({ value: m.value, label: m.displayName }))} />}
           <Row id="d-perm" label="Permissions" value={d.permission_mode} onPick={(v) => set({ permission_mode: v })}
-            options={PERMISSION_MODES.map((p) => ({ value: p.value, label: p.label }))} description={PERMISSION_MODES.find((p) => p.value === d.permission_mode)?.hint} />
+            options={PERMISSION_MODES.filter((p) => HARNESS[harness].modes.includes(p.value)).map((p) => ({ value: p.value, label: p.label }))} description={PERMISSION_MODES.find((p) => p.value === d.permission_mode)?.hint} />
           <Row id="d-open" label="Open sessions in" value={d.open_in} onPick={(v) => set({ open_in: v as 'chat' | 'cli' })} options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]} />
           <ErrorAlert error={save.error} />
         </FieldGroup>

@@ -8,12 +8,14 @@ import { createServer, type Socket } from 'node:net'
 import { promisify } from 'node:util'
 import { createInterface } from 'node:readline'
 import * as claude from './claude.ts'
+import * as harness from './harness.ts'
 import * as services from './services.ts'
 import * as tailscale from './tailscale.ts'
 import * as storage from './storage.ts'
 import { ops as git } from './git.ts'
 import { startJanitor } from './janitor.ts'
 import { startTeamFiles } from './team-files.ts'
+import { startSharedTools } from './shared-tools.ts'
 import * as files from './files.ts'
 import * as memory from './memory.ts'
 import * as mentions from './mentions.ts'
@@ -31,6 +33,8 @@ const GH_LOGIN = 'github-login'
 // Every process the agent starts (terminals, Claude) can reach this agent, e.g. for plugin hooks.
 process.env.DEVDASH_AGENT_SOCKET ??= `/run/devdash/agent-${process.env.USER}.sock`
 process.env.DISABLE_AUTOUPDATER = '1'
+// The team's shared SDKs and package caches (shared-tools.ts), before any session, terminal or service starts.
+startSharedTools()
 
 async function ensureTerminal(name: string, cols: number, rows: number) {
   if (await hasSession(term(name))) return
@@ -43,6 +47,12 @@ async function ensureTerminal(name: string, cols: number, rows: number) {
       + ' && echo && echo "GitHub is connected. This tab closes in a few seconds." && sleep 4'
       + ' || { echo; echo "GitHub sign-in did not finish."; read -r -p "Press Enter to close this tab. " _; }'
     return void (await tmux(...base, '-e', 'BROWSER=echo', 'bash', '-lc', script))
+  }
+  // Another agent's sign-in (oc-login-<profile>: OpenCode's), else a Claude profile's (login-<profile>).
+  const other = /^oc-login-(.+)$/.exec(name)
+  if (other) {
+    const { env, args } = harness.loginCommand('opencode', other[1]!)
+    return void (await tmux(...base, ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), ...args))
   }
   if (name.startsWith('login-')) {
     const { env, args } = claude.loginCommand(name.slice(6))
@@ -65,6 +75,12 @@ const guestFrom = (v: unknown) => {
   return g && typeof g.id === 'number' && typeof g.name === 'string' ? { id: g.id, name: g.name.slice(0, 120) } : null
 }
 
+/** Session ops go to the session's agent: Claude Code (claude.ts), or one driven over ACP (harness.ts). */
+const launchOf = (r: Req) => r.launch as claude.Launch
+const acp = (r: Req) => harness.isAcp(launchOf(r)?.harness)
+/** Ops that only name the session go to whichever driver has it running. */
+const running = (id: string) => (harness.has(id) ? harness : claude)
+
 const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'terminals.list': async () => ({
     terminals: (await listSessions()).filter((s) => s.name.startsWith('t-')).map((s) => ({ ...s, name: s.name.slice(2) })),
@@ -75,7 +91,8 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
     await tmux('kill-session', '-t', `=${term(name)}`).catch(() => {})
     return { ok: true }
   },
-  hook: (r) => (claude.hook(r.payload as Parameters<typeof claude.hook>[0]), { ok: true }),
+  // Status from a CLI: Claude Code's hooks, or another agent's DevDash plugin (it says which agent).
+  hook: (r) => ((r.payload as { agent?: unknown })?.agent ? harness.cliHook(r.payload as Parameters<typeof harness.cliHook>[0]) : claude.hook(r.payload as Parameters<typeof claude.hook>[0]), { ok: true }),
   upgrade: () => {
     upgrading = true
     return { ok: true }
@@ -83,34 +100,38 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   // The member's cloud storage remote (apps/agent/src/storage.ts): set up when they connect, removed when they disconnect.
   'storage.configure': async (r) => ({ changed: await storage.configure(r.storage as storage.Storage) }),
   'storage.remove': async (r) => ({ changed: await storage.remove(str(r.remote, 'remote'), str(r.tokenUrl, 'tokenUrl')) }),
-  'claude.send': async (r) => (await claude.send(r.launch as claude.Launch, r.content as unknown[], str(r.uuid, 'uuid'), guestFrom(r.guest)), { ok: true }),
-  'claude.answer': (r) => (claude.answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never, { owner: (r.by as { owner?: unknown } | undefined)?.owner === true }), { ok: true }),
-  'claude.interrupt': async (r) => (await claude.interrupt(str(r.id, 'id')), { ok: true }),
-  'claude.set': async (r) => (await claude.setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
-  'claude.remote': (r) => claude.remote(r.launch as claude.Launch, r.enabled === true),
-  'claude.complete': async (r) => ({
-    text: await claude.complete(str(r.profile, 'profile'), str(r.prompt, 'prompt'), {
-      model: typeof r.model === 'string' ? r.model : undefined, system: typeof r.system === 'string' ? r.system : undefined,
-    }),
-  }),
+  'claude.send': async (r) => (await (acp(r) ? harness : claude).send(launchOf(r), r.content as unknown[], str(r.uuid, 'uuid'), guestFrom(r.guest)), { ok: true }),
+  'claude.answer': (r) => (running(str(r.id, 'id')).answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never, { owner: (r.by as { owner?: unknown } | undefined)?.owner === true }), { ok: true }),
+  'claude.interrupt': async (r) => (await running(str(r.id, 'id')).interrupt(str(r.id, 'id')), { ok: true }),
+  'claude.set': async (r) => (await running(str(r.id, 'id')).setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
+  'claude.remote': (r) => (acp(r) ? { url: null } : claude.remote(launchOf(r), r.enabled === true)),
+  'claude.complete': async (r) => {
+    const o = { model: typeof r.model === 'string' ? r.model : undefined, system: typeof r.system === 'string' ? r.system : undefined }
+    return { text: harness.isAcp(r.harness) ? await harness.complete(r.harness, str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) : await claude.complete(str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) }
+  },
   'claude.files': async (r) => ({ paths: await mentions.search(str(r.cwd, 'cwd'), typeof r.q === 'string' ? r.q : '') }),
   'sqlite.query': (r) => sqlite.query(r.path, r.sql),
-  'claude.stop': async (r) => (await claude.stop(str(r.id, 'id')), { ok: true }),
-  'claude.cli.open': async (r) => (await claude.openCli(r.launch as claude.Launch, Number(r.cols) || 100, Number(r.rows) || 30), { ok: true }),
+  // Both drivers: Claude's also closes the CLI's tmux session, whichever agent runs in it.
+  'claude.stop': async (r) => (await Promise.all([harness.stop(str(r.id, 'id')), claude.stop(str(r.id, 'id'))]), { ok: true }),
+  'claude.cli.open': async (r) => (await (acp(r) ? harness : claude).openCli(launchOf(r), Number(r.cols) || 100, Number(r.rows) || 30), { ok: true }),
   'claude.cli.close': async (r) => (await claude.closeCli(str(r.id, 'id')), { ok: true }),
-  'claude.pending': (r) => ({ pending: claude.pendingFor(str(r.id, 'id')) }),
-  'claude.history': (r) => claude.history(r.launch as claude.Launch, { before: typeof r.before === 'string' ? r.before : undefined, turns: Number(r.turns) || 0 }),
-  'claude.subagent': (r) => claude.subagent(r.launch as claude.Launch, str(r.toolUseId, 'toolUseId')),
+  'claude.pending': (r) => ({ pending: running(str(r.id, 'id')).pendingFor(str(r.id, 'id')) }),
+  'claude.history': (r) => (acp(r) ? harness : claude).history(launchOf(r), { before: typeof r.before === 'string' ? r.before : undefined, turns: Number(r.turns) || 0 }),
+  // Another agent's subagents are in the transcript itself, nested under their Task step.
+  'claude.subagent': (r) => (acp(r) ? { found: false, agentType: null, description: null, messages: [] } : claude.subagent(launchOf(r), str(r.toolUseId, 'toolUseId'))),
   'claude.task.stop': async (r) => (await claude.stopTask(str(r.id, 'id'), str(r.taskId, 'taskId')), { ok: true }),
-  'claude.commands': (r) => claude.commandsAndModels(str(r.profile, 'profile')),
-  'claude.title': (r) => claude.title(r.launch as claude.Launch),
-  'claude.rename': async (r) => (await claude.rename(r.launch as claude.Launch, str(r.title, 'title')), { ok: true }),
-  'claude.profiles': async () => ({ profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })) }),
+  'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile')) : claude.commandsAndModels(str(r.profile, 'profile'))),
+  'claude.title': (r) => (acp(r) ? harness : claude).title(launchOf(r)),
+  'claude.rename': async (r) => (await (acp(r) ? harness : claude).rename(launchOf(r), str(r.title, 'title')), { ok: true }),
+  'claude.profiles': async () => ({
+    profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })),
+    agents: await harness.agents().catch(() => []),
+  }),
   'claude.memory': async (r) => (await memory.set(str(r.profile, 'profile'), r.enabled === true), { ok: true }),
   'claude.memory.health': async () => ({ health: await memory.health(claude.profileNames()) }),
   'claude.memory.restart': async () => (await memory.restart(claude.profileNames()), { ok: true }),
   'claude.usage': async (r) => ({ usage: await claude.usage(str(r.profile, 'profile')) }),
-  'claude.profile.create': (r) => (claude.createProfile(str(r.name, 'name')), { ok: true }),
+  'claude.profile.create': (r) => ((harness.isAcp(r.harness) ? harness.createProfile(r.harness, str(r.name, 'name')) : claude.createProfile(str(r.name, 'name'))), { ok: true }),
   'fs.dir': async (r) => ({ path: await services.dir(r.path) }),
   'fs.roots': () => files.ops.roots(),
   'fs.first': (r) => files.ops.first(r),
@@ -189,9 +210,11 @@ async function readReplies(lines: AsyncIterator<string>) {
 }
 
 let events: Socket | null = null
-claude.setEmitter((ev) => {
+const toServer = (ev: Record<string, unknown>) => {
   if (events && !events.destroyed) send(events, ev)
-})
+}
+claude.setEmitter(toServer)
+harness.setEmitter(toServer)
 
 async function handle(conn: Socket) {
   conn.setEncoding('utf8')
@@ -205,7 +228,7 @@ async function handle(conn: Socket) {
       // The server's event connection. The newest one wins; it starts with a snapshot to reconcile statuses.
       events?.destroy()
       events = conn
-      send(conn, { ev: 'snapshot', sessions: await claude.snapshot() })
+      send(conn, { ev: 'snapshot', sessions: [...(await claude.snapshot()), ...harness.snapshot()] })
       conn.on('close', () => { if (events === conn) events = null })
       return void (await readReplies(lines))
     }
@@ -249,7 +272,7 @@ async function handle(conn: Socket) {
 // Claude is cut off mid-answer and nobody's 20 GB upload dies halfway.
 let upgrading = false
 setInterval(() => {
-  if (upgrading && !claude.busy() && !projectBusy()) process.exit(0) // systemd starts the new code
+  if (upgrading && !claude.busy() && !harness.busy() && !projectBusy()) process.exit(0) // systemd starts the new code
 }, 5_000).unref()
 
 // Apply the current tmux.conf and environment to an already running tmux server (no-op when none is running).

@@ -49,7 +49,7 @@ function setup() {
 }
 
 const event = (over: Partial<{ id: number; kind: string; title: string; body: string; url: string; tag: string }> = {}) =>
-  ({ id: 7, kind: 'needs_you', title: 'Claude needs you: deploy', body: 'Approve the plan?', url: '/claude/abc', tag: 'session:abc', ...over })
+  ({ id: 7, kind: 'needs_you', title: 'Claude needs you: deploy', body: 'Approve the plan?', url: '/sessions/abc', tag: 'session:abc', ...over })
 
 const parts = (jwt: string) => {
   const [h, c, s] = jwt.split('.')
@@ -131,7 +131,7 @@ test('a push carries the alert, the page to open, and Apple’s headers', async 
   assert.equal(r.headers['apns-expiration'], String(Math.floor(t.now() / 1000) + 3600))
   assert.deepEqual(JSON.parse(r.body), {
     aps: { alert: { title: 'Claude needs you: deploy', body: 'Approve the plan?' }, sound: 'default', 'thread-id': 'needs_you' },
-    url: 'https://dev.example.com/claude/abc',
+    url: 'https://dev.example.com/sessions/abc',
     id: 7,
   })
 
@@ -232,9 +232,9 @@ test('notify() pushes to the iPhone like Web Push: not while the member is using
   hub.isActive = () => active
   const n = notificationsService({ db: t.db, hub, dataDir: mkdtempSync(join(tmpdir(), 'dd-')), origin: 'https://dev.example.com', apns: t.apns })
 
-  await n.notify(1, 'needs_you', { title: 'Claude needs you: x', url: '/claude/x', tag: 'session:x' })
+  await n.notify(1, 'needs_you', { title: 'Claude needs you: x', url: '/sessions/x', tag: 'session:x' })
   assert.equal(t.apple.sent.length, 1)
-  assert.equal(JSON.parse(t.apple.sent[0]!.body).url, 'https://dev.example.com/claude/x')
+  assert.equal(JSON.parse(t.apple.sent[0]!.body).url, 'https://dev.example.com/sessions/x')
 
   active = true // looking at DevDash somewhere: it shows there instead
   await n.notify(1, 'finished', { title: 'shown in the app' })

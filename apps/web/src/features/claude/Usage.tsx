@@ -71,14 +71,15 @@ function resets(iso: string | null) {
  * limits being the same as /usage in Claude Code. Used on the session page; the session block is only shown
  * where there is a session to show it for.
  */
-export function PlanUsage({ profile, sessionId, className }: { profile: string; sessionId?: string; className?: string }) {
+export function PlanUsage({ profile, sessionId, className, limits = true }: { profile: string; sessionId?: string; className?: string; limits?: boolean }) {
   return (
     <div className={cn('flex flex-col gap-4', className)}>
       {sessionId && <SessionUsage id={sessionId} />}
-      <div className="flex flex-col gap-3">
+      {/* Plan limits are a Claude plan's; other agents bill by their providers. */}
+      {limits && <div className="flex flex-col gap-3">
         {sessionId && <h3 className="text-xs font-medium text-muted-foreground">Plan limits</h3>}
         <PlanLimits profile={profile} />
-      </div>
+      </div>}
     </div>
   )
 }

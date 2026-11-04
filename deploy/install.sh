@@ -26,6 +26,8 @@ getent group devdash-users >/dev/null || groupadd devdash-users
 # Shared git checkouts: every member can work in every project (setgid keeps the group, members' umask is 0002).
 install -d -m 755 /srv/devdash
 install -d -m 2775 -o root -g devdash-users /srv/devdash/projects /srv/devdash/worktrees /srv/devdash/files
+# The team's shared SDKs and package caches (apps/agent/src/shared-tools.ts): one copy for everyone, logins excluded.
+install -d -m 2775 -o root -g devdash-users /srv/devdash/shared
 command -v gh >/dev/null || apt-get install -yq gh >/dev/null
 # Bun for members who switch claude-mem on (its worker runs on Bun and looks for /usr/local/bin/bun).
 if [[ ! -x /usr/local/bin/bun ]]; then
@@ -111,8 +113,9 @@ install -d -m 755 /usr/local/libexec
 install -m 755 -o root -g root "$REL/deploy/helper/devdash-helper.mjs" /usr/local/libexec/devdash-helper.mjs
 install -m 755 -o root -g root "$REL/deploy/backup.sh" /usr/local/libexec/devdash-backup.sh
 install -m 755 -o root -g root "$REL/deploy/claude-update.sh" /usr/local/libexec/devdash-claude-update.sh
+install -m 755 -o root -g root "$REL/deploy/opencode-update.sh" /usr/local/libexec/devdash-opencode-update.sh
 install -m 755 -o root -g root "$REL/deploy/self-deploy.sh" /usr/local/libexec/devdash-deploy.sh
-for unit in system-devdash-agent.slice devdash-server.service devdash-helper.socket devdash-helper@.service devdash-agent@.socket devdash-agent@.service devdash-backup.service devdash-backup.timer devdash-claude-update.service devdash-deploy@.service; do
+for unit in system-devdash-agent.slice devdash-server.service devdash-helper.socket devdash-helper@.service devdash-agent@.socket devdash-agent@.service devdash-backup.service devdash-backup.timer devdash-claude-update.service devdash-opencode-update.service devdash-deploy@.service; do
   install -m 644 "$REL/deploy/systemd/$unit" "/etc/systemd/system/$unit"
 done
 install -m 755 "$REL/deploy/devdash-cli" /usr/local/bin/devdash

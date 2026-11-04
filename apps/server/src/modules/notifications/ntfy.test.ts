@@ -14,7 +14,7 @@ function setup(answer: () => Response = () => new Response('{}')) {
   }) as typeof fetch
   return { db, calls, ntfy: ntfyService({ db, masterKey: randomBytes(32), origin: 'https://dev.example.com', fetch: fake }) }
 }
-const event = { id: 7, kind: 'needs_you', title: 'Which database should we use?', body: 'Postgres · SQLite', url: '/claude/s1', tag: 'session:s1' }
+const event = { id: 7, kind: 'needs_you', title: 'Which database should we use?', body: 'Postgres · SQLite', url: '/sessions/s1', tag: 'session:s1' }
 
 test('turning ntfy on gives a long random topic on ntfy.sh; a token is sealed; the topic can be replaced', () => {
   const { db, ntfy } = setup()
@@ -47,7 +47,7 @@ test('a notification goes to the member’s topic as JSON: title, body, priority
   assert.equal(calls[0]!.headers.authorization, 'Bearer tk_abc')
   assert.deepEqual(calls[0]!.body, {
     topic, title: 'Which database should we use?', message: 'Postgres · SQLite', priority: 4, tags: ['bell'],
-    click: 'https://dev.example.com/claude/s1', icon: 'https://dev.example.com/icon-192.png', sequence_id: 'session-s1',
+    click: 'https://dev.example.com/sessions/s1', icon: 'https://dev.example.com/icon-192.png', sequence_id: 'session-s1',
   })
   assert.ok(ntfy.status(1).lastOkAt)
   // Only pages inside DevDash are tap targets; a long body is kept under ntfy's 4 KB.

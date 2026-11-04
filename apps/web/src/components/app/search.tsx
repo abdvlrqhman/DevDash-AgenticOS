@@ -46,7 +46,7 @@ export function SearchDialog() {
   const empty = r && !r.projects.length && !r.tasks.length && !r.notes.length && !r.sessions.length && !r.services.length
 
   return (
-    <CommandDialog open={open} onOpenChange={setOpen} title="Search" description="Search projects, tasks, notes, Claude sessions and services">
+    <CommandDialog open={open} onOpenChange={setOpen} title="Search" description="Search projects, tasks, notes, sessions and services">
       <Command shouldFilter={false}>
       <CommandInput placeholder="Search, or jump to a task like app#12" value={text} onValueChange={setText} />
       <CommandList>
@@ -79,8 +79,8 @@ export function SearchDialog() {
           </CommandGroup>
         )}
         {!!r?.sessions.length && (
-          <CommandGroup heading="Claude sessions">
-            {r.sessions.map((s) => <CommandItem key={s.id} value={`session ${s.id}`} onSelect={() => go(`/claude/${s.id}`)}><Sparkles /><span className="truncate">{s.title}</span></CommandItem>)}
+          <CommandGroup heading="Sessions">
+            {r.sessions.map((s) => <CommandItem key={s.id} value={`session ${s.id}`} onSelect={() => go(`/sessions/${s.id}`)}><Sparkles /><span className="truncate">{s.title}</span></CommandItem>)}
           </CommandGroup>
         )}
         {!!r?.services.length && (

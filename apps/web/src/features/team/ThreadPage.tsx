@@ -180,7 +180,7 @@ function Message({ m }: { m: ThreadDetail['messages'][number] }) {
         : <Avatar className="size-8"><AvatarFallback className="text-[11px]">{initials(m.author)}</AvatarFallback></Avatar>}
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
-          {m.sessionId ? <Link to="/claude/$id" params={{ id: m.sessionId }} className="font-medium hover:underline">{m.author}</Link> : <span className="font-medium">{m.author}</span>}
+          {m.sessionId ? <Link to="/sessions/$id" params={{ id: m.sessionId }} className="font-medium hover:underline">{m.author}</Link> : <span className="font-medium">{m.author}</span>}
           {kind?.label && <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-medium', kind.tone)}>{kind.label}</span>}
           <span className="text-xs text-muted-foreground">{relativeTime(m.at)}</span>
         </div>

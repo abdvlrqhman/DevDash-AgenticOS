@@ -62,12 +62,14 @@ export function ServerPage() {
               </> : <Calm>No backup yet. One runs every night at 03:30 UTC.</Calm>}
             </Block>
 
-            <Block title="Software" action={d.canAct && <UpdateButton sdk={d.software.claudeSdk} />}>
+            <Block title="Software" action={d.canAct && <span className="flex flex-wrap justify-end gap-2"><UpdateButton sdk={d.software.claudeSdk} agent="claude" /><UpdateButton sdk={d.software.opencode} agent="opencode" /></span>}>
               <Panel>
                 <Line label="DevDash" value={<><span className="tabular-nums">{d.software.devdash}</span>{d.software.release && <span className="text-muted-foreground">, <span className="font-mono text-[13px]">{d.software.release.id.slice(0, 7)}</span></span>}</>} />
                 {d.software.release && <Line label="Deployed" value={relativeTime(d.software.release.since)} />}
                 <Line label="Claude Code" value={<span className="tabular-nums">{d.software.claude ?? 'Not found'}</span>} />
                 <Line label="Updates" value={<UpdateState sdk={d.software.claudeSdk} />} />
+                <Line label="OpenCode" value={<span className="tabular-nums">{d.software.opencode.version ?? 'Not installed'}</span>} />
+                {d.software.opencode.installed && <Line label="Updates" value={<UpdateState sdk={d.software.opencode} />} />}
                 <Line label="Node.js" value={<span className="tabular-nums">{d.software.node}</span>} />
               </Panel>
             </Block>
@@ -175,7 +177,8 @@ const newer = (a: string, b: string) => {
   return false
 }
 
-// Claude Code comes from the Agent SDK package (deploy/claude-update.sh); admins update it for everyone from here.
+// Claude Code comes from the Agent SDK package (deploy/claude-update.sh), OpenCode from its own (deploy/opencode-update.sh);
+// admins install and update them for everyone from here.
 type Sdk = { installed: string | null; latest: string | null; updating: boolean }
 const updateAvailable = (sdk: Sdk) => !!sdk.latest && !!sdk.installed && newer(sdk.latest, sdk.installed)
 
@@ -185,20 +188,23 @@ function UpdateState({ sdk }: { sdk: Sdk }) {
   return <span className="text-muted-foreground">{!sdk.installed ? 'Not installed' : sdk.latest ? `Up to date, SDK ${sdk.installed}` : 'Could not check'}</span>
 }
 
-function UpdateButton({ sdk }: { sdk: Sdk }) {
+function UpdateButton({ sdk, agent }: { sdk: Sdk; agent: 'claude' | 'opencode' }) {
   const qc = useQueryClient()
+  const name = agent === 'claude' ? 'Claude Code' : 'OpenCode'
+  // A fresh server has neither agent yet: both install from here.
+  const install = !sdk.installed
   const update = useMutation({
-    mutationFn: () => unwrap(api.api.status['claude-update'].$post()),
+    mutationFn: () => unwrap(agent === 'claude' ? api.api.status['claude-update'].$post() : api.api.status['opencode-update'].$post()),
     onSuccess: () => {
-      toast.success('Updating Claude Code. It takes a minute or two; running sessions keep their version until they restart.')
+      toast.success(`${install ? 'Installing' : 'Updating'} ${name}. It takes a minute or two; running sessions keep their version until they restart.`)
       void qc.invalidateQueries({ queryKey: ['status'] })
     },
     onError: (e) => toast.error(e.message),
   })
-  if (!updateAvailable(sdk) || sdk.updating) return null
+  if (sdk.updating || !(install || updateAvailable(sdk))) return null
   return (
     <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate()}>
-      {update.isPending ? <Spinner /> : <ArrowUpCircle />}Update Claude Code
+      {update.isPending ? <Spinner /> : <ArrowUpCircle />}{install ? 'Install' : 'Update'} {name}
     </Button>
   )
 }

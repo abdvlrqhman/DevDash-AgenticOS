@@ -53,7 +53,7 @@ export function ProposalCard({ x, showProject = true }: { x: Proposal; showProje
       {x.kind === 'code' && p.prompt && (
         <details className="group rounded-xl bg-background text-sm">
           <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3 py-2.5 text-muted-foreground transition-colors duration-150 hover:text-foreground [&::-webkit-details-marker]:hidden">
-            <ChevronRight className="size-4 shrink-0 transition-transform duration-300 ease-spring group-open:rotate-90" />What Claude will be asked to do
+            <ChevronRight className="size-4 shrink-0 transition-transform duration-300 ease-spring group-open:rotate-90" />What the agent will be asked to do
           </summary>
           <div className="px-3 pb-3 pl-9 whitespace-pre-wrap">{p.prompt}</div>
         </details>

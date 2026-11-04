@@ -40,9 +40,10 @@ export const profilesQuery = queryOptions({
   queryFn: () => unwrap(api.api.claude.profiles.$get()),
   staleTime: 30_000,
 })
-export const commandsQuery = (profile: string) => queryOptions({
-  queryKey: ['claude', 'commands', profile],
-  queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile } })),
+/** Slash commands and models: a Claude profile's, or another agent's (OpenCode lists every provider's models). */
+export const commandsQuery = (profile: string, harness: 'claude' | 'opencode' = 'claude') => queryOptions({
+  queryKey: ['claude', 'commands', harness, profile],
+  queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile, harness } })),
   staleTime: 60_000,
 })
 

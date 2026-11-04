@@ -2,6 +2,8 @@ import type { Db } from '../../core/db.ts'
 
 export type RoleRow = {
   id: number; project_id: number; name: string; summary: string; instructions: string; model: string | null
+  /** The agent it works with (HARNESSES), whose model `model` is. */
+  harness: string
   chat_session_id: string | null; created_at: number; updated_at: number; archived: number
   autonomy: 'advisor' | 'operator'; auto_approve: string; schedule: string; triggers: string; schedule_state: string
   paused: number; daily_limit: number; monthly_budget: number | null; last_triggered: number; lead: number
@@ -187,8 +189,8 @@ export function teamRepo(db: Db) {
     role: db.prepare(`select * from team_roles where id = ?`),
     roleBySession: db.prepare(`select r.* from team_roles r where r.archived = 0 and (r.chat_session_id = ?1
       or exists (select 1 from team_shifts s where s.role_id = r.id and s.session_id = ?1))`),
-    insertRole: db.prepare(`insert into team_roles (project_id, name, summary, instructions, model, created_by) values (?, ?, ?, ?, ?, ?) returning id`),
-    updateRole: db.prepare(`update team_roles set name = ?, summary = ?, instructions = ?, model = ?, updated_at = unixepoch() where id = ?`),
+    insertRole: db.prepare(`insert into team_roles (project_id, name, summary, instructions, model, harness, created_by) values (?, ?, ?, ?, ?, ?, ?) returning id`),
+    updateRole: db.prepare(`update team_roles set name = ?, summary = ?, instructions = ?, model = ?, harness = ?, updated_at = unixepoch() where id = ?`),
     setChat: db.prepare(`update team_roles set chat_session_id = ? where id = ?`),
     archiveRole: db.prepare(`update team_roles set archived = 1, updated_at = unixepoch() where id = ?`),
     notebook: db.prepare(`select n.id, n.body, n.source, n.created_at, u.name as user_name from team_notebook n left join users u on u.id = n.user_id
@@ -308,10 +310,10 @@ export function teamRepo(db: Db) {
     roles: (projectId: number) => all<RoleRow>(s.roles.all(projectId)),
     role: (id: number) => plain<RoleRow>(s.role.get(id)),
     roleBySession: (sessionId: string) => plain<RoleRow>(s.roleBySession.get(sessionId)),
-    insertRole: (projectId: number, r: { name: string; summary: string; instructions: string; model: string | null }, userId: number) =>
-      (s.insertRole.get(projectId, r.name, r.summary, r.instructions, r.model, userId) as { id: number }).id,
-    updateRole: (id: number, r: { name: string; summary: string; instructions: string; model: string | null }) =>
-      void s.updateRole.run(r.name, r.summary, r.instructions, r.model, id),
+    insertRole: (projectId: number, r: { name: string; summary: string; instructions: string; model: string | null; harness?: string }, userId: number) =>
+      (s.insertRole.get(projectId, r.name, r.summary, r.instructions, r.model, r.harness ?? 'claude', userId) as { id: number }).id,
+    updateRole: (id: number, r: { name: string; summary: string; instructions: string; model: string | null; harness?: string }) =>
+      void s.updateRole.run(r.name, r.summary, r.instructions, r.model, r.harness ?? 'claude', id),
     setChat: (id: number, sessionId: string) => void s.setChat.run(sessionId, id),
     archiveRole: (id: number) => void s.archiveRole.run(id),
     notebook: (roleId: number, limit = 100) =>

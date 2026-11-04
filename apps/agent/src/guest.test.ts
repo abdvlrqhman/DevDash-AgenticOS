@@ -74,11 +74,61 @@ test("teammates' commands run, except what reaches the owner's own things: their
     assert.equal(bash([], 'git commit -m "Document the ssh setup and rclone uploads"'), true, 'a message is not a command')
 
     // The owner's home and credentials always wait.
-    for (const c of ['cat ~/.bashrc', 'ls $HOME', `cat ${home}/notes.txt`, 'cd /home && ls', 'cat /root/x', 'cp deploy/.ssh/id_ed25519 .',
-      'cat ~/.config/gh/hosts.yml', 'cat .netrc', 'echo $GH_TOKEN', 'cat /proc/self/environ']) {
+    for (const c of ['cat ~/.bashrc', 'ls $HOME', `cat ${home}/notes.txt`, `docker run -v ${home}/.config:/cfg alpine ls /cfg`,
+      'cp deploy/.ssh/id_ed25519 .', 'cat ~/.config/gh/hosts.yml', 'cat .netrc', 'echo $GH_TOKEN', 'cat /proc/self/environ']) {
       assert.equal(bash(['drive', 'tailnet', 'github', 'apps'], c), false, c)
     }
     assert.equal(bash([], 'git diff HEAD~1'), true, 'a ~ inside a word is not the home folder')
+    // This session's own scratch (a long command's saved output, a background task's output) is part of its work; another
+    // session's isn't, and neither is the rest of the owner's home.
+    const s1 = { ...base, sessionId: 'sess-1', scratch: [] } // this test's owner home is in /tmp itself
+    const own = `${home}/.claude/projects/-srv-devdash-projects-shop/sess-1/tool-results/b4b71r3vi.txt`
+    assert.equal(guestMay('Read', { file_path: own }, s1), true)
+    assert.equal(guestMay('Read', { file_path: '/tmp/claude-1000/-srv-devdash-projects-shop/sess-1/tasks/x.output' }, s1), true)
+    assert.equal(guestMay('Bash', { command: `cat ${own} | head -50` }, s1), true)
+    assert.equal(guestMay('Read', { file_path: own.replace('sess-1', 'sess-2') }, s1), false, "another session's")
+    assert.equal(guestMay('Read', { file_path: `${home}/.claude/projects/-srv-devdash-projects-shop/sess-1/../sess-2/tool-results/a.txt` }, s1), false)
+    assert.equal(guestMay('Read', { file_path: `${home}/.claude/.credentials.json` }, s1), false)
+    assert.equal(guestMay('Bash', { command: `cat ${own} ${home}/.ssh/id_ed25519` }, s1), false)
+    assert.equal(guestMay('Read', { file_path: own }, { ...base, scratch: [] }), false, 'no session id: nothing in the home folder')
+
+    // Downloaded packages' source (Flutter's pub cache, npm, cargo...) is public: read it, never write it, never their credentials.
+    const pub = { ...s1, sessionId: undefined }
+    assert.equal(guestMay('Bash', { command: 'f=$(find ~/.pub-cache -path "*material_symbols_icons*" -name "symbols.dart" 2>/dev/null | head -1); grep -n "arrow_forward_rounded" "$f" | head' }, pub), true)
+    assert.equal(guestMay('Bash', { command: `ls ${home}/.cargo/registry/src` }, pub), true)
+    assert.equal(guestMay('Read', { file_path: `${home}/.pub-cache/hosted/pub.dev/material_symbols_icons-4.2/lib/symbols.dart` }, pub), true)
+    assert.equal(guestMay('Grep', { pattern: 'IconData', path: `${home}/.pub-cache/hosted` }, pub), true)
+    assert.equal(guestMay('Edit', { file_path: `${home}/.pub-cache/hosted/pub.dev/x/lib/a.dart` }, pub), false, 'read only')
+    assert.equal(guestMay('Bash', { command: 'cat ~/.pub-cache/credentials.json' }, pub), false)
+    assert.equal(guestMay('Read', { file_path: `${home}/.pub-cache/credentials.json` }, pub), false)
+    assert.equal(guestMay('Bash', { command: 'cat ~/.pub-cache/../.ssh/id_ed25519' }, pub), false)
+    assert.equal(guestMay('Bash', { command: 'cat ~/.cargo/credentials.toml' }, pub), false, 'outside the registry')
+
+    // The home folder by area: its public tools (SDKs, toolchains, package caches, models) can be read and run, never
+    // edited; everything else there is the owner's, however it's written, including folders nobody listed.
+    for (const c of [
+      'cd /srv/devdash/projects/shop/frontend && grep -n "version" pubspec.lock | head -0; f=$(find ~/.pub-cache -path "*material_symbols_icons*" -name "symbols.dart" | head -5); sed -n 3569,3570p $(echo "$f"|head -1)',
+      'export PATH="$HOME/.local/bin:$PATH" && flutter test', '~/development/flutter/bin/flutter --version',
+      `${home}/development/android-sdk/platform-tools/adb devices`, 'ls ${HOME}/.gradle/caches/modules-2', 'du -sh ~/.cache/ms-playwright',
+      'python3 -c "print(1)" && ls ~/.cache/huggingface/hub', 'ls ~/development/jdk21/bin',
+    ]) assert.equal(bash([], c), true, c)
+    for (const c of ['ls ~', 'ls ~/projects', 'cat ~/devdash-updater.key', 'cat ~/.bash_history', 'cat ~/.cache/huggingface/token',
+      'ls ~/.cache/devdash/uploads', 'cat ~/.local/share/caddy/certificates/x.key', 'cat ~/.android/adbkey', 'ls ~/.claude/projects',
+      'cat ~/.config/.wrangler/config/default.toml', 'ls ~/sessions', 'echo $HOME', 'cat ~/.pub-cache/hosted/../../.ssh/config',
+      'ls ~/.local/share/tailscale', 'cp -r ~/development ~/stuff']) assert.equal(bash(['drive', 'tailnet', 'github', 'apps'], c), false, c)
+    assert.equal(guestMay('Read', { file_path: `${home}/development/flutter/packages/flutter/lib/src/material/icons.dart` }, { ...base, scratch: [] }), true)
+    assert.equal(guestMay('Write', { file_path: `${home}/development/flutter/packages/flutter/lib/src/material/icons.dart` }, { ...base, scratch: [] }), false, 'read only')
+    assert.equal(guestMay('Read', { file_path: `${home}/.cache/huggingface/token` }, { ...base, scratch: [] }), false)
+
+    // Words in quotes are patterns and messages, not programs; unless the shell runs them.
+    for (const c of ['grep -rn "ssh" src', "grep -rln 'rclone\\|gh ' docs", 'git log --grep="tailscale"', 'echo "run gh pr create later" > notes.txt',
+      'crontab -l', 'systemctl --user status shop-worker', 'systemctl --user list-units']) assert.equal(bash([], c), true, c)
+    for (const c of ['bash -c "ssh pi@100.64.0.7 uptime"', 'sh -lc "rclone lsf drive:"', 'echo "$(gh auth token)"', 'eval "gh repo delete x --yes"'])
+      assert.equal(bash([], c), false, c)
+
+    // Paths inside a container are the container's: its /root is not the server's.
+    assert.equal(bash([], 'rm -rf /tmp/be && cp -r backend /tmp/be && docker run --rm -v /tmp/be:/app -w /app -v pipcache:/root/.cache/pip python:3.13-slim sh -c "pip install -q -r requirements.txt && python manage.py test"'), true)
+    assert.equal(bash([], 'docker run --rm -v "$PWD":/home/app node:24 npm test'), true)
 
     // Accounts: only when shared.
     assert.equal(bash([], 'rclone move out/ad.mp4 drive:shop/videos/'), false)
@@ -98,7 +148,8 @@ test("teammates' commands run, except what reaches the owner's own things: their
     const all = ['drive', 'tailnet', 'github', 'apps']
     for (const c of ['gh auth token', 'gh repo delete acme/shop --yes', 'gh api -X DELETE repos/acme/shop', 'git push --force origin main',
       'git push origin +main', 'git push origin :release', 'git push origin --delete old', 'rclone purge drive:shop', 'rclone config show',
-      'rclone lsf drive: --config x.conf', 'rclone copy :local:/etc drive:x', 'tailscale funnel 3000', 'crontab -l']) {
+      'rclone lsf drive: --config x.conf', 'rclone copy :local:/etc drive:x', 'tailscale funnel 3000', 'crontab -r', 'crontab jobs.txt',
+      'systemctl --user restart shop-worker', 'systemctl --user enable --now shop-worker', 'loginctl enable-linger']) {
       assert.equal(bash(all, c), false, c)
     }
 

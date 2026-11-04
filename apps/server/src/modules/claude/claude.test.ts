@@ -432,7 +432,7 @@ test("a project's sessions shared with chosen people: listed for them, only coun
 
 test("a pinned session shows in the sidebar only while the member may open it, with its live status", () => {
   const { claude, ann, bob, cat } = setup() // s1: Ann's, shared with the team
-  assert.deepEqual([...claude.pinned(bob, ['s1', 'nope'])], [['s1', { title: 'Fix login', url: '/claude/s1', state: 'idle', detail: null }]])
+  assert.deepEqual([...claude.pinned(bob, ['s1', 'nope'])], [['s1', { title: 'Fix login', url: '/sessions/s1', state: 'idle', detail: null }]])
   claude.setSharing(ann, 's1', { audience: 'people', people: [{ id: 2, canSend: false }] })
   assert.equal(claude.pinned(bob, ['s1']).size, 1)
   assert.equal(claude.pinned(cat, ['s1']).size, 0) // not shared with her any more: the pin hides
@@ -480,4 +480,26 @@ test('big attachments: uploaded in pieces into the owner’s account by anyone w
   // An upload that never finished, or more than 250 MB in all, is refused.
   await assert.rejects(() => claude.send(ann, 's1', 'x', [], [], [{ upload: 'cd'.repeat(16), name: 'b.mp4', size: 5 }]), /didn't finish uploading/)
   await assert.rejects(() => claude.send(ann, 's1', 'x', [], [], [{ upload, name: 'raw cut.mp4', size: 251 * MB }]), /250 MB/)
+})
+
+test('an OpenCode session: its agent goes with every start, its own session id is kept, and notifications name it', async () => {
+  const { claude, db, sent, notified, emit, ann } = setup()
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, harness, started) values ('o1', 1, 'Try OpenCode', '/home/ann', 'opencode', 0)").run()
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, started) values ('c1', 1, 'Claude one', '/home/ann', 0)").run()
+  assert.equal((await claude.get(ann, 'o1')).session.harness, 'opencode')
+  await claude.send(ann, 'o1', 'hello', [])
+  const launch = (sent.find((r) => r.op === 'claude.send')!.launch) as { harness: string; nativeId: string | null }
+  assert.deepEqual([launch.harness, launch.nativeId], ['opencode', null])
+  // OpenCode makes its own id; Claude Code uses DevDash's, so a stray one for a Claude session is ignored.
+  emit({ ev: 'claude.native', id: 'o1', nativeId: 'ses_abc' })
+  emit({ ev: 'claude.native', id: 'c1', nativeId: 'ses_nope' })
+  const ids = db.prepare("select id, native_id from claude_sessions where id in ('o1', 'c1') order by id").all() as { id: string; native_id: string | null }[]
+  assert.deepEqual(ids.map((r) => r.native_id), [null, 'ses_abc'])
+  sent.length = 0
+  await claude.send(ann, 'o1', 'again', [])
+  assert.equal(((sent.find((r) => r.op === 'claude.send')!.launch) as { nativeId: string }).nativeId, 'ses_abc')
+  emit({ ev: 'claude.status', id: 'o1', status: 'error', detail: 'boom' })
+  assert.match(notified.at(-1)!.title, /^OpenCode stopped with an error/)
+  // New sessions start with the agent the member chose as their default.
+  assert.equal(claude.saveDefaults(ann, { harness: 'opencode', profile: 'default', model: null, effort: null, permission_mode: 'acceptEdits', open_in: 'chat' }).harness, 'opencode')
 })

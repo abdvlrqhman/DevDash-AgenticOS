@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import { Archive, ChevronRight, Folder, Plus, Search, Settings2, Sparkles, FolderGit2 } from 'lucide-react'
 import { StatusLight } from '@/components/app/brand'
+import { agentName } from './harness'
 import { ResizeHandle, useStoredWidth } from '@/components/app/resize-handle'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -22,7 +23,7 @@ import { NewSession, SessionsPage } from './SessionsPage'
  */
 export function ClaudeLayout() {
   const path = useRouterState({ select: (s) => s.location.pathname })
-  const withList = path !== '/claude/setup'
+  const withList = path !== '/sessions/setup'
   const pane = useStoredWidth('claude-sessions', 320, 240, 560)
   return (
     <div className="flex h-full min-h-0">
@@ -64,7 +65,7 @@ function SessionsPane({ active }: { active?: string }) {
   const me = useQuery(meQuery).data!
   const list = useQuery(sessionsQuery(false))
   const navigate = useNavigate()
-  const archive = useArchiveSession((s) => { if (s.id === active) void navigate({ to: '/claude' }) })
+  const archive = useArchiveSession((s) => { if (s.id === active) void navigate({ to: '/sessions' }) })
   const [q, setQ] = useState('')
   const [creating, setCreating] = useState(false)
   const groups = useMemo(() => {
@@ -75,8 +76,8 @@ function SessionsPane({ active }: { active?: string }) {
   return (
     <>
       <div className="flex min-h-14 items-center gap-2 border-b px-3">
-        <h2 className="flex-1 text-[15px] font-semibold">Claude</h2>
-        <Button variant="ghost" size="icon-sm" asChild aria-label="Claude setup"><Link to="/claude/setup"><Settings2 /></Link></Button>
+        <h2 className="flex-1 text-[15px] font-semibold">Sessions</h2>
+        <Button variant="ghost" size="icon-sm" asChild aria-label="Agent setup"><Link to="/sessions/setup"><Settings2 /></Link></Button>
         <Button size="sm" onClick={() => setCreating(true)}><Plus />New</Button>
       </div>
       <div className="p-3 pb-2">
@@ -105,13 +106,13 @@ function SessionsPane({ active }: { active?: string }) {
                         <Button size="icon-xs" variant="ghost" aria-label={`Archive ${s.title}`} onClick={() => archive.ask(s)}
                           className="absolute top-2 right-1.5 z-10 bg-background/80 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:hidden"><Archive /></Button>
                       )}
-                      <Link to="/claude/$id" params={{ id: s.id }}
+                      <Link to="/sessions/$id" params={{ id: s.id }}
                         className={cn('flex items-start gap-2.5 rounded-md py-2 pr-2 pl-6 text-sm hover:bg-accent', s.id === active && 'bg-accent', s.status === 'waiting' && s.id !== active && 'bg-attention-soft')}>
                         <StatusLight state={light(s)} className="mt-1.5" />
                         <span className="min-w-0 flex-1">
                           <span className="line-clamp-1 font-medium">{s.title}</span>
                           <span className="line-clamp-1 text-xs text-muted-foreground">
-                            {s.status === 'waiting' ? 'Needs you' : s.status === 'working' ? 'Working' : relativeTime(s.lastActivityAt)}{s.mode === 'cli' ? ', in CLI' : ''}
+                            {s.status === 'waiting' ? 'Needs you' : s.status === 'working' ? 'Working' : relativeTime(s.lastActivityAt)}{s.mode === 'cli' ? ', in CLI' : ''} · {agentName(s.harness)}
                           </span>
                         </span>
                         {s.owner.id !== me.id && <UserAvatar user={s.owner} className="size-6" textClassName="text-[10px]" />}

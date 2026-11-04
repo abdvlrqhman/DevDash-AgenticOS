@@ -15,17 +15,22 @@ import { getPorts } from './tailscale.ts'
 import { startForwarder, writeSshHelper } from './tailnet-session.ts'
 import * as storage from './storage.ts'
 import { guestMay } from './guest.ts'
+import { sharedRoot } from './shared-tools.ts'
 
 export const PLUGIN_DIR = fileURLToPath(new URL('../../../packages/claude-plugin', import.meta.url))
 export const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,20}$/
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // An idle Chat process (no turn, no question, no background task) is closed to free memory; the next message resumes it.
-const IDLE_CLOSE_MS = 20 * 60_000 // ponytail: fixed; make per-member if RAM allows longer
+export const IDLE_CLOSE_MS = 20 * 60_000 // ponytail: fixed; make per-member if RAM allows longer
 const run = promisify(execFile)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export type Launch = {
   id: string
+  /** Which coding agent runs it (harness.ts); Claude Code when absent. */
+  harness?: string
+  /** The agent's own id for the session, when it makes its own (OpenCode's ses_…). */
+  nativeId?: string | null
   cwd: string
   profile: string
   model?: string | null
@@ -55,11 +60,11 @@ export type Launch = {
 }
 export type Status = 'working' | 'waiting' | 'idle' | 'stopped' | 'error'
 /** `ownerOnly`: it would use the owner's access for a teammate (`askedBy`), so only the owner may answer (guest.ts). */
-type Pending = {
+export type Pending = {
   requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[]; resolve: (r: PermissionResult) => void
   ownerOnly?: boolean; askedBy?: Guest
 }
-type Guest = { id: number; name: string }
+export type Guest = { id: number; name: string }
 /** `bg`: background shells, subagents and monitors still running; Claude picks their results up when they finish. */
 /** `remote`: the claude.ai link while Remote Control is on. */
 /** `tasks`: background shells, subagents and monitors still running (Claude picks up their results when they finish). */
@@ -78,7 +83,7 @@ const chats = new Map<string, Chat>()
 // Per-session tailnet routing. Each entry owns the local TCP→SOCKS forwarders (one per tailnet MCP) that must be torn
 // down when the session's process ends. Keyed by session id; closing an old one before starting a new one is safe.
 const tailnets = new Map<string, { close: () => void }>()
-function teardownTailnet(id: string) {
+export function teardownTailnet(id: string) {
   const t = tailnets.get(id)
   if (!t) return
   tailnets.delete(id)
@@ -91,7 +96,7 @@ type TailnetSetup = { env: Record<string, string>; mcpServers?: Record<string, u
  * point the MCP at it. Never sets HTTPS_PROXY: Claude's own Anthropic API calls (HTTPS) must stay direct, or the
  * SDK's traffic would tunnel through the proxy and break. Returns null when routing is off.
  */
-async function setupTailnet(l: Launch): Promise<TailnetSetup | null> {
+export async function setupTailnet(l: Launch): Promise<TailnetSetup | null> {
   if (!l.reachTailnet) { teardownTailnet(l.id); return null }
   const { socksPort, httpPort } = await getPorts()
   const binDir = join(homedir(), '.cache', 'devdash', 'tailnet', l.id)
@@ -164,7 +169,7 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
 export const profileDir = (p: string) => (p === 'default' ? join(homedir(), '.claude') : join(homedir(), '.claude-profiles', p))
 export const profileEnv = (p: string): Record<string, string> => (p === 'default' ? {} : { CLAUDE_CONFIG_DIR: profileDir(p) })
 
-function validate(l: Launch) {
+export function validate(l: Launch) {
   if (!ID_RE.test(l.id)) throw new Error('invalid session id')
   if (!PROFILE_RE.test(l.profile)) throw new Error('invalid profile')
   if (!existsSync(l.cwd)) throw new Error(`Folder not found: ${l.cwd}`)
@@ -216,8 +221,12 @@ const TAILNET_NOTE = `This session can reach the owner's private Tailscale tailn
 - curl, frida (\`frida -H 100.x:port\`) and other tools honour the proxy env (ALL_PROXY / HTTP_PROXY) and reach 100.x directly.
 Your own Anthropic API calls are NOT proxied; they go out directly as usual.`
 
-const systemAppend = (l: Launch) => {
+/** Once the team's shared tools exist (shared-tools.ts): use them, don't download private copies. */
+const SHARED_TOOLS_NOTE = `The team shares its downloaded tools in ${sharedRoot()}, already set in your environment: the Android SDK ($ANDROID_HOME), Flutter (on PATH; a project that needs another version pins it with FVM, whose versions are shared too), and package caches (pub, npm, pip, Hugging Face models, Playwright browsers). Use them: don't download SDKs, browsers or models into the home folder, and install packages into the project, not globally (no npm -g or pip --user). Add an Android platform or tool with sdkmanager into $ANDROID_HOME, for everyone. Logins (tokens, .npmrc, pip.conf) stay in each person's own config, never in ${sharedRoot()}.`
+
+export const systemAppend = (l: Launch) => {
   const parts = [RULES, sharedNote(l.ownerName ?? 'the owner'), storage.note(l.storage, storage.driveFolder(l.cwd))]
+  if (existsSync(sharedRoot())) parts.push(SHARED_TOOLS_NOTE)
   if (l.reachTailnet) parts.push(TAILNET_NOTE)
   if (l.instructions?.trim()) parts.push(l.instructions.trim())
   return parts.join('\n\n')
@@ -229,7 +238,7 @@ const INTERACTIVE = new Set(['AskUserQuestion', 'ExitPlanMode'])
 const WEEK_S = 7 * 86_400
 
 /** Makes sure the owner's Drive remote is in their rclone config before Claude starts (a new profile, a deleted file). */
-const ensureStorage = (l: Launch) =>
+export const ensureStorage = (l: Launch) =>
   l.storage ? storage.configure(l.storage).catch((err: Error) => console.error(`[${l.id.slice(0, 8)}] storage:`, err.message)) : undefined
 
 async function startChat(l: Launch): Promise<Chat> {
@@ -298,7 +307,7 @@ async function startChat(l: Launch): Promise<Chat> {
             if (!g || INTERACTIVE.has(h.tool_name)) return {}
             const now = chat?.launch ?? l // what's shared can change while the session runs (setOption, send)
             if (guestMay(h.tool_name, h.tool_input ?? {}, {
-              cwd: l.cwd, tailnet: !!l.reachTailnet, caps: now.guestCaps, tailnetMcps: (l.tailnetMcps ?? []).map((m) => m.name),
+              cwd: l.cwd, tailnet: !!l.reachTailnet, caps: now.guestCaps, tailnetMcps: (l.tailnetMcps ?? []).map((m) => m.name), sessionId: l.id,
             })) return {}
             const r = await ask(h.tool_name, h.tool_input, undefined, o.signal, g)
             return {

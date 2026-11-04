@@ -37,18 +37,18 @@ const firstNames = (people: string[]) => {
 export function LiveWork({ live, lastSessionAt }: { live: Live; lastSessionAt: number | null }) {
   if (live.working + live.waiting > 0) {
     const who = firstNames(live.people)
-    const text = live.working && live.waiting ? `Claude is working for ${who}, and waiting for an answer`
-      : live.working ? `Claude is working for ${who}`
-      : live.people.length === 1 ? `Claude is waiting for ${who}'s answer` : `Claude is waiting for an answer from ${who}`
+    const text = live.working && live.waiting ? `Working for ${who}, and waiting for an answer`
+      : live.working ? `Working for ${who}`
+      : live.people.length === 1 ? `Waiting for ${who}'s answer` : `Waiting for an answer from ${who}`
     return (
       <span className={cn('flex min-w-0 items-start gap-2', !live.working && 'text-attention-foreground')}>
-        {live.working ? <Orb state="working" size={20} label="Claude is working" />
+        {live.working ? <Orb state="working" size={20} label="Working" />
           : <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state="waiting" /></span>}
         <span className="line-clamp-2 min-w-0 text-pretty">{text}</span>
       </span>
     )
   }
-  return lastSessionAt ? <span className="text-muted-foreground">Claude last active {relativeTime(lastSessionAt)}</span> : null
+  return lastSessionAt ? <span className="text-muted-foreground">Last session {relativeTime(lastSessionAt)}</span> : null
 }
 
 export const repoLabel = (url: string | null) => (url ? url.replace(/^(https:\/\/|git@)/, '').replace(/^github\.com[:/]/, '').replace(/\.git$/, '') : 'Only on this server')
@@ -73,8 +73,8 @@ export function ProjectsPage() {
     ? (working === 1 ? projects[0]!.name : `all ${count(working, 'project').toLowerCase()}`)
     : `${word(working)} of ${count(projects.length, 'project').toLowerCase()}`
   const headline = working
-    ? `Claude is working in ${where}${waiting ? `, and waiting for an answer in ${word(waiting)}` : ''}.`
-    : waiting ? `Claude is waiting for an answer in ${count(waiting, 'project').toLowerCase()}.`
+    ? `Agents are working in ${where}${waiting ? `, and waiting for an answer in ${word(waiting)}` : ''}.`
+    : waiting ? `Waiting for an answer in ${count(waiting, 'project').toLowerCase()}.`
     : `${count(projects.length, 'project')}, all quiet.`
   return (
     <>
@@ -89,7 +89,7 @@ export function ProjectsPage() {
             <EmptyHeader>
               <EmptyMedia variant="icon" className="rounded-xl bg-surface-2"><FolderGit2 /></EmptyMedia>
               <EmptyTitle className="text-base font-semibold">No projects yet</EmptyTitle>
-              <EmptyDescription>Add a repository and everyone gets the same checkout on the server, with tasks, notes and Claude sessions around it.</EmptyDescription>
+              <EmptyDescription>Add a repository and everyone gets the same checkout on the server, with tasks, notes and agent sessions around it.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent><Button onClick={() => setAdding(true)}><Plus />Add a project</Button></EmptyContent>
           </Empty>
@@ -294,7 +294,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
     ? (zip ? (unpacking ? 'Unpacking…' : progress === null ? 'Finishing…' : stats?.reconnecting ? 'Reconnecting…' : `Uploading ${Math.floor(progress)}%…`) : repoUrl ? 'Cloning…' : 'Creating…')
     : zip ? 'Create from zip' : 'Add project'
   return (
-    <ResponsiveDialog open={open} onOpenChange={close} title="Add a project" description="One shared checkout on the server that the whole team and their Claude sessions work in.">
+    <ResponsiveDialog open={open} onOpenChange={close} title="Add a project" description="One shared checkout on the server that the whole team and their sessions work in.">
       <form onSubmit={submit}>
         <FieldGroup>
           <ToggleGroup type="single" spacing={1} value={mode} className={cn(segmented, 'w-full')} onValueChange={(v) => v && setMode(v as 'repo' | 'zip')}>
@@ -330,7 +330,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
           <Field>
             <FieldLabel htmlFor="np-instructions">Instructions <span className="font-normal text-muted-foreground">(optional)</span></FieldLabel>
             <Textarea id="np-instructions" rows={4} className="min-h-24 text-sm" placeholder={'e.g. You are a gold analyst. Follow these rules…\nAnswer in this format…'} value={instructions} onChange={(e) => setInstructions(e.target.value)} />
-            <FieldDescription>Rules every Claude session in this project follows — set once, like a Claude Project's instructions. You can change them later on the project page.</FieldDescription>
+            <FieldDescription>Rules every session in this project follows — set once, like a Claude Project's instructions. You can change them later on the project page.</FieldDescription>
           </Field>
           {progress !== null && <Progress value={progress} />}
           {stats && (

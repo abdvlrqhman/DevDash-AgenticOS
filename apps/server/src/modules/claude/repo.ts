@@ -7,6 +7,10 @@ export type SessionRow = {
   owner_username: string
   owner_name: string
   profile: string
+  /** Which coding agent runs it (HARNESSES). */
+  harness: string
+  /** The harness's own id for the session when it isn't DevDash's (OpenCode's ses_… id). */
+  native_id: string | null
   title: string
   title_custom: number
   cwd: string
@@ -51,7 +55,7 @@ export type TurnRow = {
   num_turns: number; model: string | null; created_at: number
 }
 export type Comment = { id: number; body: string; createdAt: number; user: { id: number; name: string } }
-export type Defaults = { profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
+export type Defaults = { harness: string; profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
 
 const SELECT = `select s.*, u.username as owner_username, u.name as owner_name, p.slug as project_slug, p.name as project_name,
   (select count(*) from claude_session_viewers v where v.session_id = s.id) as people, pg.caps as project_guest_caps
@@ -62,7 +66,7 @@ export const canSeeSql = (who: string) =>
   `(s.owner_id = ${who} or s.shared = 1 or s.id in (select session_id from claude_session_viewers where user_id = ${who}))`
 
 // Columns a PATCH may touch; anything else is ignored.
-const PATCHABLE = ['title', 'title_custom', 'shared', 'shared_can_send', 'archived', 'model', 'effort', 'permission_mode', 'mode', 'started', 'fast_mode', 'remote_control', 'context_json', 'instructions', 'tool_policy', 'listed', 'reach_tailnet', 'tailnet_mcp', 'tailnet_mcps', 'guest_caps', 'guest_caps_custom', 'origin_kind', 'origin_role'] as const
+const PATCHABLE = ['title', 'title_custom', 'shared', 'shared_can_send', 'archived', 'model', 'effort', 'permission_mode', 'mode', 'started', 'fast_mode', 'remote_control', 'context_json', 'instructions', 'tool_policy', 'listed', 'reach_tailnet', 'tailnet_mcp', 'tailnet_mcps', 'guest_caps', 'guest_caps_custom', 'origin_kind', 'origin_role', 'native_id'] as const
 export type Patch = Partial<Pick<SessionRow, (typeof PATCHABLE)[number]>>
 
 const toComment = (r: { id: number; body: string; created_at: number; user_id: number; name: string }): Comment => ({ id: r.id, body: r.body, createdAt: r.created_at, user: { id: r.user_id, name: r.name } })
@@ -77,8 +81,8 @@ export function claudeRepo(db: Db) {
     hiddenInProject: db.prepare(`select u.name, count(*) as n from claude_sessions s join users u on u.id = s.owner_id
       where s.project_id = ?1 and s.archived = ?2 and not ${canSeeSql('?3')} group by u.id order by n desc, u.name`),
     ownedActive: db.prepare(`${SELECT} where u.username = ? and s.archived = 0`),
-    insert: db.prepare(`insert into claude_sessions (id, owner_id, profile, title, cwd, mode, model, effort, permission_mode)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+    insert: db.prepare(`insert into claude_sessions (id, owner_id, harness, profile, title, cwd, mode, model, effort, permission_mode)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     status: db.prepare(`update claude_sessions set status = ?, status_detail = ?, mode = ?, last_activity_at = unixepoch() where id = ?`),
     touch: db.prepare(`update claude_sessions set last_activity_at = unixepoch() where id = ?`),
     setProject: db.prepare(`update claude_sessions set project_id = ?, worktree = ? where id = ?`),
@@ -112,9 +116,9 @@ export function claudeRepo(db: Db) {
       where c.session_id = ? order by c.id`),
     addComment: db.prepare(`insert into claude_session_comments (session_id, user_id, body) values (?, ?, ?)`),
     commentCount: db.prepare(`select count(*) as n from claude_session_comments where session_id = ?`),
-    defaults: db.prepare(`select profile, model, effort, permission_mode, open_in from claude_defaults where user_id = ?`),
-    saveDefaults: db.prepare(`insert into claude_defaults (user_id, profile, model, effort, permission_mode, open_in) values (?1, ?2, ?3, ?4, ?5, ?6)
-      on conflict(user_id) do update set profile = ?2, model = ?3, effort = ?4, permission_mode = ?5, open_in = ?6`),
+    defaults: db.prepare(`select harness, profile, model, effort, permission_mode, open_in from claude_defaults where user_id = ?`),
+    saveDefaults: db.prepare(`insert into claude_defaults (user_id, profile, model, effort, permission_mode, open_in, harness) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      on conflict(user_id) do update set profile = ?2, model = ?3, effort = ?4, permission_mode = ?5, open_in = ?6, harness = ?7`),
   }
   return {
     byId: (id: string) => s.byId.get(id) as SessionRow | undefined,
@@ -124,8 +128,8 @@ export function claudeRepo(db: Db) {
     hiddenInProject: (projectId: number, userId: number, archived: boolean) =>
       (s.hiddenInProject.all(projectId, archived ? 1 : 0, userId) as { name: string; n: number }[]).map(({ name, n }) => ({ name, n })),
     ownedActive: (username: string) => s.ownedActive.all(username) as SessionRow[],
-    insert: (r: Pick<SessionRow, 'id' | 'owner_id' | 'profile' | 'title' | 'cwd' | 'mode' | 'model' | 'effort' | 'permission_mode'>) =>
-      void s.insert.run(r.id, r.owner_id, r.profile, r.title, r.cwd, r.mode, r.model, r.effort, r.permission_mode),
+    insert: (r: Pick<SessionRow, 'id' | 'owner_id' | 'profile' | 'title' | 'cwd' | 'mode' | 'model' | 'effort' | 'permission_mode'> & { harness?: string }) =>
+      void s.insert.run(r.id, r.owner_id, r.harness ?? 'claude', r.profile, r.title, r.cwd, r.mode, r.model, r.effort, r.permission_mode),
     setStatus: (id: string, status: SessionStatus, detail: string | null, mode: 'chat' | 'cli') => void s.status.run(status, detail, mode, id),
     touch: (id: string) => void s.touch.run(id),
     setProject: (id: string, projectId: number | null, worktree: string | null) => void s.setProject.run(projectId, worktree, id),
@@ -190,7 +194,7 @@ export function claudeRepo(db: Db) {
     },
     commentCount: (sessionId: string) => (s.commentCount.get(sessionId) as { n: number }).n,
     defaults: (userId: number): Defaults =>
-      (s.defaults.get(userId) as Defaults | undefined) ?? { profile: 'default', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' },
-    saveDefaults: (userId: number, d: Defaults) => void s.saveDefaults.run(userId, d.profile, d.model, d.effort, d.permission_mode, d.open_in),
+      (s.defaults.get(userId) as Defaults | undefined) ?? { harness: 'claude', profile: 'default', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' },
+    saveDefaults: (userId: number, d: Defaults) => void s.saveDefaults.run(userId, d.profile, d.model, d.effort, d.permission_mode, d.open_in, d.harness ?? 'claude'),
   }
 }

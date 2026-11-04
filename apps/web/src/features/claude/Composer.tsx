@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { bytes } from '../files/FilesPage'
 import { commandsQuery } from './data'
+import { HARNESS, type Harness } from './harness'
 import { loadDraft, saveDraft } from './draft'
 
 export type Img = { mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string }
@@ -23,6 +24,8 @@ const MAX_IMAGE = 5 * 1024 * 1024
 const MAX_FILE = 10 * 1024 * 1024
 const MAX_TOTAL = 250 * 1024 * 1024
 const MAX_COUNT = 6
+/** How long Stop waits after it appears (a message just sent, Claude just started) before a click on it counts. */
+const STOP_GUARD_MS = 800
 
 // Commands Claude Code always has, shown before the session reports its own list.
 const BUILTIN = [
@@ -51,9 +54,11 @@ function mentionAt(text: string, caret: number) {
 
 type Item = { key: string; label: string; hint?: string; icon?: ReactNode; apply: () => void }
 
-export function Composer({ sessionId, profile, working, disabledReason, footer, onSend, onStop }: {
+export function Composer({ sessionId, profile, harness = 'claude', working, disabledReason, footer, onSend, onStop }: {
   sessionId: string
   profile: string
+  /** The session's agent: its slash commands are its own. */
+  harness?: Harness
   working: boolean
   disabledReason?: ReactNode
   /** Small status row under the message box (context used, fast mode, Remote Control). */
@@ -90,7 +95,7 @@ export function Composer({ sessionId, profile, working, disabledReason, footer, 
   const [dismissed, setDismissed] = useState<string | null>(null)
   const area = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
-  const cmds = useQuery({ ...commandsQuery(profile), enabled: text.startsWith('/') })
+  const cmds = useQuery({ ...commandsQuery(profile, harness), enabled: text.startsWith('/') })
 
   const mention = useMemo(() => mentionAt(text, caret), [text, caret])
   const mentionKey = mention ? `${mention.start}:${mention.query}` : null
@@ -189,8 +194,16 @@ export function Composer({ sessionId, profile, working, disabledReason, footer, 
   }
   const uploading = bigs.some((b) => b.state !== 'done')
   const empty = !text.trim() && !images.length && !files.length && !bigs.length
+  // Stop takes Send's place the moment a message goes out: a double click, or a click that lands just after sending,
+  // would stop Claude by accident. Stop (and Escape) only count once it has been there a moment.
+  const stopArmedAt = useRef(0)
+  const holdStop = () => { stopArmedAt.current = Date.now() + STOP_GUARD_MS }
+  useEffect(() => { if (working) holdStop() }, [working])
+  const stop = () => { if (Date.now() >= stopArmedAt.current) onStop() }
+
   const submit = () => {
     if (sending || empty || uploading || disabledReason) return
+    holdStop()
     const sent = { text, images, files, bigs }
     setSending(true)
     setError(null)
@@ -225,7 +238,7 @@ export function Composer({ sessionId, profile, working, disabledReason, footer, 
     // Esc with nothing typed stops Claude, as in the CLI.
     if (e.key === 'Escape' && working && empty) {
       e.preventDefault()
-      onStop()
+      stop()
       return
     }
     // Enter sends on a keyboard; on phones Enter adds a line and the button sends.
@@ -308,16 +321,18 @@ export function Composer({ sessionId, profile, working, disabledReason, footer, 
       <Textarea ref={area} value={text} rows={1} onKeyDown={onKey} onPaste={onPaste} aria-label="Message Claude"
         onChange={(e) => { write(e.target.value); setCaret(e.target.selectionStart) }}
         onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-        placeholder={working ? 'Add a message for Claude' : 'Message Claude, @ to mention a file'}
+        placeholder={working ? `Add a message for ${HARNESS[harness].name}` : `Message ${HARNESS[harness].name}, @ to mention a file`}
         className="max-h-[40vh] min-h-9 resize-none rounded-none border-0 bg-transparent px-1.5 py-1 text-base leading-6 shadow-none [field-sizing:content] placeholder:truncate focus-visible:ring-0 md:text-sm md:leading-6 dark:bg-transparent" />
       <div className="flex items-center gap-1">
         <Button size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-muted-foreground" aria-label="Attach files" title="Attach images, PDFs or any file" onClick={() => picker.current?.click()}><Paperclip /></Button>
         <input ref={picker} type="file" multiple hidden onChange={(e) => { if (e.target.files) void add(e.target.files); e.target.value = '' }} />
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">{footer}</div>
-        {/* Stop is always there while Claude works; Send joins it once something is typed (it waits for Claude). */}
+        {/* Stop is always there while Claude works; Send joins it once something is typed (it waits for Claude). They look
+            different on purpose (outlined, not ink), since Stop appears exactly where Send was. */}
         {working && (
-          <Button size="icon" className="size-9 shrink-0 rounded-full" aria-label="Stop Claude" title="Stop (Esc)" onClick={onStop}>
-            <Square className="fill-current" />
+          <Button size="icon" variant="ghost" className="size-9 shrink-0 rounded-full bg-background text-foreground ring-1 ring-border hover:bg-surface-2"
+            aria-label="Stop Claude" title="Stop (Esc)" onClick={stop}>
+            <Square className="size-3.5 fill-current" />
           </Button>
         )}
         {(!working || !empty) && (

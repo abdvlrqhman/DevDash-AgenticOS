@@ -106,6 +106,16 @@ test('tailnet-isolate: validates username, uid is a member account, and the port
   assert.match(call({ cmd: 'tailnet-isolate', args: { username: 'alice', ports: 41000 } }, { DEVDASH_HELPER_FAKE_UID: '1000' }).error, /refused: give 1-8 ports/)
 })
 
+test('opencode-update starts its own update unit without waiting; its status is read-only', () => {
+  const r = call({ cmd: 'opencode-update' })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.planned, ['systemctl start --no-block devdash-opencode-update.service'])
+  const s = call({ cmd: 'opencode-update-status' }) as unknown as { ok: boolean; state: string; planned: string[] }
+  assert.equal(s.ok, true)
+  assert.equal(s.state, 'inactive')
+  assert.deepEqual(s.planned, [])
+})
+
 test('claude-update starts the update unit without waiting; its status is read-only', () => {
   const r = call({ cmd: 'claude-update' })
   assert.equal(r.ok, true)

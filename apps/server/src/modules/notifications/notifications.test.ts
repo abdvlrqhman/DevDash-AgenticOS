@@ -19,7 +19,7 @@ test('notifications follow each member’s preferences', async () => {
   await n.notify(1, 'shared', { title: 'off by default' })
   assert.equal(sent.length, 0)
 
-  await n.notify(1, 'finished', { title: 'Claude finished: x', url: '/claude/x' })
+  await n.notify(1, 'finished', { title: 'Claude finished: x', url: '/sessions/x' })
   assert.equal(sent.length, 1)
   assert.equal(n.list(1).unread, 1)
 
@@ -45,7 +45,7 @@ test('the native app’s stream gets what Web Push would, and what it missed whi
   const got: { id: number; title: string }[] = []
   const sub = n.listen(1, 0, (e) => got.push(e))
   assert.deepEqual(sub.missed, [], 'a first connection replays nothing')
-  await n.notify(1, 'needs_you', { title: 'Claude needs you: x', url: '/claude/x' })
+  await n.notify(1, 'needs_you', { title: 'Claude needs you: x', url: '/sessions/x' })
   assert.deepEqual(got.map((e) => e.title), ['Claude needs you: x'])
 
   active = true // using DevDash somewhere: it shows inside the app instead

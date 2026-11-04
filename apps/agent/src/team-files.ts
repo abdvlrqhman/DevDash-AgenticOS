@@ -38,7 +38,7 @@ async function closed(roots: string[]): Promise<string[]> {
 }
 
 /** Opens this member's files in the shared folders to the team; returns how many it changed. */
-export async function openTeamFiles(roots = ['projects', 'worktrees', 'files'].map((d) => `${ROOT()}/${d}`)): Promise<number> {
+export async function openTeamFiles(roots = ['projects', 'worktrees', 'files', 'shared'].map((d) => `${ROOT()}/${d}`)): Promise<number> {
   let changed = 0
   for (const path of await closed(roots)) {
     try {

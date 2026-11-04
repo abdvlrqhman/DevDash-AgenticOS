@@ -53,7 +53,7 @@ function TaskPageView() {
     <>
       <PageHeader back="/tasks" title={<span className="tabular-nums">{t.key}</span>}
         description={<Link to="/projects/$slug" params={{ slug: t.project.slug }} className="hover:underline">{t.project.name}</Link>}
-        actions={<><PinButton kind="task" id={`${slug}/${number}`} /><Button size="sm" onClick={() => setGiving(true)}><Sparkles />Give to Claude</Button></>} />
+        actions={<><PinButton kind="task" id={`${slug}/${number}`} /><Button size="sm" onClick={() => setGiving(true)}><Sparkles />Give to an agent</Button></>} />
       <div style={pageCol()} className="page-col grid w-full gap-10 py-6 md:py-10 lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-14">
         <div className="flex min-w-0 flex-col gap-8">
           <Title t={t} onSave={(title) => update.mutate({ title })} />
@@ -202,11 +202,11 @@ function Links({ t }: { t: TaskDetail }) {
     <div className="flex flex-col gap-6">
       {sessions.length > 0 && (
         <div className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Claude sessions<span className="ml-2 font-normal text-muted-foreground tabular-nums">{sessions.length}</span></h3>
+          <h3 className="text-sm font-semibold">Sessions<span className="ml-2 font-normal text-muted-foreground tabular-nums">{sessions.length}</span></h3>
           <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
             {sessions.map((l) => (
               <li key={l.ref}>
-                <Link to="/claude/$id" params={{ id: l.ref }} className="flex items-center gap-2.5 rounded-xl px-3 py-2 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
+                <Link to="/sessions/$id" params={{ id: l.ref }} className="flex items-center gap-2.5 rounded-xl px-3 py-2 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]">
                   <Sparkles className="size-4 shrink-0 text-muted-foreground" /><span className="truncate">{l.title}</span>
                 </Link>
               </li>
@@ -245,12 +245,12 @@ function GiveToClaude({ t, open, onClose }: { t: TaskDetail; open: boolean; onCl
       void qc.invalidateQueries({ queryKey: ['tasks'] })
       void qc.invalidateQueries({ queryKey: ['claude', 'sessions'] })
       onClose()
-      void navigate({ to: '/claude/$id', params: { id: sessionId } })
+      void navigate({ to: '/sessions/$id', params: { id: sessionId } })
     },
   })
   return (
-    <ResponsiveDialog open={open} onOpenChange={(v) => !v && onClose()} title={`Give ${t.key} to Claude`}
-      description="Claude starts on it right away in the project, as you, and keeps going when you close the app.">
+    <ResponsiveDialog open={open} onOpenChange={(v) => !v && onClose()} title={`Give ${t.key} to an agent`}
+      description="Your default agent (set in Agent setup) starts on it right away in the project, as you, and keeps going when you close the app.">
       <form onSubmit={(e) => { e.preventDefault(); give.mutate() }}>
         <FieldGroup>
           <Field>
@@ -265,7 +265,7 @@ function GiveToClaude({ t, open, onClose }: { t: TaskDetail; open: boolean; onCl
             <Switch id="g-wt" checked={worktree} onCheckedChange={setWorktree} />
           </Field>
           <ErrorAlert error={give.error} />
-          <Button type="submit" className="h-10" disabled={give.isPending}><Sparkles />Start Claude</Button>
+          <Button type="submit" className="h-10" disabled={give.isPending}><Sparkles />Start the session</Button>
         </FieldGroup>
       </form>
     </ResponsiveDialog>

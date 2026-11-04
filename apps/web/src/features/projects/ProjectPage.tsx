@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabCount, TabsTrigger } from '@/components
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ErrorAlert } from '../auth/LoginPage'
 import { projectSessionsQuery, relativeTime, STATUS_LABEL, useLiveProjectSessions, type ProjectSession, type Session } from '../claude/data'
+import { agentName } from '../claude/harness'
 import { NewSession } from '../claude/SessionsPage'
 import { CAPS, capsLabel, projectCapsQuery, type Cap } from '../claude/ShareDialog'
 import { Board } from '../work/Board'
@@ -69,7 +70,7 @@ function ProjectPageView() {
           {p.repoUrl && <Button size="icon-sm" variant="ghost" aria-label="Fetch now" title="Fetch now" disabled={fetchNow.isPending} onClick={() => fetchNow.mutate()}><RefreshCw className={fetchNow.isPending ? 'animate-spin' : ''} /></Button>}
           <GuestCapsDefault slug={p.slug} />
           <PinButton kind="project" id={p.slug} />
-          <Button size="sm" variant="outline" onClick={() => setSession(true)}><Sparkles /><span className="hidden sm:inline">Claude</span></Button>
+          <Button size="sm" variant="outline" onClick={() => setSession(true)}><Sparkles /><span className="hidden sm:inline">Session</span></Button>
         </>} />
       <PageBody className="gap-5 md:pt-8">
         {p.fetchError && (
@@ -92,7 +93,7 @@ function ProjectPageView() {
             <TabsTrigger value="tasks">Tasks{p.openTasks > 0 && <TabCount>{p.openTasks}</TabCount>}</TabsTrigger>
             <TabsTrigger value="notes">Notes</TabsTrigger>
             <TabsTrigger value="sessions">
-              Claude
+              Sessions
               {p.live.working + p.live.waiting > 0 ? <StatusLight state={p.live.working ? 'live' : 'waiting'} /> : p.sessions > 0 && <TabCount>{p.sessions}</TabCount>}
             </TabsTrigger>
             <TabsTrigger value="team">Team</TabsTrigger>
@@ -151,7 +152,7 @@ function ProjectNotes({ slug }: { slug: string }) {
       action={<Button size="sm" variant="outline" asChild><Link to="/notes/$id" params={{ id: 'new' }} search={{ project: slug }}><StickyNote />New note</Link></Button>}>
       <ErrorAlert error={notes.error} />
       {notes.isPending ? <Skeleton className="h-32 rounded-2xl bg-surface" />
-        : notes.data && <NoteList notes={notes.data.notes} empty="No notes in this project yet. Pin decisions, setup steps and links here, for the team and for Claude." />}
+        : notes.data && <NoteList notes={notes.data.notes} empty="No notes in this project yet. Pin decisions, setup steps and links here, for the team and its agents." />}
     </Block>
   )
 }
@@ -178,9 +179,9 @@ function SessionRow({ s, nested, orb }: { s: ProjectSession; nested?: boolean; o
   const needsYou = s.status === 'waiting' && s.kind === 'mine'
   const status = isActive(s) || s.status === 'error'
   return (
-    <Link to="/claude/$id" params={{ id: s.id }} className={cn(rowClass, nested && 'pl-11', needsYou && 'bg-attention-soft hover:bg-attention-soft/70')}>
+    <Link to="/sessions/$id" params={{ id: s.id }} className={cn(rowClass, nested && 'pl-11', needsYou && 'bg-attention-soft hover:bg-attention-soft/70')}>
       <span className="flex size-5 shrink-0 items-center justify-center">
-        {orb ? <Orb state="working" size={20} label="Claude is working" /> : <StatusLight state={light(s)} />}
+        {orb ? <Orb state="working" size={20} label="Working" /> : <StatusLight state={light(s)} />}
       </span>
       <span className="min-w-0 flex-1">
         <span className={cn('block truncate', !nested && 'font-medium')}>{s.title}</span>
@@ -189,7 +190,7 @@ function SessionRow({ s, nested, orb }: { s: ProjectSession; nested?: boolean; o
           <span className={cn('flex min-w-0 items-center text-xs', !status && 'sm:hidden')}>
             {status && (
               <span className={cn('truncate', needsYou ? 'text-attention-foreground' : s.status === 'error' ? 'text-destructive' : 'text-muted-foreground')}>
-                {s.status === 'working' && s.statusDetail ? s.statusDetail : needsYou ? 'Claude is waiting for your answer'
+                {s.status === 'working' && s.statusDetail ? s.statusDetail : needsYou ? `${agentName(s.harness)} is waiting for your answer`
                   : s.status === 'waiting' ? 'Waiting for an answer' : STATUS_LABEL[s.status]}
               </span>
             )}
@@ -339,7 +340,7 @@ function ProjectSessions({ slug, sharing, onNew }: { slug: string; sharing: Sess
         : (
           <Calm>
             {needle ? 'No sessions match that search.' : filter !== 'all' ? 'None of these yet.' : archived ? 'No archived sessions in this project.'
-              : <>No Claude sessions in this project yet. <button className="text-foreground underline underline-offset-4" onClick={onNew}>Start one</button></>}
+              : <>No sessions in this project yet. <button className="text-foreground underline underline-offset-4" onClick={onNew}>Start one</button></>}
           </Calm>
         )}
       {list.data && !needle && (filter === 'all' || filter === 'teammates') && <HiddenLine hidden={list.data.hidden} archived={archived} />}
@@ -370,7 +371,7 @@ function SharingDefault({ slug, sharing }: { slug: string; sharing: SessionShari
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 text-sm">
-        <p className="font-medium">New Claude sessions here are</p>
+        <p className="font-medium">New sessions here are</p>
         <ToggleGroup type="single" spacing={1} size="sm" className={cn(segmented, 'mt-3 w-full')} value={sharing} disabled={save.isPending}
           onValueChange={(v) => v && v !== sharing && save.mutate(v as SessionSharing)}>
           {SHARING.map((o) => <ToggleGroupItem key={o.value} value={o.value} className={cn(segment, 'h-7 px-2')}>{o.label}</ToggleGroupItem>)}
@@ -408,7 +409,7 @@ function GuestCapsDefault({ slug }: { slug: string }) {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 text-sm">
         <p className="font-medium">Share permissions</p>
-        <p className="mt-1 text-xs text-pretty text-muted-foreground">In your Claude sessions in this project, teammates’ requests can use these of yours without asking you.</p>
+        <p className="mt-1 text-xs text-pretty text-muted-foreground">In your sessions in this project, teammates’ requests can use these of yours without asking you.</p>
         <div className="mt-3 flex flex-col gap-0.5 rounded-xl bg-surface p-1">
           {CAPS.map((c) => (
             <label key={c.value} className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-lg px-3 py-2 transition-colors duration-150 hover:bg-surface-2">
@@ -422,7 +423,7 @@ function GuestCapsDefault({ slug }: { slug: string }) {
           ))}
         </div>
         <p className="mt-2 text-xs text-pretty text-muted-foreground">
-          Off: Claude asks you. Yours only: everyone sets their own. A session’s Share dialog can still change it for that session.
+          Off: the agent asks you. Yours only: everyone sets their own. A session’s Share dialog can still change it for that session.
         </p>
       </PopoverContent>
     </Popover>
@@ -450,8 +451,8 @@ function Overview({ p, readyCount, tasks, isGithub, onTab, onNew }: {
   const activity = useQuery(activityQuery(slug))
   const last = commits.data?.commits[0]
 
-  const claude = live.working && live.waiting ? 'Claude is working here, and waiting for an answer'
-    : live.working ? 'Claude is working here' : live.waiting ? 'Claude is waiting for an answer here' : ''
+  const claude = live.working && live.waiting ? 'An agent is working here, and waiting for an answer'
+    : live.working ? 'An agent is working here' : live.waiting ? 'Waiting for an answer here' : ''
   const ready = readyCount ? `${count(readyCount, 'change')} ${readyCount === 1 ? 'is' : 'are'} ready to review` : ''
   const busy = !!(claude || ready)
   const headline = claude && ready ? `${claude}. ${ready}.` : busy ? `${claude || ready}.` : 'Quiet right now.'
@@ -472,7 +473,7 @@ function Overview({ p, readyCount, tasks, isGithub, onTab, onNew }: {
 
         <ReadyToReview slug={slug} isGithub={isGithub} className="order-2" />
 
-        <Block title="Claude right now" count={active.length + hidden || undefined} className="order-3"
+        <Block title="Sessions right now" count={active.length + hidden || undefined} className="order-3"
           action={<><Button size="sm" variant="ghost" onClick={onNew}><Plus />New session</Button><TabLink onClick={() => onTab('sessions')}>All sessions</TabLink></>}>
           {active.length > 0 && <SessionList sessions={active} expand />}
           {hidden > 0 && (
@@ -482,7 +483,7 @@ function Overview({ p, readyCount, tasks, isGithub, onTab, onNew }: {
             </p>
           )}
           {!active.length && !hidden && (
-            <Calm>Nobody's Claude is working in this project right now. <button className="text-foreground underline underline-offset-4" onClick={onNew}>Start a session</button></Calm>
+            <Calm>No session is working in this project right now. <button className="text-foreground underline underline-offset-4" onClick={onNew}>Start a session</button></Calm>
           )}
         </Block>
 
@@ -555,8 +556,8 @@ function ProjectInstructions({ slug, instructions, className }: { slug: string; 
       {editing ? (
         <div className="flex flex-col gap-2">
           <Textarea autoFocus rows={6} className="min-h-32 text-sm" value={body} onChange={(e) => setBody(e.target.value)}
-            placeholder={'Rules every Claude session in this project follows. e.g. "You are a gold analyst. Follow these rules…"'} />
-          <span className="text-xs text-muted-foreground">Added to the system prompt of every Claude session here.</span>
+            placeholder={'Rules every session in this project follows. e.g. "You are a gold analyst. Follow these rules…"'} />
+          <span className="text-xs text-muted-foreground">Added to the system prompt of every session here.</span>
           <span className="flex justify-end gap-2">
             <Button size="sm" variant="ghost" disabled={save.isPending} onClick={() => { setBody(instructions); setEditing(false) }}>Cancel</Button>
             <Button size="sm" disabled={save.isPending || body === instructions} onClick={() => save.mutate()}>Save</Button>
@@ -565,7 +566,7 @@ function ProjectInstructions({ slug, instructions, className }: { slug: string; 
       ) : instructions ? (
         <p className="max-h-56 overflow-auto rounded-2xl bg-surface px-4 py-3 text-sm whitespace-pre-wrap text-muted-foreground">{instructions}</p>
       ) : (
-        <Calm>No instructions yet. Add rules every Claude session in this project should follow, set once like a Claude Project's instructions.</Calm>
+        <Calm>No instructions yet. Add rules every session in this project should follow, set once like a Claude Project's instructions.</Calm>
       )}
     </Block>
   )
@@ -609,7 +610,7 @@ function Commits({ slug }: { slug: string }) {
   const q = useQuery(commitsQuery(slug))
   if (q.isPending) return <Skeleton className="h-64 rounded-2xl bg-surface" />
   if (q.error) return <ErrorAlert error={q.error} />
-  if (!q.data.commits.length) return <Calm>No commits yet. They show here once someone, or Claude, commits to {slug}'s main branch.</Calm>
+  if (!q.data.commits.length) return <Calm>No commits yet. They show here once someone, or an agent, commits to {slug}'s main branch.</Calm>
   return (
     <div className="flex max-w-3xl flex-col gap-8">
       {byDay(q.data.commits).map(([day, list]) => (
@@ -626,7 +627,7 @@ function Commits({ slug }: { slug: string }) {
 
 /** What happened in the project, by the team, by Claude and by the team roles, newest first, a day at a time. */
 function ProjectLog({ items }: { items: Activity[] }) {
-  if (!items.length) return <Calm>Nothing has happened here yet. Work on the project, by the team or by Claude, shows up as it happens.</Calm>
+  if (!items.length) return <Calm>Nothing has happened here yet. Work on the project, by the team or by its agents, shows up as it happens.</Calm>
   return (
     <div className="flex flex-col gap-4">
       {byDay(items).map(([day, list]) => (
@@ -640,7 +641,7 @@ function ProjectLog({ items }: { items: Activity[] }) {
                   <span className={cn('mt-[7px] size-1.5 shrink-0 rounded-full', a.role || a.viaClaude ? 'bg-foreground/60' : 'bg-muted-foreground/35')} />
                   <span className="line-clamp-2 min-w-0 flex-1 text-muted-foreground">
                     <span className="font-medium text-foreground">{authorName(a.user, a.role)}</span>
-                    {a.role ? ' (AI team)' : a.viaClaude ? ' (via Claude)' : ''} {a.summary}
+                    {a.role ? ' (AI team)' : a.viaClaude ? ' (via an agent)' : ''} {a.summary}
                   </span>
                 </span>
               )

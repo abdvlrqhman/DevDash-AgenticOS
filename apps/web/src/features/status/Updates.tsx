@@ -101,7 +101,7 @@ export function Updates() {
               {r.note && <p className="mt-1 break-words whitespace-pre-wrap text-pretty">{r.note}</p>}
               <div className="mt-1 text-xs text-attention-foreground">
                 {relativeTime(r.createdAt)}
-                {r.session && <>, from <Link to="/claude/$id" params={{ id: r.session.id }} className="underline decoration-attention-foreground/40 underline-offset-4 hover:decoration-current">{r.session.title}</Link></>}
+                {r.session && <>, from <Link to="/sessions/$id" params={{ id: r.session.id }} className="underline decoration-attention-foreground/40 underline-offset-4 hover:decoration-current">{r.session.title}</Link></>}
               </div>
             </div>
           </div>

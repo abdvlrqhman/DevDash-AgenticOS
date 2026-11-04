@@ -5,7 +5,7 @@ import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
 import type { ActivityService } from '../activity/service.ts'
 import type { User } from '../auth/repo.ts'
-import type { ClaudeService, TurnEnd } from '../claude/service.ts'
+import { agentName, harnessOf, type ClaudeService, type Harness, type TurnEnd } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import type { ProjectsService } from '../projects/service.ts'
 import type { Priority, TasksService } from '../tasks/service.ts'
@@ -17,6 +17,12 @@ import { dueSlots, localParts, nextRun, slotKey, TRIGGERS, validSlots, validTz, 
 import { fetchHttp, fetchPage, queryPostgres, readOnlySql, rowsText, type SourceConfig, type SourceKind } from './sources.ts'
 
 export const MODELS = ['opus', 'sonnet', 'haiku'] as const
+/** A role's model for its agent: a Claude family for Claude Code, a provider/model id for OpenCode; null is the agent's default. */
+export function roleModel(harness: string, model: string | null | undefined): string | null {
+  if (!model) return null
+  if (harness === 'claude') return (MODELS as readonly string[]).includes(model) ? model : null
+  return /^[\w.-]+\/[\w./:@-]{1,150}$/.test(model) ? model : null
+}
 export const KINDS = ['task', 'code', 'goal', 'other'] as const
 const DIGEST_AFTER_MS = 5 * 60_000 // a session quiet this long gets its journal line
 const STALE_SHIFT_S = 120
@@ -55,7 +61,7 @@ export type Author =
 export type MessageInput = { thread?: number; to?: string; cc?: string[]; title?: string; kind: MessageKind; body: string; evidence?: string; ask?: string }
 export type SourceInput = { name: string; kind: SourceKind; description: string; config: SourceConfig; secret?: string | null }
 
-export type RoleInput = { name: string; summary: string; instructions: string; model: string | null }
+export type RoleInput = { name: string; summary: string; instructions: string; model: string | null; harness?: Harness }
 export type RoleSettingsInput = {
   autonomy: 'advisor' | 'operator'; autoApprove: string[]; schedule: unknown[]; triggers: string[]
   paused: boolean; dailyLimit: number; monthlyBudget: number | null; lead?: boolean; selfClose?: SelfClose
@@ -123,7 +129,13 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     return u ? ({ ...u } as User) : undefined
   }
   const members = () => (db.prepare('select id from users where disabled_at is null').all() as { id: number }[]).map((u) => u.id)
-  const profileOf = (u: User) => (claude.defaults(u) as { profile: string }).profile
+  /** The member's profile for an agent: their default profile when it's that agent's, else the agent's default one. */
+  const profileFor = (u: User, harness: string) => { const d = claude.defaults(u); return d.harness === harness ? d.profile : 'default' }
+  /** DevDash's own text jobs for a member (a session digest, drafted instructions) run on their default agent. */
+  const jobOf = (u: User, claudeModel: string) => {
+    const harness = harnessOf(claude.defaults(u).harness)
+    return { harness, profile: profileFor(u, harness), ...(harness === 'claude' ? { model: claudeModel } : {}) }
+  }
 
   /** The project with Team on, and the member its roles run as. */
   function on(slug: string) {
@@ -183,7 +195,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     const s = settingsOf(r)
     const t = repo.project(r.project_id)
     return {
-      id: r.id, name: r.name, summary: r.summary, model: r.model,
+      id: r.id, name: r.name, summary: r.summary, model: r.model, harness: harnessOf(r.harness),
       working: !!running || chat?.status === 'working',
       shift: running ? { id: running.id, startedAt: running.started_at, sessionId: running.session_id } : null,
       lastShift: last ? { at: last.ended_at ?? last.started_at, status: last.status, report: last.report } : null,
@@ -196,7 +208,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
 
   function journal(projectId: number, since = 0, limit = 30) {
     const lines = [
-      ...repo.journal(projectId, since, limit).map((j) => ({ id: `j${j.id}`, kind: 'session' as const, at: j.created_at, text: j.body, who: j.user_name, url: j.session_id ? `/claude/${j.session_id}` : null })),
+      ...repo.journal(projectId, since, limit).map((j) => ({ id: `j${j.id}`, kind: 'session' as const, at: j.created_at, text: j.body, who: j.user_name, url: j.session_id ? `/sessions/${j.session_id}` : null })),
       ...activity.list(projectId, limit).filter((a) => a.at >= since).map((a) => ({ id: `a${a.id}`, kind: 'activity' as const, at: a.at, text: a.summary, who: a.user, url: a.url })),
     ]
     return lines.sort((a, b) => b.at - a.at).slice(0, limit)
@@ -236,14 +248,14 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       return `Added ${made.map((t) => `[${t.key}](/tasks/${x.project_slug}/${t.number})`).join(', ')} to the backlog.`
     }
     if (x.kind === 'code') {
-      const d = claude.defaults(user) as { profile: string; model: string | null; effort: string | null; permission_mode: string }
+      const d = claude.defaults(user)
       const prompt = `${payload.prompt?.trim() || x.title}\n\n(Proposed by the ${x.role_name} role on the DevDash team, approved by ${user.name}. Work on this branch; commit when done.)`
       const s = await claude.create(user, {
-        prompt, images: [], cwd: '', profile: d.profile, model: d.model, effort: d.effort, permissionMode: d.permission_mode,
+        prompt, images: [], cwd: '', harness: harnessOf(d.harness), profile: d.profile, model: d.model, effort: d.effort, permissionMode: d.permission_mode,
         mode: 'chat', project: x.project_slug, worktree: true,
         // Unlisted: it lives under the project's "From approvals" group, not everyone's global session list.
       }, { title: `${x.role_name}: ${x.title}`, origin: { kind: 'proposal', role: x.role_name }, listed: false })
-      return `Claude started on it in its own branch: [${s.title}](/claude/${s.id}).`
+      return `${agentName(s.harness)} started on it in its own branch: [${s.title}](/sessions/${s.id}).`
     }
     if (x.kind === 'goal') {
       const g = payload.goal ?? { title: x.title }
@@ -320,7 +332,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     const text = transcriptText(messages.slice(from))
     let body = ''
     if (text.length >= 80) {
-      const out = await claude.complete(owner.username, `Session "${s.title}":\n\n${text.slice(-24_000)}`, { system: DIGEST_SYSTEM, model: 'haiku', profile: profileOf(owner) })
+      const out = await claude.complete(owner.username, `Session "${s.title}":\n\n${text.slice(-24_000)}`, { system: DIGEST_SYSTEM, ...jobOf(owner, 'haiku') })
       body = /^NONE\b/.test(out.trim()) ? '' : out.trim().slice(0, 600)
     }
     repo.addJournal(s.project_id, sessionId, owner.id, body, messages.length)
@@ -423,7 +435,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     if (settle(r.id)) throw new AppError(409, 'busy', `${r.name} is already on a shift.`)
     const label = trigger === 'manual' ? 'started by hand' : trigger
     const s = await claude.create(runsAs, {
-      prompt: shiftPrompt(label, threadId), images: [], cwd: '', profile: profileOf(runsAs), model: r.model, effort: null,
+      prompt: shiftPrompt(label, threadId), images: [], cwd: '', harness: harnessOf(r.harness), profile: profileFor(runsAs, r.harness), model: r.model, effort: null,
       permissionMode: 'dontAsk', mode: 'chat', project: p.slug,
     }, { title: `${r.name}: shift`, ...sessionTools(r, p.name), listed: false, shared: true })
     const shiftId = repo.insertShift(r.id, s.id, trigger)
@@ -948,12 +960,13 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
         project: p.name, brief: repo.brief(p.id)?.body ?? '', name, summary,
         others: repo.roles(p.id).filter((r) => r.name !== name).map((r) => `${r.name}${r.summary ? ` (${r.summary})` : ''}`),
       })
-      return { instructions: await claude.complete(user.username, prompt, { system: GENERATE_SYSTEM, model: 'sonnet', profile: profileOf(user) }) }
+      return { instructions: await claude.complete(user.username, prompt, { system: GENERATE_SYSTEM, ...jobOf(user, 'sonnet') }) }
     },
 
     createRole(user: User, slug: string, input: RoleInput & { schedule?: unknown[] }) {
       const { p } = on(slug)
-      const id = repo.insertRole(p.id, input, user.id)
+      const harness = harnessOf(input.harness)
+      const id = repo.insertRole(p.id, { ...input, harness, model: roleModel(harness, input.model) }, user.id)
       // The first CEO leads unless someone else already does.
       if (input.name.trim().toUpperCase() === 'CEO' && !repo.lead(p.id)) repo.setLead(p.id, id, true)
       if (input.schedule) {
@@ -965,7 +978,8 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     },
     updateRole(id: number, input: RoleInput) {
       const { r, p } = findRole(id)
-      repo.updateRole(id, input)
+      const harness = harnessOf(input.harness ?? r.harness)
+      repo.updateRole(id, { ...input, harness, model: roleModel(harness, input.model) })
       const next = repo.role(id)!
       // Its chat picks up the new instructions the next time Claude starts for it.
       if (r.chat_session_id && repo.session(r.chat_session_id)) claude.configure(r.chat_session_id, { title: next.name, ...sessionTools(next, p.name) })
@@ -1020,7 +1034,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       if (r.chat_session_id && repo.session(r.chat_session_id)) return { sessionId: r.chat_session_id }
       const { runsAs } = on(p.slug)
       const s = await claude.create(runsAs, {
-        prompt: '', images: [], cwd: '', profile: profileOf(runsAs), model: r.model, effort: null,
+        prompt: '', images: [], cwd: '', harness: harnessOf(r.harness), profile: profileFor(runsAs, r.harness), model: r.model, effort: null,
         permissionMode: 'dontAsk', mode: 'chat', project: p.slug,
       }, { title: r.name, ...sessionTools(r, p.name), listed: false, shared: true, sharedCanSend: true })
       repo.setChat(r.id, s.id)
@@ -1337,7 +1351,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
         this.updateRole(r.id, {
           name: input.name?.trim().slice(0, 60) || r.name, summary: input.summary?.trim().slice(0, 300) ?? r.summary,
           instructions: input.instructions?.trim() || r.instructions,
-          model: input.model === undefined ? r.model : input.model && (MODELS as readonly string[]).includes(input.model) ? input.model : null,
+          model: input.model === undefined ? r.model : roleModel(r.harness, input.model), harness: harnessOf(r.harness),
         })
       }
       const s = settingsOf(repo.role(r.id)!)

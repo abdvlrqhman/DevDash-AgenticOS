@@ -13,8 +13,8 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 // back. A command line can hide what it does (a script, `npm test`), so this is a backstop for the obvious, not a wall.
 
 const SRV = process.env.DEVDASH_PROJECTS_ROOT || '/srv/devdash'
-/** Folders every member reaches with their own account anyway: the shared checkouts, the worktrees, the team's files. */
-export const SHARED_ROOTS = [`${SRV}/projects`, `${SRV}/worktrees`, `${SRV}/files`]
+/** Folders every member reaches with their own account anyway: the shared checkouts, the worktrees, the team's files and shared tools. */
+export const SHARED_ROOTS = [`${SRV}/projects`, `${SRV}/worktrees`, `${SRV}/files`, `${SRV}/shared`]
 
 /**
  * What an owner can let teammates' requests use without asking. drive: rclone on their DevDash Drive folder. tailnet: their
@@ -84,6 +84,44 @@ export type GuestContext = {
   tailnetMcps?: string[]
   /** The owner's home folder (this process's). */
   home?: string
+  /** This Claude session's id: its own scratch files (a long command's saved output) are part of its work. */
+  sessionId?: string
+}
+
+/**
+ * The owner's home holds two kinds of things. Theirs: keys and logins, shell history, their own files and projects,
+ * other sessions, DevDash's and Claude's state. And the tools any developer downloads: SDKs, toolchains, package and
+ * build caches, models. The tools are public, so project work may read and run them (never edit them); everything
+ * else in a home is the owner's. An allow list on purpose: a folder nobody listed stays the owner's.
+ */
+const HOME_TOOLS = [
+  // SDKs and toolchains
+  'development/flutter', 'development/android-sdk', 'development/jdk*', 'flutter', 'Android/Sdk', 'android-sdk', '.pyenv', '.nvm',
+  '.volta', '.sdkman', '.rustup', '.deno', '.bun/bin', '.local/bin', '.local/lib', '.local/share/kotlin', '.local/share/uv',
+  // downloaded packages and build caches
+  '.pub-cache', '.dartServer', '.dart-tool', '.npm', '.yarn', '.pnpm-store', '.local/share/pnpm', '.bun/install',
+  '.cargo/registry', '.cargo/git', '.cargo/bin', 'go/pkg', 'go/bin', '.gradle/caches', '.gradle/wrapper', '.gradle/native',
+  '.m2/repository', '.gem', '.nuget/packages', '.local/share/virtualenvs', '.android/avd', '.android/cache',
+  '.cache/pip', '.cache/uv', '.cache/pypoetry', '.cache/yarn', '.cache/pnpm', '.cache/go-build', '.cache/node-gyp',
+  '.cache/ms-playwright', '.cache/puppeteer', '.cache/electron', '.cache/prisma', '.cache/typescript', '.cache/deno',
+  '.cache/torch', '.cache/huggingface/hub', '.cache/kokoro', '.cache/matplotlib', '.cache/fontconfig',
+]
+const TOOL_AREA = new RegExp(`^(?:${HOME_TOOLS.map((a) => a.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('|')})(?:/|$)`)
+/** Credential files package managers keep next to their caches: still the owner's. */
+const CREDENTIAL_FILES = /\bcredentials\.(json|toml)\b|pub-credentials|\.pypirc|\.npmrc|gradle\.properties|settings(-security)?\.xml|(^|\/)token$/
+/** Whether a path inside the owner's home (relative to it: `.pub-cache/hosted/...`) is one of the public tool areas. */
+export const homeToolArea = (rel: string) => !rel.split('/').includes('..') && TOOL_AREA.test(rel) && !CREDENTIAL_FILES.test(rel)
+const READ_ONLY = new Set(['Read', 'NotebookRead', 'LS', 'Glob', 'Grep'])
+
+/**
+ * Where Claude Code keeps this session's own scratch: a command's output too long to show, saved to read back
+ * (~/.claude/projects/<folder>/<session>/tool-results/), and background tasks' output (/tmp/claude-<uid>/<folder>/<session>/).
+ * Only this session's, by its id: never another session's transcript or anything else in the owner's home.
+ */
+const ownScratch = (o: GuestContext) => {
+  if (!o.sessionId || !/^[\w-]+$/.test(o.sessionId)) return null
+  const home = (o.home ?? homedir()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(${home}/\\.claude/projects/[^/\\s'"]+/${o.sessionId}/tool-results|/tmp/claude-\\d+/[^/\\s'"]+/${o.sessionId})(/[^\\s'"]*)?`, 'g')
 }
 
 /** Whether a tool call may go ahead in a guest turn without the owner. */
@@ -108,9 +146,14 @@ export function guestMay(tool: string, input: Record<string, unknown>, o: GuestC
     paths.push(input.pattern.startsWith('~') ? '~' : isAbsolute(fixed) ? fixed : resolve(from, fixed))
   }
   // "~" is the owner's home, never shared.
+  const own = ownScratch(o)
+  const home = o.home ?? homedir()
   return paths.every((p) => {
     const at = isAbsolute(p) ? p : resolve(o.cwd, p)
-    return !p.startsWith('~') && inside(at, roots) && !/^\/tmp\/claude-\d+(\/|$)/.test(realPath(at))
+    if (own && !p.includes('..') && new RegExp(`^${own.source}$`).test(at)) return true
+    const real = realPath(at)
+    if (READ_ONLY.has(tool) && real.startsWith(`${home}/`) && homeToolArea(real.slice(home.length + 1))) return true
+    return !p.startsWith('~') && inside(at, roots) && !/^\/tmp\/claude-\d+(\/|$)/.test(real)
   })
 }
 
@@ -125,20 +168,40 @@ const tailnetTool = (tool: string, o: GuestContext) =>
  */
 export function commandMay(cmd: string, caps: Set<string>, o: GuestContext): boolean {
   if (!inside(o.cwd, o.roots ?? SHARED_ROOTS)) return false
-  // What a commit message or a PR's title says isn't what the command does.
+  // A commit message or a PR's title says nothing of what the command does; nor does reading this session's own scratch.
+  const own = ownScratch(o)
   const line = cmd.replace(/(\s(?:-m|--message|-t|--title|-b|--body)[\s=]+)("(?:[^"\\]|\\.)*"|'[^']*')/g, '$1""')
+    .replace(own && !cmd.includes('..') ? own : /$^/, 'own-scratch')
   if (privateRef(line, o.home ?? homedir())) return false
-  for (const [cap, re] of ACCOUNTS) if (re.some((r) => r.test(line)) && !caps.has(cap)) return false
-  return !DRASTIC.some((r) => r.test(line))
+  // Which programs run: words in quotes are a pattern or a message (`grep -rn "ssh"`), unless the shell runs them.
+  const code = codeOf(line)
+  for (const [cap, re] of ACCOUNTS) if (re.some((r) => r.test(code)) && !caps.has(cap)) return false
+  return !DRASTIC.some((r) => r.test(code))
+}
+
+/**
+ * A command line without what its quotes hold, so a word in a grep pattern or a message isn't taken for a program. Kept
+ * whole when quotes are run as code (`sh -c "..."`, eval, `python -c`, `$(...)` inside quotes).
+ */
+function codeOf(line: string): string {
+  if (/\b(?:ba|z|da)?sh\s+(?:-\w+\s+)*-\w*c\b|\beval\b|\bxargs\b|\bsource\b|\b(?:python3?|node|bun|deno|perl|ruby|php)\s+-[ce]\b/.test(line)) return line
+  return line.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (q) => (/\$\(|`/.test(q) ? q : q[0]! + q[0]!))
 }
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** The owner's home and credentials: `~`, $HOME, /home, /root, their sockets, the usual key and token files. */
+/**
+ * The owner's own things in a command line: any place in their home but its public tool areas (homeToolArea), however
+ * it's written (`~/x`, $HOME, ${HOME}, the full path), their runtime sockets, and the usual key and token files wherever
+ * they are. Not /root or /home as such: the owner can't read root's or a teammate's home anyway, and those paths are
+ * often inside a container (`docker run -v cache:/root/.cache/pip`).
+ */
 function privateRef(line: string, home: string): boolean {
-  return /(^|[\s'"=:(<>|;&])~(?=$|[\s/'"):;|&<>])/.test(line)
-    || /\$\{?HOME\b/.test(line)
-    || new RegExp(`(^|[^\\w.-])(${esc(home)}|/home|/root|/run/user)(?=$|[/\\s'":;|&)])`).test(line)
-    || /\.ssh\b|\bid_(rsa|ed25519|ecdsa)\b|\.config\/(gh|rclone|gcloud)\b|rclone\.conf|\.git-credentials|\.netrc|\.aws\/|\.kube\/|\.docker\/config|\.credentials\.json|\.claude\.json|\/proc\/[^\s/]+\/environ|\b(GH|GITHUB)_TOKEN\b/.test(line)
+  const refs = new RegExp(`(?:^|[\\s'"=:(<>|;&])(?:~|\\$HOME\\b|\\$\\{HOME\\}|${esc(home)})(?=$|[/\\s'":;|&)<>])([^\\s'":;|&)<>]*)`, 'g')
+  for (const m of line.matchAll(refs)) {
+    if (!homeToolArea((m[1] ?? '').replace(/^\/+/, ''))) return true
+  }
+  return /(^|[^\w.-])\/run\/user(?=$|[/\s'":;|&)])/.test(line)
+    || /\.ssh\b|\bid_(rsa|ed25519|ecdsa)\b|\.config\/(gh|rclone|gcloud|\.wrangler)\b|rclone\.conf|\.git-credentials|\.netrc|\.aws\/|\.kube\/|\.docker\/config|\.credentials\.json|\.claude\.json|\/proc\/[^\s/]+\/environ|\b(GH|GITHUB)_TOKEN\b|\badbkey\b/.test(line)
 }
 
 /** The owner's accounts as a command line uses them, by what the owner can share. */
@@ -164,5 +227,8 @@ const DRASTIC = [
   /\bgit\s+push\b[^\n;&|]*\s(--force\b|--force-with-lease\b|-f\b|--mirror\b|--delete\b|-d\b|\+\S|:\S)/,
   /\brclone\s+(purge|delete|deletefile|rmdirs?|sync|config|dedupe|cleanup|backend)\b|\brclone\b[^\n;&|]*(--config\b|\s:[a-z]+[:,])/,
   /\btailscale\s+(up|down|login|logout|switch|set|serve|funnel|file|cert)\b/,
-  /\bcrontab\b|\bsystemctl\s+--user\b|\bloginctl\b/,
+  // Changing what runs on its own as the owner; looking (crontab -l, systemctl --user status) is fine.
+  /\bcrontab\b(?!\s+-l\b)/,
+  /\bsystemctl\s+--user\s+(?:\S+\s+)*?(start|stop|restart|reload|enable|disable|mask|unmask|edit|link|revert|daemon-reload|set-environment|import-environment|kill)\b/,
+  /\bloginctl\s+(enable-linger|disable-linger|terminate-\w+|kill-\w+)\b/,
 ]

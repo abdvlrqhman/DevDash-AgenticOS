@@ -9,6 +9,8 @@ export type ModelInfo = {
   /** The model ID a row stands for ('opus' → 'claude-opus-5-5'); 'default' resolves too. */
   resolvedModel?: string
   supportedEffortLevels?: string[]
+  /** The heading it goes under when it isn't a Claude family: another agent's provider (OpenCode's "anthropic", "openrouter"). */
+  group?: string
 }
 export type ModelRow = ModelInfo & { version: number[]; newest: boolean }
 export type ModelFamily = { name: string; rows: ModelRow[] }
@@ -17,6 +19,7 @@ export const isDefaultModel = (v: string | null | undefined) => !v || v === 'def
 
 /** "claude-opus-4-8" → opus, [4, 8]; dates like 20251001 aren't versions. Falls back to the display name. */
 function parse(m: ModelInfo) {
+  if (m.group) return { family: m.group, version: [] as number[] }
   const id = m.resolvedModel ?? (m.value.startsWith('claude-') ? m.value : '')
   const parts = id.replace(/^claude-/, '').split('-')
   const family = parts[0] && /^[a-z]+$/.test(parts[0]) ? parts[0] : (m.displayName.split(/[\s(]/)[0] ?? m.value).toLowerCase()
@@ -43,12 +46,13 @@ export function groupModels(models: ModelInfo[]) {
     let f = families.find((x) => x.name === name)
     if (!f) families.push((f = { name, rows: [] }))
     // An alias ('opus') always means the family's newest model; a full ID ('claude-opus-4-8') stays put.
-    f.rows.push({ ...m, version, newest: !m.value.startsWith('claude-') })
+    f.rows.push({ ...m, version, newest: !m.group && !m.value.startsWith('claude-') })
   }
   for (const f of families) f.rows.sort((a, b) => Number(b.newest) - Number(a.newest) || newerFirst(a.version, b.version))
   const defName = def
     ? models.find((m) => m !== def && def.resolvedModel && m.resolvedModel === def.resolvedModel)?.displayName
-      ?? def.description?.split('·')[0]?.trim()
+      // Claude Code's says "Opus 4.8 · …"; another agent's description is only a hint, not a model's name.
+      ?? (def.description?.includes('·') ? def.description.split('·')[0]?.trim() : undefined)
     : undefined
   return { def, defName: defName || undefined, families }
 }

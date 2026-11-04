@@ -27,6 +27,7 @@ import { useArchiveSession } from './ArchiveSession'
 import { ModelChoices } from './ModelChoices'
 import { groupModels, isDefaultModel, modelLabel, type ModelInfo } from './models'
 import { byFolder, commandsQuery, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, relativeTime, sessionPlace, sessionsQuery, type PermissionMode, type Session } from './data'
+import { HARNESS, HARNESSES, harnessOf, type Harness } from './harness'
 
 export function SessionsPage() {
   const me = useQuery(meQuery).data!
@@ -46,9 +47,9 @@ export function SessionsPage() {
 
   return (
     <>
-      <PageHeader title={archived ? 'Archived sessions' : 'Claude'}
+      <PageHeader title={archived ? 'Archived sessions' : 'Sessions'}
         actions={<>
-          <Button variant="ghost" size="icon" asChild aria-label="Claude setup"><Link to="/claude/setup"><Settings2 /></Link></Button>
+          <Button variant="ghost" size="icon" asChild aria-label="Agent setup"><Link to="/sessions/setup"><Settings2 /></Link></Button>
           <Button size="sm" onClick={() => setCreating(true)}><Plus />New</Button>
         </>} />
       <PageBody className="gap-10 py-6 md:py-8">
@@ -73,10 +74,10 @@ export function SessionsPage() {
         {list.isSuccess && !sessions.length && (
           <div className="flex flex-col items-start gap-5 rounded-2xl bg-surface p-6 md:p-8">
             <div className="flex max-w-prose flex-col gap-1.5">
-              <h2 className="text-lg font-semibold tracking-[-0.015em]">{archived ? 'Nothing archived' : 'Hand Claude something to do'}</h2>
+              <h2 className="text-lg font-semibold tracking-[-0.015em]">{archived ? 'Nothing archived' : 'Hand an agent something to do'}</h2>
               <p className="text-sm text-pretty text-muted-foreground">
                 {archived ? 'Sessions you archive wait here, out of the way, until you need them again.'
-                  : 'Start a session and Claude works on the server as you, in a folder or a project, and keeps going after you close the app.'}
+                  : 'Start a session and a coding agent works on the server as you, in a folder or a project, and keeps going after you close the app.'}
               </p>
             </div>
             {!archived && <Button onClick={() => setCreating(true)}><Plus />New session</Button>}
@@ -115,22 +116,23 @@ function SessionRow({ s, me, highlight, orb, onArchive }: { s: Session; me: numb
   return (
     <li data-key={s.id} className={cn('flex items-center rounded-xl transition-[background-color,scale] duration-300 ease-spring has-[a:active]:scale-[0.99]',
       highlight ? 'rounded-2xl bg-attention-soft hover:bg-attention-soft/70' : 'hover:bg-surface-2')}>
-      <Link to="/claude/$id" params={{ id: s.id }} className={cn('flex min-w-0 flex-1 items-center gap-3 px-3 text-sm', highlight ? 'py-3' : 'py-2.5')}>
+      <Link to="/sessions/$id" params={{ id: s.id }} className={cn('flex min-w-0 flex-1 items-center gap-3 px-3 text-sm', highlight ? 'py-3' : 'py-2.5')}>
         <span className="flex size-5 shrink-0 items-center justify-center">
-          {orb ? <Orb state="working" size={20} label="Claude is working" /> : <StatusLight state={light(s)} />}
+          {orb ? <Orb state="working" size={20} label="Working" /> : <StatusLight state={light(s)} />}
         </span>
         <span className="min-w-0 flex-1">
           <span className="line-clamp-1 font-medium">{s.title}</span>
           <span className={cn('line-clamp-1 text-xs', highlight ? 'text-attention-foreground' : 'text-muted-foreground')}>
             {!mine && <span className={highlight ? undefined : 'text-foreground/80'}>{s.owner.name.split(' ')[0]}, </span>}
             {mine ? what : what[0]!.toLowerCase() + what.slice(1)}{highlight ? <>, in {sessionPlace(s)}</> : null}
+            {/* Phones have no room for the tags on the right: the agent goes here. */}
+            <span className="sm:hidden"> · {HARNESS[harnessOf(s)].name}</span>
           </span>
         </span>
-        {(s.mode === 'cli' || (mine && s.audience !== 'private')) && (
-          <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
-            {[s.mode === 'cli' && 'CLI', mine && s.audience !== 'private' && (s.audience === 'people' ? `Shared with ${s.sharedWith}` : 'Shared')].filter(Boolean).join(', ')}
-          </span>
-        )}
+        {/* Which agent runs it, for every session alike: a team can use several. */}
+        <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
+          {[HARNESS[harnessOf(s)].label, s.mode === 'cli' && 'CLI', mine && s.audience !== 'private' && (s.audience === 'people' ? `Shared with ${s.sharedWith}` : 'Shared')].filter(Boolean).join(', ')}
+        </span>
         {!mine && <UserAvatar user={s.owner} className="size-6" textClassName="text-[10px]" title={s.owner.name} />}
         {!(onArchive && mine && !s.archived) && <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
       </Link>
@@ -171,6 +173,7 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   const [prompt, setPrompt] = useState(initialPrompt)
   const [cwd, setCwd] = useState(initialCwd ?? sessionFolder)
   const [customModel, setCustomModel] = useState(false)
+  const [harness, setHarness] = useState<Harness>('claude')
   const [profile, setProfile] = useState('default')
   const [model, setModel] = useState('')
   const [perm, setPerm] = useState<PermissionMode>('bypassPermissions')
@@ -183,6 +186,7 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   const sharing = sharingPick ?? projects.find((p) => p.slug === project)?.sessionSharing ?? 'private'
   useEffect(() => {
     if (!d) return
+    setHarness(harnessOf(d))
     setProfile(d.profile)
     setModel(d.model ?? '')
     setPerm(d.permission_mode as PermissionMode)
@@ -190,16 +194,23 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   }, [d])
   useEffect(() => { if (open) { setPrompt(initialPrompt); setCwd(initialCwd ?? sessionFolder()); setProject(initialProject ?? ''); setSharing(null) } }, [open, initialPrompt, initialCwd, initialProject])
 
-  const profiles = (setup.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? []
+  const agent = HARNESS[harness]
+  const other = (setup.data?.agents as { harness: string; installed: boolean; profiles: { name: string }[] }[] | undefined)?.find((a) => a.harness === harness)
+  // Claude profiles say whether they're signed in; OpenCode's always work (its free models need no sign-in).
+  const profiles = harness === 'claude' ? (setup.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? []
+    : (other?.profiles ?? []).map((p) => ({ name: p.name, loggedIn: true }))
   const chosen = profiles.find((p) => p.name === profile)
-  // The models this Claude Code offers (with their versions in the description); a fixed list until it answers.
-  const offered = useQuery({ ...commandsQuery(profile), enabled: open }).data?.models as ModelInfo[] | undefined
-  const models: ModelInfo[] = offered?.length ? offered : FALLBACK_MODELS
+  const missing = harness !== 'claude' && other && !other.installed ? other : undefined
+  // The models this agent offers (Claude Code's with their versions; OpenCode's from every provider you connected).
+  const listed = useQuery({ ...commandsQuery(profile, harness), enabled: open && !missing && (!profiles.length || !!chosen) })
+  const offered = listed.data?.models as ModelInfo[] | undefined
+  const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
+  const modes = PERMISSION_MODES.slice(0, 4).filter((p) => agent.modes.includes(p.value))
   const pickedModel = customModel ? undefined : isDefaultModel(model) ? groupModels(models).def : models.find((m) => m.value === model)
   const create = useMutation({
     mutationFn: () => unwrap(api.api.claude.sessions.$post({
       json: {
-        prompt, images: [], cwd, profile, model: model && model !== 'default' ? model.trim() : null, effort: null, permissionMode: perm, mode: openIn,
+        prompt, images: [], cwd, harness, profile: chosen ? profile : 'default', model: model && model !== 'default' ? model.trim() : null, effort: null, permissionMode: perm, mode: openIn,
         project: project || undefined, worktree: project ? worktree : undefined,
         ...(sharingPick && { shared: sharingPick !== 'private', sharedCanSend: sharingPick === 'shared_can_send' }),
         cols: Math.max(40, Math.min(220, Math.floor(innerWidth / 8.2))), rows: Math.max(15, Math.min(80, Math.floor(innerHeight / 19))),
@@ -208,7 +219,7 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
     onSuccess: ({ session }) => {
       void qc.invalidateQueries({ queryKey: ['claude', 'sessions'] })
       onClose()
-      navigate({ to: '/claude/$id', params: { id: session.id } })
+      navigate({ to: '/sessions/$id', params: { id: session.id } })
     },
   })
   const submit = (e: FormEvent) => {
@@ -217,10 +228,10 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   }
 
   return (
-    <ResponsiveDialog open={open} onOpenChange={(v) => !v && onClose()} title="New session" description="Claude works in this folder as you, and keeps going when you close the app.">
+    <ResponsiveDialog open={open} onOpenChange={(v) => !v && onClose()} title="New session" description="The agent works in this folder as you, and keeps going when you close the app.">
       <form onSubmit={submit}>
         <FieldGroup className="gap-5">
-          {/* Only when started from something to hand over (a task); otherwise you write to Claude in the session. */}
+          {/* Only when started from something to hand over (a task); otherwise you write to the agent in the session. */}
           {openIn === 'chat' && initialPrompt && (
             <Field>
               <FieldLabel htmlFor="ns-prompt">First message</FieldLabel>
@@ -251,12 +262,24 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
               <FieldDescription>A new folder of its own in your projects folder (~/projects). Rename it, or pick an existing folder to work there.</FieldDescription>
             </Field>
           )}
+          <Choice id="ns-agent" label="Agent" value={harness} onChange={(v) => { setHarness(v as Harness); setProfile('default'); setModel(''); setCustomModel(false) }}
+            options={HARNESSES.map((h) => ({ value: h, label: HARNESS[h].label }))} description={agent.hint} />
+          {missing && (
+            <Alert variant="destructive">
+              <AlertDescription>{agent.label} isn't installed on this server yet. An admin can install it from the <Link to="/server" className="underline" onClick={onClose}>Server page</Link>.</AlertDescription>
+            </Alert>
+          )}
+          {harness === 'opencode' && !missing && listed.isSuccess && !offered?.length && (
+            <Alert>
+              <AlertDescription>OpenCode has no model provider connected yet. <Link to="/sessions/setup" className="underline" onClick={onClose}>Connect one</Link> first.</AlertDescription>
+            </Alert>
+          )}
           {profiles.length > 1 && (
-            <Choice id="ns-profile" label="Claude profile" value={profile} onChange={setProfile} options={profiles.map((p) => ({ value: p.name, label: p.name }))} />
+            <Choice id="ns-profile" label={`${agent.label} profile`} value={profile} onChange={setProfile} options={profiles.map((p) => ({ value: p.name, label: p.name }))} />
           )}
           {chosen && !chosen.loggedIn && (
             <Alert variant="destructive">
-              <AlertDescription>This profile isn't signed in to Claude. <Link to="/claude/setup" className="underline" onClick={onClose}>Sign in first</Link>.</AlertDescription>
+              <AlertDescription>This profile isn't signed in to Claude. <Link to="/sessions/setup" className="underline" onClick={onClose}>Sign in first</Link>.</AlertDescription>
             </Alert>
           )}
           <Field>
@@ -274,26 +297,26 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
               </DropdownMenuContent>
             </DropdownMenu>
             {customModel && (
-              <Input aria-label="Model ID" className="h-10 font-mono" placeholder="claude-opus-4-1" value={model} onChange={(e) => setModel(e.target.value)}
+              <Input aria-label="Model ID" className="h-10 font-mono" placeholder={harness === 'claude' ? 'claude-opus-4-1' : 'anthropic/claude-sonnet-4-5'} value={model} onChange={(e) => setModel(e.target.value)}
                 spellCheck={false} autoCapitalize="none" autoFocus />
             )}
             <FieldDescription>
-              {customModel ? 'Any model ID Claude Code accepts, for a specific version.'
+              {customModel ? agent.modelHint
                 : pickedModel?.description ? `${pickedModel.description}${pickedModel.value && !pickedModel.value.startsWith('claude-') && !isDefaultModel(pickedModel.value) ? '. Always its newest version.' : ''}`
                 : 'Change it any time in the session.'}
             </FieldDescription>
           </Field>
           <Choice id="ns-perm" label="Permissions" value={perm} onChange={(v) => setPerm(v as PermissionMode)}
-            options={PERMISSION_MODES.slice(0, 4).map((p) => ({ value: p.value, label: p.label }))}
+            options={modes.map((p) => ({ value: p.value, label: p.label }))}
             description={PERMISSION_MODES.find((p) => p.value === perm)?.hint} />
           <Choice id="ns-sharing" label="Sharing" value={sharing} onChange={(v) => setSharing(v as SessionSharing)}
             options={[{ value: 'private', label: 'Private' }, { value: 'shared', label: 'Shared' }, { value: 'shared_can_send', label: 'Anyone can send' }]}
             description={`${sharing === 'private' ? 'Only you see it.' : sharing === 'shared' ? 'Everyone can watch; you choose who else can send.' : 'Everyone can watch and send messages.'}${project && !sharingPick ? ' The project\'s default.' : ''} Change it any time in the session.`} />
           <Choice id="ns-open" label="Open in" value={openIn} onChange={(v) => setOpenIn(v as 'chat' | 'cli')}
             options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]}
-            description={openIn === 'cli' ? 'The real Claude Code terminal. You can switch to Chat any time.' : 'A chat view of Claude Code. You can switch to the CLI any time.'} />
+            description={openIn === 'cli' ? `${agent.cli}. You can switch to Chat any time.` : `A chat view of ${agent.label}. You can switch to the CLI any time.`} />
           <ErrorAlert error={create.error} />
-          <Button type="submit" size="lg" className="h-10" disabled={create.isPending || (customModel && !model.trim())}>
+          <Button type="submit" size="lg" className="h-10" disabled={create.isPending || !!missing || (customModel && !model.trim())}>
             {create.isPending && <Spinner />}Start session
           </Button>
         </FieldGroup>

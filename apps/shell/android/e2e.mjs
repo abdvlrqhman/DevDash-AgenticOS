@@ -158,7 +158,7 @@ async function run() {
   check(!!there, `a file made in the page is saved to Downloads (${made})`)
 
   // Dark mode: the page and the native picker.
-  await w.go('/claude')
+  await w.go('/sessions')
   await sleep(1500)
   await w.press('New')
   await sleep(1500)

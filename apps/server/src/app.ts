@@ -7,7 +7,7 @@ import { agentsService } from './modules/agents/service.ts'
 import { authMiddleware, authRoutes } from './modules/auth/routes.ts'
 import { authService } from './modules/auth/service.ts'
 import { claudeRoutes } from './modules/claude/routes.ts'
-import { claudeService } from './modules/claude/service.ts'
+import { claudeService, harnessOf } from './modules/claude/service.ts'
 import { activityService } from './modules/activity/service.ts'
 import { registerMcp } from './modules/mcp/rpc.ts'
 import { filesRoutes, publicShareRoutes } from './modules/files/routes.ts'
@@ -93,10 +93,11 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     storageFor: (userId) => storage.forLaunch(userId),
   })
 
-  // "Give to Claude": a Chat session in the task's project (its own worktree by default), linked to the task.
+  // "Give to an agent": a Chat session in the task's project (its own worktree by default), linked to the task, with the
+  // member's default agent.
   const giveToClaude: GiveToClaude = async (user, slug, number, o) => {
     const t = tasks.get(slug, number)
-    const d = claude.defaults(user) as { profile: string; model: string | null; effort: string | null; permission_mode: string } | undefined
+    const d = claude.defaults(user)
     const prompt = [
       `Work on task ${t.key}: ${t.title}`,
       t.body.trim(),
@@ -104,8 +105,8 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
       `When it's done, commit with "fixes #${t.number}" in the message: DevDash moves the task to Review on a branch and to Done on the default branch. Comment a short summary on the task with the DevDash tools.`,
     ].filter(Boolean).join('\n\n')
     const s = await claude.create(user, {
-      prompt, images: [], cwd: '', profile: o.profile ?? d?.profile ?? 'default', model: d?.model ?? null, effort: d?.effort ?? null,
-      permissionMode: d?.permission_mode ?? 'bypassPermissions', mode: 'chat', project: slug, worktree: o.worktree,
+      prompt, images: [], cwd: '', harness: harnessOf(d.harness), profile: o.profile ?? d.profile, model: d.model, effort: d.effort,
+      permissionMode: d.permission_mode, mode: 'chat', project: slug, worktree: o.worktree,
     })
     tasks.linkSession(slug, number, s.id, s.title)
     if (t.status !== 'in_progress') tasks.update({ user }, slug, number, { status: 'in_progress', assignee: t.assignee?.id ?? user.id })

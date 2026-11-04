@@ -74,7 +74,7 @@ function DeliveryItem({ slug, d, isGithub }: { slug: string; d: Delivery; isGith
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <div className="flex min-w-0 items-start gap-2">
           <span className="min-w-0 flex-1">
-            <Link to="/claude/$id" params={{ id: d.sessionId }} className="line-clamp-2 text-sm font-medium underline-offset-4 hover:underline">{d.title}</Link>
+            <Link to="/sessions/$id" params={{ id: d.sessionId }} className="line-clamp-2 text-sm font-medium underline-offset-4 hover:underline">{d.title}</Link>
             <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
               <span className="flex items-center gap-1"><BadgeCheck className="size-3.5" />{d.role}</span>
               <span className="flex items-center gap-1"><GitBranch className="size-3.5" />{d.branch}</span>

@@ -879,3 +879,12 @@ test('a member session starts a role shift by name, without editing its schedule
   assert.match(await team.sessionRunShift('omar', s.id, undefined, 'CTO'), /Started a shift for CTO/)
   assert.ok(team.role(cto.id).role.shift, 'the role is now on a shift')
 })
+
+test("a role's model is checked for its agent: a Claude family, or OpenCode's provider/model", async () => {
+  const { roleModel } = await import('./service.ts')
+  assert.equal(roleModel('claude', 'opus'), 'opus')
+  assert.equal(roleModel('claude', 'anthropic/claude-opus'), null)
+  assert.equal(roleModel('opencode', 'anthropic/claude-sonnet-4-5'), 'anthropic/claude-sonnet-4-5')
+  assert.equal(roleModel('opencode', 'opus'), null)
+  assert.equal(roleModel('opencode', null), null)
+})

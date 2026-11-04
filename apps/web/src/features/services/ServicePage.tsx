@@ -119,7 +119,7 @@ function ServicePageView() {
           <Fact label="Command" wide><code className="font-mono text-[13px] break-all">{s.command}</code></Fact>
           <Fact label="Folder" wide><code className="font-mono text-[13px] break-all">{s.cwd}</code></Fact>
           <Fact label="Owner">{s.owner.name}</Fact>
-          {s.session && <Fact label="Started by"><Link to="/claude/$id" params={{ id: s.session.id }} className="underline decoration-muted-foreground/40 underline-offset-4 hover:decoration-foreground">Claude in {s.session.title}</Link></Fact>}
+          {s.session && <Fact label="Started by"><Link to="/sessions/$id" params={{ id: s.session.id }} className="underline decoration-muted-foreground/40 underline-offset-4 hover:decoration-foreground">Claude in {s.session.title}</Link></Fact>}
           <Fact label="Options" wide>
             {[s.autostart ? 'Starts with the server' : 'Manual start', s.restart ? 'restarts on crash' : 'no restart on crash', envCount(s.env) ? `${envCount(s.env)} environment variable${envCount(s.env) === 1 ? '' : 's'}` : null].filter(Boolean).join(', ')}
           </Fact>

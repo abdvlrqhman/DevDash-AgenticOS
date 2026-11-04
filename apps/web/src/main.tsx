@@ -100,8 +100,8 @@ const services = createRoute({ getParentRoute: () => app, path: '/services', com
 const service = createRoute({ getParentRoute: () => app, path: '/services/$name', component: lazyRouteComponent(() => import('./features/services/ServicePage'), 'ServicePage') })
 // A service inside the app, framed under the top bar (the Service page's "View", and pinned services).
 const serviceView = createRoute({ getParentRoute: () => app, path: '/services/$name/view', component: lazyRouteComponent(() => import('./features/services/ServiceViewPage'), 'ServiceViewPage') })
-// Claude is master-detail on wide screens: ClaudeLayout keeps the session list beside whatever is open.
-const claude = createRoute({ getParentRoute: () => app, path: '/claude', component: ClaudeLayout })
+// Sessions are master-detail on wide screens: ClaudeLayout keeps the session list beside whatever is open.
+const claude = createRoute({ getParentRoute: () => app, path: '/sessions', component: ClaudeLayout })
 const claudeIndex = createRoute({ getParentRoute: () => claude, path: '/', component: ClaudeIndex })
 const claudeSetup = createRoute({ getParentRoute: () => claude, path: '/setup', component: lazy(() => import('./features/claude/SetupPage'), 'SetupPage') })
 const claudeSession = createRoute({
@@ -109,9 +109,17 @@ const claudeSession = createRoute({
   path: '/$id',
   component: lazyRouteComponent(() => import('./features/claude/SessionPage'), 'SessionPage'), // markdown + xterm load here
 })
+// Sessions lived under /claude before other coding agents could run them: old links (notifications, bookmarks) still open.
+const legacyClaude = createRoute({
+  getParentRoute: () => app,
+  path: '/claude/$',
+  beforeLoad: ({ location }) => {
+    throw redirect({ href: location.href.replace(/^\/claude(?=\/|\?|#|$)/, '/sessions'), replace: true })
+  },
+})
 
 const router = createRouter({
-  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more])]),
+  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more])]),
   context: { queryClient },
   defaultPreload: 'intent',
 })

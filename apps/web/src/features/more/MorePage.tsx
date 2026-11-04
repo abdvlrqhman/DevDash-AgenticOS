@@ -34,7 +34,7 @@ const GROUPS: { title: string; links: Destination[] }[] = [
   ] },
   { title: 'Team and settings', links: [
     { to: '/members', label: 'Members', description: 'Invite people and see who has access', icon: Users },
-    { to: '/claude/setup', label: 'Claude setup', description: 'Profiles, sign-in and defaults', icon: Sparkles },
+    { to: '/sessions/setup', label: 'Agent setup', description: 'Profiles, sign-in and defaults', icon: Sparkles },
     { to: '/account', label: 'Account', description: 'Password, email and appearance', icon: Settings },
   ] },
 ]

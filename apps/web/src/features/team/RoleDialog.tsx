@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sparkles } from 'lucide-react'
 import { NativeSelect } from '@/components/app/native-select'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
@@ -11,25 +11,29 @@ import { Textarea } from '@/components/ui/textarea'
 import { api, unwrap } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
-import { DEFAULT_SCHEDULE, slotLabel, TEMPLATES, type Model } from './data'
+import { commandsQuery } from '../claude/data'
+import { HARNESS, HARNESSES, harnessOf, type Harness } from '../claude/harness'
+import { DEFAULT_SCHEDULE, slotLabel, TEMPLATES } from './data'
 
-type Draft = { name: string; summary: string; instructions: string; model: Model | null }
-const EMPTY: Draft = { name: '', summary: '', instructions: '', model: null }
+type Draft = { name: string; summary: string; instructions: string; harness: Harness; model: string | null }
+const EMPTY: Draft = { name: '', summary: '', instructions: '', harness: 'claude', model: null }
 
 /** New role, or editing one: a name and a line, then Generate writes the instructions, which stay editable. */
 export function RoleDialog({ open, onOpenChange, slug, role, onSaved }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   slug: string
-  role?: { id: number; name: string; summary: string; instructions: string; model: string | null }
+  role?: { id: number; name: string; summary: string; instructions: string; model: string | null; harness?: string }
   onSaved?: (id: number) => void
 }) {
   const qc = useQueryClient()
   const [d, setD] = useState<Draft>(EMPTY)
   useEffect(() => {
-    if (open) setD(role ? { name: role.name, summary: role.summary, instructions: role.instructions, model: (role.model as Model | null) ?? null } : EMPTY)
+    if (open) setD(role ? { name: role.name, summary: role.summary, instructions: role.instructions, harness: harnessOf(role), model: role.model ?? null } : EMPTY)
   }, [open, role])
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }))
+  // OpenCode's models are every provider the account connected; Claude's are the three families.
+  const openModels = (useQuery({ ...commandsQuery('default', 'opencode'), enabled: open && d.harness === 'opencode' }).data?.models as { value: string }[] | undefined ?? []).filter((m) => m.value)
   // A new role starts with its template's rhythm (or weekdays at 9); change it on the role's Schedule tab.
   const schedule = TEMPLATES.find((t) => t.name === d.name.trim())?.schedule ?? DEFAULT_SCHEDULE
 
@@ -86,12 +90,21 @@ export function RoleDialog({ open, onOpenChange, slug, role, onSaved }: {
           </Field>
           <Field>
             <FieldLabel htmlFor="role-model">Model</FieldLabel>
-            <NativeSelect id="role-model" value={d.model ?? ''} onChange={(e) => set({ model: (e.target.value || null) as Model | null })}>
+            <NativeSelect id="role-model" value={d.model ?? ''} onChange={(e) => set({ model: e.target.value || null })}>
               <option value="">Default</option>
-              <option value="opus">Opus: best judgment, uses the most</option>
-              <option value="sonnet">Sonnet: good balance</option>
-              <option value="haiku">Haiku: quick checks, uses the least</option>
+              {d.harness === 'claude' ? <>
+                <option value="opus">Opus: best judgment, uses the most</option>
+                <option value="sonnet">Sonnet: good balance</option>
+                <option value="haiku">Haiku: quick checks, uses the least</option>
+              </> : openModels.map((m) => <option key={m.value} value={m.value}>{m.value}</option>)}
             </NativeSelect>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="role-agent">Agent</FieldLabel>
+            <NativeSelect id="role-agent" value={d.harness} onChange={(e) => set({ harness: e.target.value as Harness, model: null })}>
+              {HARNESSES.map((h) => <option key={h} value={h}>{HARNESS[h].label}</option>)}
+            </NativeSelect>
+            <FieldDescription>What its shifts and its chat run on, with the default profile of the account the team works as.</FieldDescription>
           </Field>
           {!role && (
             <p className="text-sm text-muted-foreground">

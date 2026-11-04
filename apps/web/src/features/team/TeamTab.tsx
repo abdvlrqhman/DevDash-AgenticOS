@@ -206,7 +206,7 @@ function RoleCard({ slug, r }: { slug: string; r: Role }) {
       </p>
       <p className="mt-auto flex justify-between gap-2 text-xs text-muted-foreground">
         <span>{r.nextShiftAt ? `Next: ${nextLabel(r.nextShiftAt)}` : r.paused ? 'Paused' : r.schedule.length ? 'Team paused' : 'No schedule'}</span>
-        {r.model && <span className="capitalize">{r.model}</span>}
+        {r.harness === 'opencode' ? <span>OpenCode{r.model ? `, ${r.model}` : ''}</span> : r.model && <span className="capitalize">{r.model}</span>}
       </p>
     </Link>
   )

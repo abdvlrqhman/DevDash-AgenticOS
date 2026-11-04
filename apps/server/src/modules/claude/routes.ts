@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
-import { EFFORTS, GUEST_CAPS, PERMISSION_MODES, type ClaudeService } from './service.ts'
+import { EFFORTS, GUEST_CAPS, HARNESSES, PERMISSION_MODES, type ClaudeService } from './service.ts'
 
 const MB = 1024 * 1024
 const ImageInput = z.object({
@@ -15,8 +15,11 @@ const Files = z.array(z.object({
   mediaType: z.string().max(120),
   data: z.string().max(14 * MB), // base64 of up to 10 MB
 })).max(6).default([])
-const Model = z.string().max(80).nullable()
+const Model = z.string().max(160).nullable()
+const Harness = z.enum(HARNESSES)
 const Effort = z.enum(EFFORTS).nullable()
+/** In a session: Claude Code's levels, or another agent's model's own (OpenCode's variants: "minimal", "high"…). */
+const SessionEffort = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,39}$/i).nullable()
 const Mode = z.enum(PERMISSION_MODES)
 const Size = z.number().int().min(10).max(500)
 
@@ -24,6 +27,7 @@ const CreateInput = z.object({
   prompt: z.string().max(200_000).default(''),
   images: Images,
   cwd: z.string().max(500).default('~'),
+  harness: Harness.default('claude'),
   profile: z.string().max(21).default('default'),
   model: Model.default(null),
   effort: Effort.default(null),
@@ -56,7 +60,7 @@ const PatchInput = z.object({
   sharedCanSend: z.boolean().optional(),
   archived: z.boolean().optional(),
   model: Model.optional(),
-  effort: Effort.optional(),
+  effort: SessionEffort.optional(),
   permissionMode: Mode.optional(),
   fastMode: z.boolean().optional(),
   remoteControl: z.boolean().optional(),
@@ -74,7 +78,7 @@ const SharingInput = z.object({
 })
 const ModeInput = z.object({ mode: z.enum(['chat', 'cli']), cols: Size.default(100), rows: z.number().int().min(4).max(200).default(30) })
 const DefaultsInput = z.object({
-  profile: z.string().max(21), model: Model, effort: Effort, permission_mode: Mode, open_in: z.enum(['chat', 'cli']),
+  harness: Harness.default('claude'), profile: z.string().max(21), model: Model, effort: Effort, permission_mode: Mode, open_in: z.enum(['chat', 'cli']),
 })
 
 export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMiddleware>) {
@@ -133,12 +137,12 @@ export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMi
       const { mode, cols, rows } = c.req.valid('json')
       return c.json({ session: await claude.switchMode(c.get('user'), c.req.param('id'), mode, cols, rows) })
     })
-    .get('/commands', query(z.object({ profile: z.string().max(21).default('default') })), async (c) =>
-      c.json(await claude.commands(c.get('user'), c.req.valid('query').profile)))
+    .get('/commands', query(z.object({ profile: z.string().max(21).default('default'), harness: Harness.default('claude') })), async (c) =>
+      c.json(await claude.commands(c.get('user'), c.req.valid('query').profile, c.req.valid('query').harness)))
     .get('/profiles', async (c) => c.json(await claude.profiles(c.get('user'))))
     .get('/usage/:profile', async (c) => c.json({ usage: await claude.usage(c.get('user'), c.req.param('profile')) }))
-    .post('/profiles', json(z.object({ name: z.string().max(21) })), async (c) => {
-      await claude.createProfile(c.get('user'), c.req.valid('json').name)
+    .post('/profiles', json(z.object({ name: z.string().max(21), harness: Harness.default('claude') })), async (c) => {
+      await claude.createProfile(c.get('user'), c.req.valid('json').name, c.req.valid('json').harness)
       return c.json({ ok: true })
     })
     .get('/memory', async (c) => c.json({ health: await claude.memoryHealth(c.get('user')) }))

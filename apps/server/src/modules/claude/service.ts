@@ -11,6 +11,14 @@ import { claudeRepo, type Defaults, type Patch, type SessionRow, type SessionSta
 
 export const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'] as const
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+/** The coding agents a session can run (the member's agent has a driver for each: apps/agent/src/harness.ts). */
+export const HARNESSES = ['claude', 'opencode'] as const
+export type Harness = (typeof HARNESSES)[number]
+/** How notifications and messages name the agent of a session. */
+export const agentName = (harness: string) => (harness === 'opencode' ? 'OpenCode' : 'Claude')
+export const harnessOf = (v: string | null | undefined): Harness => ((HARNESSES as readonly string[]).includes(v ?? '') ? (v as Harness) : 'claude')
+/** Another agent as the member's agent sees it: installed or not, and its profiles with the providers each connected. */
+export type AgentInfo = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[] }
 const STATUSES = new Set<SessionStatus>(['working', 'waiting', 'idle', 'stopped', 'error'])
 const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,20}$/
 
@@ -78,7 +86,8 @@ export function parseTailnetMcps(s: { tailnet_mcps: string | null; tailnet_mcp: 
  * whether fast mode is actually serving (it can be on but unavailable, e.g. without extra usage on the plan).
  */
 type Task = { id: string; type: string; description: string }
-type Live = { remoteUrl?: string | null; remoteError?: string | null; fast?: { state: string; reason: string | null }; tasks?: Task[] }
+/** `efforts`: the effort levels of the model an agent other than Claude Code runs now (OpenCode's variants). */
+type Live = { remoteUrl?: string | null; remoteError?: string | null; fast?: { state: string; reason: string | null }; tasks?: Task[]; efforts?: string[] }
 /** The end of a Chat answer, as Claude Code reports it. */
 type ResultMsg = {
   uuid?: string; subtype?: string; is_error?: boolean; duration_ms?: number; total_cost_usd?: number; num_turns?: number
@@ -109,7 +118,7 @@ const context = (s: SessionRow) => {
 /** What browsers get: no internal flags they don't need. */
 export function toDto(s: SessionRow) {
   return {
-    id: s.id, title: s.title, cwd: s.cwd, profile: s.profile, mode: s.mode, status: s.status, statusDetail: s.status_detail,
+    id: s.id, title: s.title, cwd: s.cwd, harness: s.harness, profile: s.profile, mode: s.mode, status: s.status, statusDetail: s.status_detail,
     model: s.model, effort: s.effort, permissionMode: s.permission_mode, started: !!s.started,
     shared: !!s.shared, sharedCanSend: !!s.shared_can_send, archived: !!s.archived,
     // Who can see it: just the owner, the whole team, or the members it's shared with by name (`sharedWith` of them).
@@ -123,6 +132,7 @@ export function toDto(s: SessionRow) {
     guestCaps: capsOf(s), guestCapsFromProject: s.project_id != null && !s.guest_caps_custom,
     origin: s.origin_kind ? { kind: s.origin_kind, role: s.origin_role } : null,
     tasks: live.get(s.id)?.tasks ?? [],
+    efforts: live.get(s.id)?.efforts ?? null,
   }
 }
 export type SessionDto = ReturnType<typeof toDto>
@@ -156,7 +166,7 @@ export const memoryHealth = (agents: AgentsService, username: string, timeoutMs 
   agents.request<{ health: MemoryHealth }>(username, { op: 'claude.memory.health' }, timeoutMs).then((r) => r.health)
 
 const baseLaunch = (s: SessionRow) => ({
-  id: s.id, cwd: s.cwd, profile: s.profile, model: s.model, effort: s.effort, permissionMode: s.permission_mode, started: !!s.started,
+  id: s.id, harness: s.harness, nativeId: s.native_id, cwd: s.cwd, profile: s.profile, model: s.model, effort: s.effort, permissionMode: s.permission_mode, started: !!s.started,
   fast: !!s.fast_mode, remote: !!s.remote_control, title: s.title,
   instructions: s.instructions, toolPolicy: s.tool_policy ? (JSON.parse(s.tool_policy) as { tools?: string[]; allow?: string[] }) : null,
   // The agent fills in the actual proxy ports locally (it is the member); here we only say whether to route and where.
@@ -221,18 +231,18 @@ const clip = (t: string, n = 160) => (t.length > n ? `${t.slice(0, n - 1).trimEn
  * glance (and often knows the answer without opening it). Pure, so it is unit-tested. `sessionTitle` gives context
  * for the generic cases; for a question the question itself is the title, with the options as the body.
  */
-export function requestNotification(toolName: string, input: Record<string, unknown>, sessionTitle: string): { title: string; body: string } {
+export function requestNotification(toolName: string, input: Record<string, unknown>, sessionTitle: string, agent = 'Claude'): { title: string; body: string } {
   if (toolName === 'AskUserQuestion') {
     const qs = (input.questions as { question?: string; options?: { label?: string }[] }[] | undefined) ?? []
     const first = qs[0]
     const more = qs.length > 1 ? ` (+${qs.length - 1} more)` : ''
-    if (!first?.question) return { title: `Claude has a question: ${sessionTitle}`, body: `Tap to answer.${more}` }
+    if (!first?.question) return { title: `${agent} has a question: ${sessionTitle}`, body: `Tap to answer.${more}` }
     const opts = (first.options ?? []).map((o) => o?.label).filter((l): l is string => !!l)
     return { title: clip(first.question, 100), body: clip(opts.length ? `${opts.join(' · ')}${more}` : `Tap to answer.${more}`) }
   }
-  if (toolName === 'ExitPlanMode') return { title: `Claude's plan is ready: ${sessionTitle}`, body: 'Approve it or send changes.' }
+  if (toolName === 'ExitPlanMode') return { title: `${agent}'s plan is ready: ${sessionTitle}`, body: 'Approve it or send changes.' }
   const what = typeof input.command === 'string' ? input.command : typeof input.file_path === 'string' ? input.file_path : ''
-  return { title: `Claude needs permission: ${sessionTitle}`, body: clip(`Allow ${toolName}${what ? `: ${what}` : ''}`) }
+  return { title: `${agent} needs permission: ${sessionTitle}`, body: clip(`Allow ${toolName}${what ? `: ${what}` : ''}`) }
 }
 
 export function claudeService({ db, agents, hub, notify, projects, tailnetConnected, storageFor }: {
@@ -313,7 +323,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       if (Date.now() - (lastError.get(s.id) ?? 0) < 60_000) return
       lastError.set(s.id, Date.now())
     }
-    const n = { title, body, url: `/claude/${s.id}`, tag: `session:${s.id}` }
+    const n = { title, body, url: `/sessions/${s.id}`, tag: `session:${s.id}` }
     void notify(s.owner_id, kind, n).catch((err) => console.error('notify:', err))
     // A question, plan or permission needs whoever can answer: also ping the teammates the owner let in to send,
     // so it isn't only the owner who finds out Claude is blocked.
@@ -404,9 +414,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         // Claude may have committed: look for "fixes #N" now rather than at the next fetch.
         if (s.project_id && s.status === 'working' && st !== 'working') projects.rescan(s.project_id)
         // Chat mode notifies from the richer permission/result events below; the CLI only reports status.
-        if (st === 'error') alert(s, 'errors', `Claude stopped with an error: ${s.title}`, typeof ev.detail === 'string' ? clip(ev.detail) : undefined)
-        else if (s.mode === 'cli' && st === 'waiting' && s.status !== 'waiting') alert(s, 'needs_you', `Claude needs you: ${s.title}`, 'Waiting for you in the CLI')
-        else if (s.mode === 'cli' && st === 'idle' && s.status === 'working') alert(s, 'finished', `Claude finished: ${s.title}`)
+        if (st === 'error') alert(s, 'errors', `${agentName(s.harness)} stopped with an error: ${s.title}`, typeof ev.detail === 'string' ? clip(ev.detail) : undefined)
+        else if (s.mode === 'cli' && st === 'waiting' && s.status !== 'waiting') alert(s, 'needs_you', `${agentName(s.harness)} needs you: ${s.title}`, 'Waiting for you in the CLI')
+        else if (s.mode === 'cli' && st === 'idle' && s.status === 'working') alert(s, 'finished', `${agentName(s.harness)} finished: ${s.title}`)
         if (s.mode === 'cli' && s.status === 'working' && (st === 'idle' || st === 'stopped')) turnEnded({ session: s, ok: true, aborted: false, result: null, costUsd: 0 })
         return publish(s.id)
       }
@@ -418,6 +428,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       }
       case 'claude.remote':
         setLive(s.id, { remoteUrl: typeof ev.url === 'string' ? ev.url : null, remoteError: typeof ev.error === 'string' ? ev.error : null })
+        return publish(s.id)
+      case 'claude.efforts':
+        setLive(s.id, { efforts: Array.isArray(ev.efforts) ? (ev.efforts as unknown[]).filter((e): e is string => typeof e === 'string').slice(0, 20) : [] })
         return publish(s.id)
       case 'claude.tasks':
         setLive(s.id, { tasks: Array.isArray(ev.tasks) ? (ev.tasks as Task[]).slice(0, 50) : [] })
@@ -437,8 +450,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         }
         // Pressing Stop ends the turn with an "aborted" reason: nothing to tell anyone.
         if (m.type === 'result' && !m.terminal_reason?.startsWith('aborted')) {
-          if (m.subtype === 'success' && !m.is_error) alert(s, 'finished', `Claude finished: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
-          else alert(s, 'errors', `Claude stopped with an error: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
+          if (m.subtype === 'success' && !m.is_error) alert(s, 'finished', `${agentName(s.harness)} finished: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
+          else alert(s, 'errors', `${agentName(s.harness)} stopped with an error: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
         }
         // The last message of the answer so far: where the answer's numbers go in the transcript.
         const top = ev.msg as { uuid?: string; parent_tool_use_id?: string | null; message?: { model?: string } }
@@ -461,19 +474,25 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         const askedBy = ev.askedBy as { id: number; name: string } | undefined
         if (ev.ownerOnly && askedBy) {
           // Only the owner can allow it: tell them, not the others who can send.
-          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title)
+          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title, agentName(s.harness))
           if (s.listed) {
-            void notify(s.owner_id, 'needs_you', { title: `${askedBy.name} asked Claude to use your access`, body: n.body ?? s.title, url: `/claude/${s.id}`, tag: `session:${s.id}` })
+            void notify(s.owner_id, 'needs_you', { title: `${askedBy.name} asked ${agentName(s.harness)} to use your access`, body: n.body ?? s.title, url: `/sessions/${s.id}`, tag: `session:${s.id}` })
               .catch((err) => console.error('notify:', err))
           }
         } else {
-          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title)
+          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title, agentName(s.harness))
           alert(s, 'needs_you', n.title, n.body)
         }
         return hub.publish(`session:${s.id}`, {
           type: 'permission',
           request: { requestId: ev.requestId, toolName: ev.toolName, input: ev.input, suggestions: ev.suggestions, ownerOnly: !!ev.ownerOnly, askedBy: askedBy ?? null },
         }, viewers)
+      }
+      case 'claude.native': {
+        // A harness that makes its own session ids (OpenCode) reports it once the session exists; Claude Code uses ours.
+        const nativeId = typeof ev.nativeId === 'string' ? ev.nativeId.slice(0, 200) : ''
+        if (nativeId && s.harness !== 'claude' && nativeId !== s.native_id) repo.patch(s.id, { native_id: nativeId })
+        return
       }
       case 'claude.permission_done':
         return hub.publish(`session:${s.id}`, { type: 'permission_done', requestId: ev.requestId }, viewers)
@@ -526,7 +545,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       repo.setStatus(s.id, 'working', null, 'chat')
     } catch (err) {
       repo.setStatus(s.id, 'error', `Interrupted by a server restart and could not continue: ${(err as Error).message}`.slice(0, 500), 'chat')
-      alert(s, 'errors', `Claude was interrupted: ${s.title}`, 'Send a message to continue.')
+      alert(s, 'errors', `${agentName(s.harness)} was interrupted: ${s.title}`, 'Send a message to continue.')
     }
     publish(s.id)
   }
@@ -709,7 +728,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         if (!s || !canView(user, s)) continue
         const rl = roleLabel(s)
         out.set(id, {
-          title: rl ? `${rl.role.name} · AI team` : s.title, url: `/claude/${id}`, state: s.status,
+          title: rl ? `${rl.role.name} · AI team` : s.title, url: `/sessions/${id}`, state: s.status,
           detail: s.archived ? 'archived' : s.project_name,
         })
       }
@@ -721,7 +740,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
     async create(user: User, input: {
       prompt: string; images: Image[]; cwd: string; profile: string; model: string | null; effort: string | null
-      permissionMode: string; mode: 'chat' | 'cli'; cols?: number; rows?: number; project?: string; worktree?: boolean
+      permissionMode: string; mode: 'chat' | 'cli'; cols?: number; rows?: number; project?: string; worktree?: boolean; harness?: Harness
       shared?: boolean; sharedCanSend?: boolean
     }, extra: SessionExtras = {}) {
       if (!PROFILE_RE.test(input.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
@@ -737,7 +756,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const firstLine = input.prompt.trim().split('\n')[0]!.slice(0, 80)
       const id = randomUUID()
       repo.insert({
-        id, owner_id: user.id, profile: input.profile, title: firstLine || 'New session', cwd, mode: input.mode,
+        id, owner_id: user.id, harness: input.harness ?? 'claude', profile: input.profile, title: firstLine || 'New session', cwd, mode: input.mode,
         model: input.model, effort: input.effort, permission_mode: input.permissionMode,
       })
       if (project) repo.setProject(id, project.id, wt?.path ?? null)
@@ -809,7 +828,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       asked.set(key, Date.now())
       hub.publish(`session:${id}`, { type: 'join_request', user: { id: user.id, name: user.name } }, (u) => u.id === s.owner_id)
       void notify(s.owner_id, 'shared', {
-        title: `${user.name} asks to join: ${s.title}`, body: 'Open the session to let them send messages.', url: `/claude/${id}`, tag: `join:${key}`,
+        title: `${user.name} asks to join: ${s.title}`, body: 'Open the session to let them send messages.', url: `/sessions/${id}`, tag: `join:${key}`,
       }).catch(() => {})
     },
 
@@ -823,7 +842,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       repo.setWriter(id, userId, allowed)
       // Their page asks again what it may do.
       hub.publish(`session:${id}`, { type: 'access' }, (u) => u.id === userId)
-      if (allowed) void notify(userId, 'shared', { title: `You can send messages in ${s.title}`, body: `${user.name} let you in.`, url: `/claude/${id}` }).catch(() => {})
+      if (allowed) void notify(userId, 'shared', { title: `You can send messages in ${s.title}`, body: `${user.name} let you in.`, url: `/sessions/${id}` }).catch(() => {})
       return { writers: repo.writers(id) }
     },
 
@@ -860,7 +879,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const now = new Set(others.filter((u) => canView(u, after)).map((u) => u.id))
       const title = input.audience === 'everyone' ? `${user.name} shared a Claude session` : `${user.name} shared a Claude session with you`
       for (const uid of now) {
-        if (!before.has(uid)) void notify(uid, 'shared', { title, body: s.title, url: `/claude/${id}` }).catch(() => {})
+        if (!before.has(uid)) void notify(uid, 'shared', { title, body: s.title, url: `/sessions/${id}` }).catch(() => {})
       }
       const lost = new Set([...before].filter((uid) => !now.has(uid)))
       if (lost.size) hub.publish('sessions', { type: 'gone', id }, (u) => lost.has(u.id))
@@ -878,7 +897,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const c = repo.addComment(id, user.id, body.trim())
       hub.publish(`session:${id}`, { type: 'comment', comment: c }, (u) => canView(u, s))
       if (user.id !== s.owner_id) {
-        void notify(s.owner_id, 'shared', { title: `${user.name} commented on ${s.title}`, body: clip(c.body), url: `/claude/${id}`, tag: `comment:${id}` }).catch(() => {})
+        void notify(s.owner_id, 'shared', { title: `${user.name} commented on ${s.title}`, body: clip(c.body), url: `/sessions/${id}`, tag: `comment:${id}` }).catch(() => {})
       }
       return c
     },
@@ -901,6 +920,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       reachTailnet?: boolean; tailnetMcp?: string | null; tailnetMcps?: TailnetMcp[] | null
     }) {
       const s = find(user, id)
+      if (p.effort && s.harness === 'claude' && !(EFFORTS as readonly string[]).includes(p.effort)) throw new AppError(400, 'bad_effort', 'Unknown effort level.')
       const ownerOnly = p.title !== undefined || p.shared !== undefined || p.sharedCanSend !== undefined || p.archived !== undefined
         || p.remoteControl !== undefined || p.reachTailnet !== undefined || p.tailnetMcp !== undefined || p.tailnetMcps !== undefined
       if (ownerOnly) requireOwner(user, s)
@@ -952,7 +972,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       }
       if (p.shared && !s.shared) {
         for (const { id: uid } of db.prepare('select id from users where disabled_at is null and id != ?').all(s.owner_id) as { id: number }[]) {
-          void notify(uid, 'shared', { title: `${user.name} shared a Claude session`, body: s.title, url: `/claude/${id}` }).catch(() => {})
+          void notify(uid, 'shared', { title: `${user.name} shared a Claude session`, body: s.title, url: `/sessions/${id}` }).catch(() => {})
         }
       }
       publish(id)
@@ -999,9 +1019,14 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       return (await agents.request<{ messages: unknown[] }>(s.owner_username, { op: 'claude.history', launch: launch(s) }, 120_000)).messages
     },
 
-    /** One answer from Claude, run as `username` on one of their profiles: no tools, no session, none of their plugins. */
-    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; system?: string } = {}) =>
-      (await agents.request<{ text: string }>(username, { op: 'claude.complete', profile: o.profile ?? 'default', prompt, model: o.model, system: o.system }, 180_000)).text,
+    /**
+     * One answer from an agent, run as `username` on one of their profiles: no tools, no session left behind. Claude Code
+     * unless `harness` names another (a role that runs on OpenCode, a member whose agent is OpenCode).
+     */
+    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; system?: string; harness?: Harness } = {}) =>
+      (await agents.request<{ text: string }>(username, {
+        op: 'claude.complete', profile: o.profile ?? 'default', prompt, model: o.model, system: o.system, ...(o.harness && o.harness !== 'claude' ? { harness: o.harness } : {}),
+      }, 180_000)).text,
 
     /**
      * A page of the conversation: the last few prompts and what followed, before message `before` when given. Each
@@ -1059,8 +1084,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       return { owner: s.owner_username, readonly: !['owner', 'full'].includes(accessOf(user, s)) }
     },
 
-    commands: (user: User, profile: string) =>
-      agents.request<{ commands: unknown[]; models: unknown[] }>(user.username, { op: 'claude.commands', profile }),
+    commands: (user: User, profile: string, harness: Harness = 'claude') =>
+      agents.request<{ commands: unknown[]; models: unknown[] }>(user.username, { op: 'claude.commands', profile, ...(harness !== 'claude' ? { harness } : {}) }),
     /** Plan limits of one of the member's own Claude profiles. */
     usage: async (user: User, profile: string) =>
       (await agents.request<{ usage: unknown }>(user.username, { op: 'claude.usage', profile }, 45_000)).usage as {
@@ -1068,11 +1093,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         available: boolean
         limits: Record<string, { utilization: number | null; resets_at: string | null } | { display_name: string; utilization: number | null; resets_at: string | null }[] | { is_enabled: boolean; monthly_limit: number | null; used_credits: number | null; utilization: number | null; currency?: string | null } | null> | null
       },
-    profiles: async (user: User) => ({
-      ...(await agents.request<{ profiles: unknown[] }>(user.username, { op: 'claude.profiles' })),
-      defaults: repo.defaults(user.id),
-    }),
-    createProfile: (user: User, name: string) => agents.request(user.username, { op: 'claude.profile.create', name }),
+    /** The member's Claude profiles, whether the other agents are installed (and set up for them), and their defaults. */
+    profiles: async (user: User) => {
+      const r = await agents.request<{ profiles: unknown[]; agents?: AgentInfo[] }>(user.username, { op: 'claude.profiles' })
+      return { profiles: r.profiles, agents: r.agents ?? [], defaults: repo.defaults(user.id) }
+    },
+    createProfile: (user: User, name: string, harness: Harness = 'claude') => agents.request(user.username, { op: 'claude.profile.create', name, ...(harness !== 'claude' ? { harness } : {}) }),
     memoryHealth: (user: User) => memoryHealth(agents, user.username),
     restartMemory: async (user: User) => {
       await agents.request(user.username, { op: 'claude.memory.restart' }, 70_000)
@@ -1086,7 +1112,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       let late = false
       const job = agents.request(user.username, { op: 'claude.memory', profile, enabled }, 300_000)
       job.catch((err: Error) => {
-        if (late) void notify(user.id, 'errors', { title: 'claude-mem could not be turned on', body: clip(err.message), url: '/claude/setup' }).catch(() => {})
+        if (late) void notify(user.id, 'errors', { title: 'claude-mem could not be turned on', body: clip(err.message), url: '/sessions/setup' }).catch(() => {})
       })
       const done = await Promise.race([job.then(() => true), new Promise<false>((r) => setTimeout(r, 60_000, false))])
       late = !done

@@ -37,7 +37,7 @@ const NAV: { label?: string; items: NavItem[] }[] = [
   { label: 'Work', items: [
     { to: '/projects', label: 'Projects', icon: FolderGit2 },
     { to: '/tasks', label: 'Tasks', icon: ListTodo },
-    { to: '/claude', label: 'Claude', icon: Sparkles },
+    { to: '/sessions', label: 'Sessions', icon: Sparkles },
     { to: '/approvals', label: 'Approvals', icon: Inbox }, // Team
     { to: '/notes', label: 'Notes', icon: StickyNote },
   ] },
@@ -196,7 +196,7 @@ function AppSidebar({ waiting, pane }: { waiting: number; pane: ReturnType<typeo
                     <Link to={n.to}><n.icon /><span>{n.label}</span></Link>
                   </SidebarMenuButton>
                   {n.to === '/approvals' && <ApprovalsBadge />}
-                  {n.to === '/claude' && waiting > 0 && (
+                  {n.to === '/sessions' && waiting > 0 && (
                     <SidebarMenuBadge className="bg-attention-soft text-attention-foreground">{waiting}</SidebarMenuBadge>
                   )}
                 </SidebarMenuItem>
@@ -258,7 +258,7 @@ function UserMenu() {
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuItem asChild><Link to="/account"><Settings />Account</Link></DropdownMenuItem>
-              <DropdownMenuItem asChild><Link to="/claude/setup"><Sparkles />Claude setup</Link></DropdownMenuItem>
+              <DropdownMenuItem asChild><Link to="/sessions/setup"><Sparkles />Agent setup</Link></DropdownMenuItem>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger><Monitor />Theme</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
@@ -283,7 +283,7 @@ function UserMenu() {
 const TABS = [
   { to: '/', label: 'Home', icon: House, exact: true },
   { to: '/projects', label: 'Projects', icon: FolderGit2 },
-  { to: '/claude', label: 'Claude', icon: Sparkles },
+  { to: '/sessions', label: 'Sessions', icon: Sparkles },
   { to: '/tasks', label: 'Tasks', icon: ListTodo },
   { to: '/more', label: 'More', icon: Ellipsis },
 ] as const
@@ -293,17 +293,17 @@ function MobileTabs({ waiting }: { waiting: number }) {
   // Inside a Claude chat the tabs step aside, as in messaging apps: the back arrow leads out.
   const inChat = useRouterState({ select: (s) => /^\/claude\/[0-9a-f-]{36}$/.test(s.location.pathname) })
   if (inChat) return null
-  const moreActive = ['/more', '/members', '/account', '/notes', '/tools', '/terminal', '/services', '/files', '/vault', '/network', '/storage', '/browser', '/server'].some((p) => active(p)) || active('/claude/setup')
+  const moreActive = ['/more', '/members', '/account', '/notes', '/tools', '/terminal', '/services', '/files', '/vault', '/network', '/storage', '/browser', '/server'].some((p) => active(p)) || active('/sessions/setup')
   return (
     <nav aria-label="Sections" className="grid shrink-0 grid-cols-5 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden [.keyboard-open_&]:hidden">
       {TABS.map((t) => {
-        const on = t.to === '/more' ? moreActive : t.to === '/claude' ? active(t.to) && !active('/claude/setup') : active(t.to, 'exact' in t)
+        const on = t.to === '/more' ? moreActive : t.to === '/sessions' ? active(t.to) && !active('/sessions/setup') : active(t.to, 'exact' in t)
         return (
           <Link key={t.to} to={t.to} aria-current={on ? 'page' : undefined}
             className={cn('relative flex h-14 flex-col items-center justify-center gap-0.5 text-[11px] font-medium', on ? 'text-foreground' : 'text-muted-foreground')}>
             <t.icon className="size-5" strokeWidth={on ? 2.25 : 1.75} />
             {t.label}
-            {t.to === '/claude' && waiting > 0 && (
+            {t.to === '/sessions' && waiting > 0 && (
               <span className="absolute top-1.5 left-1/2 ml-2 min-w-4 rounded-full bg-attention px-1 text-center text-[10px] leading-4 text-black">{waiting}</span>
             )}
           </Link>

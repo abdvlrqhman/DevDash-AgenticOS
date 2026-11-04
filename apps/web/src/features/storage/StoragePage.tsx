@@ -36,7 +36,7 @@ export function StoragePage() {
     <>
       <PageHeader
         title="Storage"
-        description="Your own Google Drive for big files, so Claude can keep videos and renders off the server"
+        description="Your own Google Drive for big files, so your agents can keep videos and renders off the server"
         actions={<Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => void q.refetch()}><RefreshCw className={q.isFetching ? 'animate-spin' : ''} /></Button>}
       />
       <PageBody className="md:py-10">

@@ -49,7 +49,7 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
   })
   const chat = useMutation({
     mutationFn: () => unwrap(api.api.team.roles[':id'].chat.$post({ param: { id: String(id) } })),
-    onSuccess: (r) => void navigate({ to: '/claude/$id', params: { id: r.sessionId } }),
+    onSuccess: (r) => void navigate({ to: '/sessions/$id', params: { id: r.sessionId } }),
     onError: (e) => toast.error(e.message),
   })
   const archive = useMutation({
@@ -71,7 +71,7 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
   return (
     <>
       <PageHeader back={`/projects/${slug}`} title={r.name}
-        description={<span className="truncate">{project.name}{r.model ? `, on ${r.model[0]!.toUpperCase()}${r.model.slice(1)}` : ''}</span>}
+        description={<span className="truncate">{project.name}{r.harness === 'opencode' ? `, on OpenCode${r.model ? ` (${r.model})` : ''}` : r.model ? `, on ${r.model[0]!.toUpperCase()}${r.model.slice(1)}` : ''}</span>}
         actions={<>
           <Button size="sm" variant="outline" disabled={!!r.shift || shift.isPending} onClick={() => shift.mutate()}>
             {shift.isPending ? <Spinner /> : <Play />}<span className="hidden sm:inline">Run a shift</span>
@@ -96,7 +96,7 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
                 <span className="flex min-w-0 items-center gap-2">
                   <Orb state="working" size={20} label={`${r.name} is working`} />It writes a report here when it's done.
                 </span>
-                {r.shift.sessionId && <Button size="sm" variant="outline" asChild><Link to="/claude/$id" params={{ id: r.shift.sessionId }}>Watch</Link></Button>}
+                {r.shift.sessionId && <Button size="sm" variant="outline" asChild><Link to="/sessions/$id" params={{ id: r.shift.sessionId }}>Watch</Link></Button>}
               </div>
             )}
           </div>
@@ -156,7 +156,7 @@ function Shifts({ shifts, onRun, canRun }: { shifts: RoleDetail['shifts']; onRun
           </div>
           {s.report ? <div className="text-sm text-foreground/85"><Prose text={s.report} /></div> : s.status === 'running' ? <p className="text-sm text-muted-foreground">Working…</p> : null}
           {s.sessionId && (
-            <Link to="/claude/$id" params={{ id: s.sessionId }} className="-mx-2 flex items-center gap-0.5 self-start rounded-full px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-surface-2 hover:text-foreground">
+            <Link to="/sessions/$id" params={{ id: s.sessionId }} className="-mx-2 flex items-center gap-0.5 self-start rounded-full px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-surface-2 hover:text-foreground">
               See what it did<ChevronRight className="size-3.5" />
             </Link>
           )}

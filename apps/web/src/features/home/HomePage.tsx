@@ -12,6 +12,7 @@ import { api, meQuery, spaceQuery, unwrap } from '@/lib/api'
 import { landFrom, landTo, useArrivals, useMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 import { relativeTime, sessionPlace, sessionsQuery, type Session } from '@/features/claude/data'
+import { agentName } from '@/features/claude/harness'
 import { NewSession } from '@/features/claude/SessionsPage'
 import { servicesQuery, useLiveServices } from '@/features/services/data'
 import { activityQuery, tasksQuery, useLiveWork, type Activity, type Task } from '@/features/work/data'
@@ -92,7 +93,7 @@ export function HomePage() {
     if (me.role === 'admin' && status.backup && !status.backup.ok) trouble.push({ key: 'backup', title: 'The last backup failed', detail: 'The Server page says why, and can run one now.' })
     for (const a of status.agents.filter((a) => !a.ok && (a.username === me.username || me.role === 'admin'))) {
       trouble.push({
-        key: `agent:${a.username}`, detail: 'Claude sessions, terminals and files need it.',
+        key: `agent:${a.username}`, detail: 'Sessions, terminals and files need it.',
         title: a.username === me.username ? 'Your server account is not responding' : `${a.name}'s server account is not responding`,
       })
     }
@@ -105,8 +106,8 @@ export function HomePage() {
     ...(activityQ.data?.activity ?? []).filter((a) => a.viaClaude || a.user !== me.name).map(activityLine),
     ...sessions.filter((s) => s.owner.id === me.id && (s.status === 'idle' || s.status === 'error') && lastHere && s.lastActivityAt > lastHere)
       .map((s): Line => ({
-        key: `s:${s.id}:${s.lastActivityAt}`, at: s.lastActivityAt, to: `/claude/${s.id}`, tone: s.status === 'error' ? 'error' : 'live',
-        text: <>Claude {s.status === 'error' ? 'stopped with an error in' : 'finished'} <span className="text-foreground">{s.title}</span></>,
+        key: `s:${s.id}:${s.lastActivityAt}`, at: s.lastActivityAt, to: `/sessions/${s.id}`, tone: s.status === 'error' ? 'error' : 'live',
+        text: <>{agentName(s.harness)} {s.status === 'error' ? 'stopped with an error in' : 'finished'} <span className="text-foreground">{s.title}</span></>,
       })),
   ].sort((a, b) => b.at - a.at).slice(0, 12)
   const fresh = lastHere ? lines.filter((l) => l.at > lastHere).length : 0
@@ -130,7 +131,7 @@ export function HomePage() {
   const orb = needsYou ? 'listening' : working.length ? 'working' : 'breathing'
   const headline = !loaded ? 'Checking the server…'
     : needsYou ? `${count(needsYou, 'thing')} ${needsYou === 1 ? 'needs' : 'need'} you.`
-    : working.length ? `Claude is working on ${count(working.length, 'session').toLowerCase()}.`
+    : working.length ? `Working on ${count(working.length, 'session').toLowerCase()}.`
     : 'All quiet.'
 
   // The one orchestrated moment: the first time Home appears in a visit, the note writes itself in, top to bottom.
@@ -180,8 +181,8 @@ export function HomePage() {
                   <Row key={t.key} k={t.key} to="/server" lead={<StatusLight state="error" />} title={t.title} detail={t.detail} />
                 ))}
                 {waiting.map((s) => (
-                  <Row key={s.id} k={s.id} to={`/claude/${s.id}`} attention lead={<StatusLight state="waiting" className="needs-you" />}
-                    title={s.title} detail={`Claude is waiting for your answer, in ${where(s)}`} />
+                  <Row key={s.id} k={s.id} to={`/sessions/${s.id}`} attention lead={<StatusLight state="waiting" className="needs-you" />}
+                    title={s.title} detail={`${agentName(s.harness)} is waiting for your answer, in ${where(s)}`} />
                 ))}
                 {crashed.map((s) => (
                   <Row key={s.name} k={s.name} to={`/services/${s.name}`} lead={<StatusLight state="error" />}
@@ -196,7 +197,7 @@ export function HomePage() {
           )}
 
           <Block title={fresh ? 'While you were away' : 'Activity'} count={fresh || undefined} className="order-4">
-            {!activityQ.isSuccess ? null : lines.length === 0 ? <Calm>Nothing has happened yet. Work done here, by the team or by Claude, shows up as it happens.</Calm> : (
+            {!activityQ.isSuccess ? null : lines.length === 0 ? <Calm>Nothing has happened yet. Work done here, by the team or by its agents, shows up as it happens.</Calm> : (
               <ol ref={log} className="flex flex-col">
                 {lines.map((l, i) => (
                   <li key={l.key} data-key={l.key} {...(i < fresh ? { 'data-fresh': '' } : {})}>
@@ -221,11 +222,11 @@ export function HomePage() {
           </Block>
 
           {recent.length > 0 && (
-            <Block title="Pick up where you left off" link={{ to: '/claude', label: 'All sessions' }} className="order-6">
+            <Block title="Pick up where you left off" link={{ to: '/sessions', label: 'All sessions' }} className="order-6">
               <ul className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0">
                 {recent.map((s) => (
                   <li key={s.id} className="w-[72%] shrink-0 snap-start sm:w-auto">
-                    <Link to="/claude/$id" params={{ id: s.id }}
+                    <Link to="/sessions/$id" params={{ id: s.id }}
                       className="flex h-full flex-col gap-6 rounded-2xl bg-surface px-4 py-3.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98]">
                       <span className="line-clamp-2 font-medium">{s.title}</span>
                       <span className="line-clamp-1 text-xs text-muted-foreground">{where(s)}, {relativeTime(s.lastActivityAt)}</span>
@@ -239,12 +240,12 @@ export function HomePage() {
 
         <aside className="contents lg:sticky lg:top-20 lg:flex lg:flex-col lg:gap-12">
           <Block title="Running now" count={working.length + up.length || undefined} link={{ to: '/services', label: 'Services' }} className="order-3">
-            {!loaded ? null : working.length + up.length === 0 ? <Calm>Nothing is running. Claude sessions and services show here while they work.</Calm> : (
+            {!loaded ? null : working.length + up.length === 0 ? <Calm>Nothing is running. Sessions and services show here while they work.</Calm> : (
               <Panel ref={runningList}>
                 {working.map((s, i) => (
                   <li key={s.id} data-key={s.id}>
-                    <Link to="/claude/$id" params={{ id: s.id }} className={rowClass}>
-                      {i < 4 ? <Orb state="working" size={20} label="Claude is working" /> : <span className="flex size-5 items-center justify-center"><StatusLight state="live" /></span>}
+                    <Link to="/sessions/$id" params={{ id: s.id }} className={rowClass}>
+                      {i < 4 ? <Orb state="working" size={20} label="Working" /> : <span className="flex size-5 items-center justify-center"><StatusLight state="live" /></span>}
                       <span className="min-w-0 flex-1">
                         <span className="line-clamp-1 font-medium">{s.title}</span>
                         <span className="line-clamp-1 text-xs text-muted-foreground">{s.statusDetail || 'Working'}, in {where(s)}</span>
@@ -306,7 +307,7 @@ const activityLine = (a: Activity): Line => ({
   key: `a:${a.id}`, at: a.at, to: a.url ?? undefined,
   text: <>
     <span className="font-medium text-foreground">{a.user ?? 'Someone'}</span>
-    {a.viaClaude && ' (via Claude)'} {a.summary}
+    {a.viaClaude && ' (via an agent)'} {a.summary}
     {a.project && <> in {a.project.name}</>}
   </>,
 })
@@ -328,7 +329,7 @@ function LogLine({ line }: { line: Line }) {
 function Facts({ needsYou, working, up, total, ...rest }: { needsYou: number; working: number; up: number; total: number } & React.HTMLAttributes<HTMLParagraphElement>) {
   const parts: ReactNode[] = []
   if (!needsYou) parts.push(<span key="n">Nothing needs you</span>)
-  if (working) parts.push(<Fact key="r" to="/claude">Claude is working on {count(working, 'session').toLowerCase()}</Fact>)
+  if (working) parts.push(<Fact key="r" to="/sessions">Working on {count(working, 'session').toLowerCase()}</Fact>)
   if (total) parts.push(<Fact key="s" to="/services">{up} of {total} services are up</Fact>)
   if (!parts.length) return null
   return (
