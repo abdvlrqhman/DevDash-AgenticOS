@@ -11,19 +11,20 @@ VER="${1:-$(npm view @opencode/cli version)}"
 BASE=/opt/devdash/opencode
 DIR="$BASE/$VER"
 
-if [[ ! -x $DIR/bin/opencode ]]; then
+# A version installed before runs, or is installed again from scratch (a half-done install is never kept).
+if ! "$DIR/bin/opencode" --version >/dev/null 2>&1; then
   rm -rf "$DIR"
   install -d -o devdash-build -g devdash-build "$DIR"
-  runuser -u devdash-build -- bash -c "cd '$DIR' && npm init -y >/dev/null && npm install '@opencode/cli@$VER' --no-fund --no-audit --loglevel=error"
+  # No package scripts (servers often turn them off, and only one is needed): npm installs, then the build user runs
+  # OpenCode's own postinstall, which puts the binary for this machine (glibc or musl, AVX2 or not) in bin/.
+  runuser -u devdash-build -- bash -c "cd '$DIR' && npm init -y >/dev/null && npm install '@opencode/cli@$VER' --ignore-scripts --no-fund --no-audit --loglevel=error && node node_modules/@opencode/cli/postinstall.mjs"
   CLI="$DIR/node_modules/@opencode/cli"
-  [[ -x $CLI/bin/opencode.exe ]] || { echo "no opencode binary in the package" >&2; exit 1; }
-  # npm fetches every Linux x64 build (glibc, musl, baseline, ~240 MB each); its postinstall put the right one in bin/.
+  # npm fetches every Linux x64 build (~240 MB each); the postinstall linked the right one into bin/.
   rm -rf "$DIR"/node_modules/@opencode/cli-*
   chown -R root:root "$DIR" && chmod -R go-w "$DIR"
   install -d "$DIR/bin" && ln -sfn "$CLI/bin/opencode.exe" "$DIR/bin/opencode"
+  "$DIR/bin/opencode" --version >/dev/null || { rm -rf "$DIR"; echo "opencode $VER doesn't run here: removed it, nothing changed" >&2; exit 1; }
 fi
-
-"$DIR/bin/opencode" --version >/dev/null # smoke test
 ln -sfn "$DIR" "$BASE/current.new" && mv -T "$BASE/current.new" "$BASE/current"
 # The `opencode` command in members' shells, unless one is there already that isn't DevDash's (a member's own install,
 # with its own version): that one stays. DevDash itself always runs $BASE/current/bin/opencode.
