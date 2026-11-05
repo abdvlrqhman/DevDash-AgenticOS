@@ -18,7 +18,7 @@ export type Where = { cwd?: string; base?: string; username?: string; near?: str
 const EXT = new Set(`md mdx markdown txt text rst adoc tex json jsonc json5 yaml yml toml ini cfg conf env lock log csv tsv xml html htm css scss sass less
   js mjs cjs jsx ts mts cts tsx vue svelte astro py pyi rb go rs java kt kts swift m mm c h cc cpp hpp cs fs php sh bash zsh fish ps1 bat sql graphql gql
   proto dart lua pl r scala ex exs erl hs ml clj nix tf hcl gradle properties patch diff svg png jpg jpeg gif webp ico avif bmp pdf ipynb prisma
-  sqlite db service plist gitignore dockerignore editorconfig npmrc nvmrc`.split(/\s+/))
+  sqlite db service plist gitignore dockerignore editorconfig npmrc nvmrc mp4 m4v mov webm ogv`.split(/\s+/))
 /** Files with no extension that are still clearly files. */
 const NAMES = new Set(['Makefile', 'Dockerfile', 'Containerfile', 'Caddyfile', 'Procfile', 'Gemfile', 'Rakefile', 'Justfile', 'LICENSE', 'README', 'CHANGELOG', 'CLAUDE', 'AGENTS'])
 
@@ -127,14 +127,17 @@ export function hrefFile(href: string, where: Where): FileRef | null {
 /** The folder a file is in. */
 export const folderOf = (p: string) => p.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || '/'
 
-export type FileKind = 'markdown' | 'image' | 'pdf' | 'text'
+export type FileKind = 'markdown' | 'image' | 'pdf' | 'video' | 'text'
 const IMAGES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon' }
 
-/** How the viewer shows a file, by its name. Anything not markdown, an image or a PDF is tried as text. */
+const VIDEOS = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogv']) // what browsers play (the server's videoType)
+
+/** How the viewer shows a file, by its name. Anything not markdown, an image, a PDF or a video is tried as text. */
 export function fileKind(name: string): { kind: FileKind; mime?: string } {
   const ext = /\.([^./]+)$/.exec(name)?.[1]?.toLowerCase() ?? ''
   if (ext === 'md' || ext === 'mdx' || ext === 'markdown') return { kind: 'markdown' }
   if (IMAGES[ext]) return { kind: 'image', mime: IMAGES[ext] }
   if (ext === 'pdf') return { kind: 'pdf', mime: 'application/pdf' }
+  if (VIDEOS.has(ext)) return { kind: 'video' }
   return { kind: 'text' }
 }

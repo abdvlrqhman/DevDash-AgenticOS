@@ -246,7 +246,7 @@ async function handle(conn: Socket) {
       conn.on('close', () => clearInterval(idle))
       return await attachPty(conn, lines, term(name), { cols: Number(req.cols), rows: Number(req.rows), onInput: () => (lastInput = Date.now()) })
     }
-    if (req.op === 'fs.read') return await files.read(conn, req.path)
+    if (req.op === 'fs.read') return await files.read(conn, req.path, req.start, req.end)
     if (req.op === 'gh.download') return await gh.download(conn, req.path, req.name)
     if (req.op === 'service.attach') {
       const name = services.sessionName(req.name)

@@ -44,6 +44,7 @@ test('helpers', () => {
   assert.equal(folderOf('/a.md'), '/')
   assert.equal(fileKind('PLAN.MD').kind, 'markdown')
   assert.deepEqual(fileKind('logo.svg'), { kind: 'image', mime: 'image/svg+xml' })
+  for (const v of ['demo.mp4', 'Screen Recording.MOV', 'clip.webm']) assert.equal(fileKind(v).kind, 'video', v)
   assert.equal(fileKind('report.pdf').kind, 'pdf')
   assert.equal(fileKind('Dockerfile').kind, 'text')
 })

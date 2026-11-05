@@ -155,12 +155,15 @@ export const ops = {
  * Streams a file over the connection: a header line, then base64 chunks as JSON lines, then {end:true}.
  * (The protocol is JSON lines; base64 costs a third more but keeps one framing for everything.)
  */
-export async function read(conn: Socket, path: unknown) {
+/** `start`/`end` (byte offsets, end included): only that part, as a video player asks; the header still gives the whole size. */
+export async function read(conn: Socket, path: unknown, start?: unknown, end?: unknown) {
   const real = await existing(path)
   const s = await stat(real)
   if (!s.isFile()) throw new Error('That is a folder, not a file.')
   send(conn, { ok: true, name: basename(real), size: s.size, mtime: Math.floor(s.mtimeMs / 1000) })
-  const stream = createReadStream(real, { highWaterMark: 768 * 1024 })
+  const from = Number.isSafeInteger(start) && (start as number) >= 0 ? (start as number) : 0
+  const to = Number.isSafeInteger(end) && (end as number) >= from ? (end as number) : undefined
+  const stream = createReadStream(real, { highWaterMark: 768 * 1024, start: from, end: to })
   for await (const chunk of stream) {
     if (!send(conn, { b: (chunk as Buffer).toString('base64') })) await new Promise((r) => conn.once('drain', r))
     if (conn.destroyed) return stream.destroy()

@@ -56,5 +56,21 @@ export async function readAll(body: ReadableStream<Uint8Array>) {
   return Buffer.concat(parts)
 }
 
+/**
+ * The part of a file a Range header asks for: "bytes=0-" or "bytes=500-999" (end included). Anything else (several
+ * ranges, the last N bytes) is null, and the whole file is sent, which HTTP allows. Pure, tested.
+ */
+export function parseRange(h: string | undefined): { start: number; end?: number } | null {
+  const m = /^bytes=(\d{1,15})-(\d{0,15})$/.exec(h?.trim() ?? '')
+  if (!m) return null
+  const start = Number(m[1])
+  const end = m[2] ? Number(m[2]) : undefined
+  return end === undefined || end >= start ? { start, end } : null
+}
+
+/** Videos browsers play, by extension. A .mov is labelled MP4: Chrome won't try "video/quicktime", and most are H.264 inside. */
+const VIDEO: Record<string, string> = { mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg' }
+export const videoType = (name: string) => VIDEO[/\.([^./]+)$/.exec(name)?.[1]?.toLowerCase() ?? ''] ?? null
+
 /** RFC 6266 attachment header that survives any file name. */
 export const attachment = (name: string) => `attachment; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`

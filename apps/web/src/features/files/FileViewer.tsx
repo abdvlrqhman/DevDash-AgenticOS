@@ -63,7 +63,7 @@ export function FileViewerProvider({ cwd, username, touched, children }: Where &
   )
 }
 
-/** A file, read as the person looking (their own Linux permissions): markdown, code and text, images, or a download. */
+/** A file, read as the person looking (their own Linux permissions): markdown, code and text, images, videos, or a download. */
 export function FileViewer({ file, username, onClose, onOpen }: { file: FileRef | null; username?: string; onClose: () => void; onOpen?: (f: FileRef) => void }) {
   const me = useQuery(meQuery).data
   // Keeps showing the file while the sheet slides away.
@@ -123,6 +123,7 @@ function Matches({ file, username, onOpen }: { file: FileRef; username: string; 
 function FileBody({ file, source, wrap }: { file: FileRef; source: boolean; wrap: boolean }) {
   const { kind, mime } = fileKind(file.path)
   if (kind === 'image') return <ImageView path={file.path} mime={mime!} />
+  if (kind === 'video') return <VideoView path={file.path} />
   return <TextView file={file} markdown={kind === 'markdown' && !source} pdf={kind === 'pdf'} wrap={wrap} />
 }
 
@@ -202,13 +203,25 @@ function ImageView({ path, mime }: { path: string; mime: string }) {
   )
 }
 
-function Unviewable({ path, size, why, children }: { path: string; size: number; why: string; children?: ReactNode }) {
+/** A video plays right here, streamed in parts as it plays and seeks (/api/files/play), never downloaded whole first. */
+function VideoView({ path }: { path: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return <Unviewable path={path} why="This browser can't play this video. Download it to watch it." />
+  return (
+    <div className="flex h-full min-h-64 items-center justify-center bg-black">
+      <video src={`/api/files/play?${new URLSearchParams({ path })}`} controls playsInline preload="metadata" onError={() => setFailed(true)}
+        aria-label={nameOf(path)} className="max-h-full w-full" />
+    </div>
+  )
+}
+
+function Unviewable({ path, size, why, children }: { path: string; size?: number; why: string; children?: ReactNode }) {
   return (
     <div className="flex flex-col items-center gap-3 px-4 py-16 text-center">
       <File className="size-10 text-muted-foreground" />
       <div>
         <p className="font-medium break-all">{nameOf(path)}</p>
-        <p className="text-sm text-muted-foreground">{bytes(size)}. {why}</p>
+        <p className="text-sm text-muted-foreground">{size !== undefined && `${bytes(size)}. `}{why}</p>
       </div>
       <div className="flex gap-2">
         {children}

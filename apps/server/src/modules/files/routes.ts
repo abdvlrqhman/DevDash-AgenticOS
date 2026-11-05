@@ -4,7 +4,7 @@ import { AppError, json, query, rateLimit } from '../../core/http.ts'
 import type { AgentsService } from '../agents/service.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
 import { EXPIRY, type ShareRow, type SharesService } from './shares.ts'
-import { agentFile, asText, attachment, readAll } from './stream.ts'
+import { agentFile, asText, attachment, parseRange, readAll, videoType } from './stream.ts'
 
 const CHUNK = 8 * 1024 * 1024
 /** Biggest file the viewer shows as text; past that it offers a download. */
@@ -34,6 +34,23 @@ export function filesRoutes(agents: AgentsService, shares: SharesService, mw: Re
         return new Response(f.body, { headers: { 'content-type': 'application/pdf', 'content-length': String(f.size), 'content-disposition': attachment(f.name).replace(/^attachment/, 'inline') } })
       }
       return new Response(f.body, { headers: { 'content-type': 'application/octet-stream', 'content-length': String(f.size), 'content-disposition': attachment(f.name) } })
+    })
+    // A video, played in the browser: the player asks for the parts it needs (Range) as it plays and seeks, so a big one
+    // starts at once and is never downloaded whole. Only videos, always labelled as one (nothing else renders from here).
+    .get('/play', query(z.object({ path: Path })), async (c) => {
+      const { path } = c.req.valid('query')
+      const type = videoType(path)
+      if (!type) throw new AppError(400, 'not_video', 'Only videos play here.')
+      const r = parseRange(c.req.header('range'))
+      const f = await agentFile(agents.open(as(c), { op: 'fs.read', path, ...(r && { start: r.start, end: r.end }) }))
+      const headers = { 'content-type': type, 'accept-ranges': 'bytes', 'x-content-type-options': 'nosniff', 'cache-control': 'private, no-cache' }
+      if (!r) return new Response(f.body, { headers: { ...headers, 'content-length': String(f.size) } })
+      if (r.start >= f.size) {
+        await f.body.cancel()
+        return new Response(null, { status: 416, headers: { 'content-range': `bytes */${f.size}` } })
+      }
+      const end = Math.min(r.end ?? f.size - 1, f.size - 1)
+      return new Response(f.body, { status: 206, headers: { ...headers, 'content-range': `bytes ${r.start}-${end}/${f.size}`, 'content-length': String(end - r.start + 1) } })
     })
     // A file Claude named can be relative to more than one folder (it moves with cd, or into a worktree): the first that exists.
     .post('/first', json(z.object({ paths: z.array(Path).min(1).max(8) })), async (c) =>
