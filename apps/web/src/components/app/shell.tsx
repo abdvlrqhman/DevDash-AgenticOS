@@ -30,6 +30,8 @@ import { useDragWidth, useStoredWidth } from './resize-handle'
 import { SearchDialog, showSearch } from './search'
 import { ApprovalsBadge } from '@/features/team/Approvals' // Team (optional)
 import { SidebarPins } from '@/features/pins/pins'
+import { AgentGlyph, AssistantDock, statusTitle, useAssistantStatus } from '@/features/assistant/AssistantDock'
+import { AGENT_NAME, toggleAssistant, useAssistantOpen } from '@/features/assistant/store'
 
 type NavItem = { to: string; label: string; icon: typeof House; exact?: true }
 const NAV: { label?: string; items: NavItem[] }[] = [
@@ -119,6 +121,7 @@ export function AppShell() {
           <PageMotion><Outlet /></PageMotion>
           <MobileTabs waiting={waiting} />
         </SidebarInset>
+        <AssistantDock />
       </SidebarProvider>
       <Toaster />
       <ConfirmHost />
@@ -139,7 +142,7 @@ function PageMotion({ children }: { children: ReactNode }) {
   useEffect(() => { ref.current?.scrollTo(0, 0) }, [path])
   useEffect(() => { mounted.current = true }, [])
   useMotion((gsap) => {
-    if (!mounted.current || /^\/(claude\/[0-9a-f-]{36}|terminal)/.test(path)) return
+    if (!mounted.current || /^\/(sessions\/[0-9a-f-]{36}|terminal)/.test(path)) return
     gsap.fromTo(ref.current, { opacity: 0, y: 4 }, { opacity: 1, y: 0, duration: 0.18, ease: 'power2.out', clearProps: 'opacity,transform' })
   }, [section])
   return <div ref={ref} className="min-h-0 flex-1 overflow-y-auto">{children}</div>
@@ -183,13 +186,14 @@ function AppSidebar({ waiting, pane }: { waiting: number; pane: ReturnType<typeo
           <SidebarGroup className={cn('px-2 py-1.5', gi > 0 && 'pt-0')}>
             {g.label && <SidebarGroupLabel>{g.label}</SidebarGroupLabel>}
             <SidebarMenu>
-              {gi === 0 && (
+              {gi === 0 && (<>
                 <SidebarMenuItem>
                   <SidebarMenuButton tooltip="Search" onClick={showSearch} className="h-7 text-muted-foreground">
                     <Search /><span>Search</span><kbd className="ml-auto rounded border px-1 font-mono text-[10px]">⌘K</kbd>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-              )}
+                <AgentItem />
+              </>)}
               {g.items.map((n) => (
                 <SidebarMenuItem key={n.to}>
                   <SidebarMenuButton asChild isActive={active(n.to, !!n.exact)} tooltip={n.label} className="h-7">
@@ -211,6 +215,19 @@ function AppSidebar({ waiting, pane }: { waiting: number; pane: ReturnType<typeo
       </SidebarFooter>
       <AppRail pane={pane} />
     </Sidebar>
+  )
+}
+
+/** Hamasa, the personal agent: opens its chat over the page (the same as ⌘I); its dot says when it works or waits for you. */
+function AgentItem() {
+  const status = useAssistantStatus()
+  const open = useAssistantOpen()
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton tooltip={statusTitle(status)} isActive={open} onClick={toggleAssistant} className="h-7" aria-pressed={open}>
+        <AgentGlyph status={status} /><span>{AGENT_NAME}</span><kbd className="ml-auto rounded border px-1 font-mono text-[10px] text-muted-foreground">⌘I</kbd>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   )
 }
 
@@ -291,7 +308,7 @@ const TABS = [
 function MobileTabs({ waiting }: { waiting: number }) {
   const active = useActive()
   // Inside a Claude chat the tabs step aside, as in messaging apps: the back arrow leads out.
-  const inChat = useRouterState({ select: (s) => /^\/claude\/[0-9a-f-]{36}$/.test(s.location.pathname) })
+  const inChat = useRouterState({ select: (s) => /^\/sessions\/[0-9a-f-]{36}$/.test(s.location.pathname) })
   if (inChat) return null
   const moreActive = ['/more', '/members', '/account', '/notes', '/tools', '/terminal', '/services', '/files', '/vault', '/network', '/storage', '/browser', '/server'].some((p) => active(p)) || active('/sessions/setup')
   return (

@@ -108,6 +108,10 @@ export function codeFile(text: string, where: Where): FileRef | null {
 }
 
 /** A markdown link's target that is a file (absolute, ~/, ./, ../, file://, or a relative path to a file), or null for web links. */
+/** A link to a DevDash page (/tasks/shop/12, /sessions/<id>, /files?path=…): opened in the app, not as a file. */
+export const appPath = (href: string) =>
+  /^\/(tasks|sessions|projects|notes|services|approvals|server|members|tools|terminal|browser|vault|network|storage|account|more|files)(?=[/?#]|$)/.test(href.trim())
+
 export function hrefFile(href: string, where: Where): FileRef | null {
   let h = href.trim()
   if (!h || h.startsWith('#') || h.startsWith('//')) return null

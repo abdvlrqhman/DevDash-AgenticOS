@@ -66,6 +66,12 @@ More agents that speak ACP (Gemini CLI, Goose, Codex through its adapter and oth
 
 Every session is a real coding agent, run as the member who started it.
 
+- **Hamasa, a personal agent for each member.** An expandable chat on every page (⌘I), on Claude Code or OpenCode, that
+  works across every project you can see: it answers from tasks, notes, sessions and services, knows which page you're
+  on, starts sessions and messages or stops the ones you have, and runs prompts on a schedule (a morning brief, a check
+  after a deploy) with a notification when something needs you. It's a full session underneath: pick its model, effort
+  and permission level any time, switch on your tailnet and Google Drive for it, and it asks questions and permissions
+  like any other session, acting with your access only.
 - **Your choice of agent.** Each session runs Claude Code, or OpenCode with any model provider: Anthropic, OpenAI,
   Google, OpenRouter, GitHub Copilot, local models and more. Pick it per session; team roles pick theirs too. DevDash
   drives Claude Code through its Agent SDK and OpenCode over the [Agent Client Protocol](https://agentclientprotocol.com),

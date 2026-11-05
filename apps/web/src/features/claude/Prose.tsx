@@ -1,9 +1,11 @@
 import { createContext, memo, useContext, useMemo, type ComponentProps, type MouseEvent, type ReactNode } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useRouter } from '@tanstack/react-router'
 import { openExternal } from '@/lib/shell'
 import { FileLinksContext, useFileLinks } from '../files/open-file'
-import { codeFile, folderOf, foldersIn, hrefFile, lookIn, type FileRef } from './file-links'
+import { appPath, codeFile, folderOf, foldersIn, hrefFile, lookIn, type FileRef } from './file-links'
+import { panelCoversPage, setAssistantOpen } from '../assistant/store'
 
 /**
  * Claude's markdown, with links opening outside DevDash; under a FileViewerProvider, file paths open in the viewer.
@@ -40,6 +42,18 @@ function FileAnchor({ f, said, className, children }: { f: FileRef; said: string
 const COMPONENTS: Components = {
   a: function ProseLink({ href, children }) {
     const files = useFileLinks()
+    const router = useRouter()
+    if (href && appPath(href)) {
+      return (
+        <a href={href} onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey) return
+          e.preventDefault()
+          router.history.push(href.trim())
+          // From the personal agent's panel on a phone, where it covers the page: show the page.
+          if (e.currentTarget.closest('[data-assistant]') && panelCoversPage()) setAssistantOpen(false)
+        }}>{children}</a>
+      )
+    }
     const f = files && href ? hrefFile(href, files) : null
     if (f) return <FileAnchor f={f} said={href!}>{children}</FileAnchor>
     return <a href={href} onClick={(e) => { e.preventDefault(); if (href) openExternal(href) }}>{children}</a>

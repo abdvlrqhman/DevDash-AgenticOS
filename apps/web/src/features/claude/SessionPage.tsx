@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { Archive, ArchiveRestore, Bot, Check, ChevronDown, Circle, Ellipsis, FileCode, Gauge, LoaderCircle, MessageSquare, Network, Pencil, Plus, Share2, SquareTerminal, Shield, ShieldOff, SlidersHorizontal, X, Zap } from 'lucide-react'
@@ -46,6 +46,7 @@ import { buildTranscript, mergePage, mergeRaw, sessionFacts, touchedFiles, type 
 import { SubagentCtx } from './ToolSteps'
 import { useTopic } from '@/lib/live'
 import { usePageTitle } from '@/lib/title'
+import { cn } from '@/lib/utils'
 
 const light = (s: Session['status']) => (s === 'working' ? 'live' : s === 'waiting' ? 'waiting' : s === 'error' ? 'error' : 'idle')
 const termSize = () => ({ cols: Math.max(40, Math.min(220, Math.floor(innerWidth / 8.2))), rows: Math.max(15, Math.min(80, Math.floor(innerHeight / 19))) })
@@ -56,7 +57,14 @@ export function SessionPage() {
   return <SessionView key={id} id={id} />
 }
 
-function SessionView({ id }: { id: string }) {
+/**
+ * A session somewhere other than its own page (the personal agent's panel): `header` replaces the page header, `name`
+ * the agent's in the message box, `empty` shows before the first message (and can send one), and `prefix` goes before
+ * each message the person sends (not before /commands).
+ */
+export type Embedded = { header: ReactNode; name?: string; empty?: (send: (text: string) => void) => ReactNode; prefix?: () => string }
+
+export function SessionView({ id, embedded }: { id: string; embedded?: Embedded }) {
   const me = useQuery(meQuery).data!
   const qc = useQueryClient()
   const info = useQuery(sessionQuery(id))
@@ -92,7 +100,7 @@ function SessionView({ id }: { id: string }) {
   const recentlyChanged = useRef(new Map<string, PendingChange>())
 
   const s = info.data?.session
-  usePageTitle(s?.title) // the browser tab shows the session name: "DevDash — <title>"
+  usePageTitle(s?.title, !embedded) // the browser tab shows the session name: "DevDash — <title>"
   const setSession = (session: Session) => qc.setQueryData(sessionQuery(id).queryKey, (old) => (old ? { ...old, session } : old))
 
   const letIn = (user: Person) =>
@@ -212,7 +220,8 @@ function SessionView({ id }: { id: string }) {
   }
   useEffect(toBottom, [blocks, pending])
 
-  const send = async (text: string, images: Img[], files: Doc[] = [], uploads: Upload[] = []) => {
+  const send = async (said: string, images: Img[], files: Doc[] = [], uploads: Upload[] = []) => {
+    const text = embedded?.prefix && !said.startsWith('/') ? `${embedded.prefix()}\n\n${said}` : said
     const { uuid } = await unwrap(api.api.claude.sessions[':id'].messages.$post({
       param: { id }, json: { text, images, files: files.map(({ name, mediaType, data }) => ({ name, mediaType, data })), uploads },
     }))
@@ -247,12 +256,12 @@ function SessionView({ id }: { id: string }) {
   if (info.error) {
     return (
       <>
-        <PageHeader title="Session" back="/sessions" />
+        {embedded?.header ?? <PageHeader title="Session" back="/sessions" />}
         <div className="p-4"><ErrorAlert error={info.error} /></div>
       </>
     )
   }
-  if (!s) return <><PageHeader title="Session" back="/sessions" /><div className="flex flex-col gap-3 p-4">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div></>
+  if (!s) return <>{embedded?.header ?? <PageHeader title="Session" back="/sessions" />}<div className="flex flex-col gap-3 p-4">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div></>
 
   const canSend = info.data!.canSend
   const role = info.data!.role // a team role's session: shown as the role, not the account the team runs on
@@ -268,7 +277,7 @@ function SessionView({ id }: { id: string }) {
   return (
     <FileViewerProvider cwd={s.cwd} username={s.owner.username} touched={touched}>
     <div className="flex h-full flex-col">
-      <PageHeader back="/sessions" backOnSmall
+      {embedded ? embedded.header : <PageHeader back="/sessions" backOnSmall
         title={s.title}
         description={
           <span className="flex items-center gap-1.5">
@@ -300,7 +309,7 @@ function SessionView({ id }: { id: string }) {
             </TabsList>
           </Tabs>
           <SessionMenu s={s} isOwner={isOwner} canSend={canSend} access={info.data!.access} onUpdate={(v) => update.mutate(v)} onShare={() => setShare(true)} onRename={() => setSettings(true)} onUsage={() => setUsage(true)} onTailnet={() => setTailnet(true)} />
-        </>} />
+        </>} />}
 
 
       {s.mode === 'cli' ? (
@@ -309,32 +318,32 @@ function SessionView({ id }: { id: string }) {
         <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           <div ref={scroller} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}
-            className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
+            className={embedded ? 'min-h-0 flex-1 overflow-y-auto px-3 py-3' : 'min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6'}>
             <div className="mx-auto flex max-w-4xl flex-col gap-4">
               {history.isPending && s.started && [0, 1].map((i) => <Skeleton key={i} className="h-20" />)}
               {hasOlder && <Earlier loading={loadingOlder} onLoad={() => void loadOlder()} root={scroller}
                 // Only when you scrolled up (or everything fits): not in the moment the page opens at the top.
                 auto={() => { const el = scroller.current; return !!el && (!stick.current || el.scrollHeight <= el.clientHeight + 8) }} />}
               <ErrorAlert error={history.error} />
-              {!s.started && !raw.length && <p className="py-10 text-center text-muted-foreground">Tell {agentName(s.harness)} what to work on.</p>}
+              {!s.started && !raw.length && (embedded?.empty?.((t) => void send(t, []).catch((err: Error) => toast.error(err.message))) ?? <p className="py-10 text-center text-muted-foreground">Tell {agentName(s.harness)} what to work on.</p>)}
               <SubagentCtx.Provider value={subagentCtx}>
                 <div ref={transcript}><Blocks blocks={blocks} senders={history.data?.senders} live={working || s.status === 'waiting'} /></div>
               </SubagentCtx.Provider>
-              <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} agent={agentName(s.harness)} />
+              <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} agent={embedded?.name ?? agentName(s.harness)} />
               {s.status === 'error' && s.statusDetail && <ErrorAlert error={s.statusDetail} />}
               <Requests sessionId={id} requests={pending} canAnswer={canSend} isOwner={isOwner} owner={s.owner.name} waitingOn={canSend ? undefined : s.owner.name} afterPlanApproved={afterPlanApproved} />
             </div>
           </div>
-          <div className="bg-background px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-6 md:pb-4">
+          <div className={cn('bg-background px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]', embedded ? 'md:pb-3' : 'md:px-6 md:pb-4')}>
             <div className="mx-auto max-w-4xl">
-              <Composer sessionId={id} profile={s.profile} harness={harnessOf(s)} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
+              <Composer sessionId={id} profile={s.profile} harness={harnessOf(s)} name={embedded?.name} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
                 disabledReason={canSend ? undefined : <WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} />}
                 footer={<SessionChips s={s} isOwner={isOwner} canSend={canSend} working={working} onUpdate={(v) => update.mutate(v)}
                   onCompact={() => void send('/compact', []).catch((err: Error) => toast.error(err.message))} />} />
             </div>
           </div>
         </div>
-        <SessionAside s={s} blocks={blocks} isOwner={isOwner} />
+        {!embedded && <SessionAside s={s} blocks={blocks} isOwner={isOwner} />}
         </div>
       )}
       <Comments id={id} open={commentsOpen} onOpenChange={setCommentsOpen} me={me.id} />
@@ -492,13 +501,13 @@ function CliView({ id, onEnded }: { id: string; onEnded: () => void }) {
   )
 }
 
-type Updater = (v: {
+export type Updater = (v: {
   model?: string | null; effort?: Effort | null; permissionMode?: PermissionMode; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
   fastMode?: boolean; remoteControl?: boolean; reachTailnet?: boolean; tailnetMcps?: { name: string; url: string }[] | null
 }) => void
 
-/** Model, effort and permissions, changed in place from the chip row. */
-function ModelMenu({ s, disabled, isOwner, onUpdate }: { s: Session; disabled: boolean; isOwner: boolean; onUpdate: Updater }) {
+/** Model, effort and permissions, changed in place from the chip row. `compact`: always just the icon (a small window). */
+export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Session; disabled: boolean; isOwner: boolean; onUpdate: Updater; compact?: boolean }) {
   const agent = HARNESS[harnessOf(s)]
   const models = useQuery({ ...commandsQuery(s.profile, harnessOf(s)), enabled: !disabled }).data?.models as ModelInfo[] | undefined
   const list: ModelInfo[] = models?.length ? models : harnessOf(s) === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
@@ -507,6 +516,9 @@ function ModelMenu({ s, disabled, isOwner, onUpdate }: { s: Session; disabled: b
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={disabled}>
+        {compact ? (
+          <Button variant="ghost" size="icon" className="shrink-0" aria-label="Model, effort and permissions" title="Model, effort and permissions"><SlidersHorizontal /></Button>
+        ) : (
         <Button variant="outline" size="sm" className="shrink-0 max-sm:size-9 max-sm:px-0" aria-label="Model, effort and permissions">
           <SlidersHorizontal className="xl:hidden" />
           <span className="hidden xl:inline">{modelLabel(list, s.model)}</span>
@@ -516,6 +528,7 @@ function ModelMenu({ s, disabled, isOwner, onUpdate }: { s: Session; disabled: b
           </span>
           <ChevronDown className="hidden xl:block" />
         </Button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] w-72 overflow-y-auto">
         <DropdownMenuLabel>Model</DropdownMenuLabel>

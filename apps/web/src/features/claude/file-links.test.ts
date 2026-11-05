@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { codeFile, fileKind, folderOf, foldersIn, hrefFile, knownFor, lookIn, mainCheckout, normalize, resolvePaths, splitLine } from './file-links.ts'
+import { appPath, codeFile, fileKind, folderOf, foldersIn, hrefFile, knownFor, lookIn, mainCheckout, normalize, resolvePaths, splitLine } from './file-links.ts'
 
 const at = { cwd: '/srv/devdash/projects/shop', username: 'ann' }
 
@@ -86,4 +86,9 @@ test('files Claude worked on come first for a name that ends their path', () => 
   assert.deepEqual(knownFor('src/a.ts', touched), ['/srv/p/src/a.ts'])
   assert.deepEqual(knownFor('/srv/p/src/a.ts', touched), [])
   assert.deepEqual(knownFor('a.ts.bak', touched), [])
+})
+
+test('links to DevDash pages open in the app; paths on disk stay files', () => {
+  for (const h of ['/tasks/shop/12', '/sessions/0b5c', '/files?path=/srv', '/services', '/projects/shop#team']) assert.ok(appPath(h), h)
+  for (const h of ['/srv/devdash/projects/shop/README.md', '/home/ann/tasks.md', '/tasksfile', 'tasks/x', '//sessions']) assert.ok(!appPath(h), h)
 })

@@ -100,3 +100,8 @@ test('touchedFiles: what Claude worked on, most recent first, from its file tool
   ]
   assert.deepEqual(touchedFiles(buildTranscript(raws)), ['/srv/p/docs/A.md', '/srv/p/builds/store/1-app-icon-512.png'])
 })
+
+test("the page the personal agent's panel adds to a message isn't shown as the person's words", () => {
+  const blocks = buildTranscript([{ type: 'user', uuid: 'u1', message: { role: 'user', content: '<devdash-page path="/tasks/shop/12" title="Fix login"/>\n\nWhat is left here?' } }])
+  assert.deepEqual(blocks.map((b) => b.kind === 'user' && b.text), ['What is left here?'])
+})

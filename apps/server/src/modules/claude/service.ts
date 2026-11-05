@@ -181,8 +181,9 @@ export type SessionExtras = {
   listed?: boolean
   shared?: boolean
   sharedCanSend?: boolean
-  /** Where it came from when a person didn't start it themselves (a team role's approved code proposal). */
-  origin?: { kind: 'proposal'; role: string }
+  /** Where it came from when a person didn't start it themselves: a team role's approved code proposal, or the owner's
+   *  personal agent (unlisted, but it tells its owner what needs them like any session of theirs). */
+  origin?: { kind: 'proposal'; role: string } | { kind: 'assistant' }
 }
 
 /** What a feature that starts sessions says about them on a project's page (a team role's chat or one of its shifts). */
@@ -255,7 +256,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 }) {
   const repo = claudeRepo(db)
   // Every launch also says whether the owner's Drive is connected: the agent sets up the remote and tells Claude about it.
-  const launch = (s: SessionRow) => ({ ...baseLaunch(s), storage: storageFor?.(s.owner_id) ?? null, ownerName: s.owner_name })
+  const launch = (s: SessionRow) => ({ ...baseLaunch(s), storage: s.drive === 0 ? null : storageFor?.(s.owner_id) ?? null, ownerName: s.owner_name })
   // The owner, everyone while it's shared with the team, or the members it's shared with by name.
   const canView = (u: Pick<User, 'id'>, s: SessionRow) => s.owner_id === u.id || s.shared === 1 || repo.isViewer(s.id, u.id)
   // A failing turn can report twice (its result, then the process exiting): one error alert per session per minute.
@@ -317,8 +318,10 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       }
     }
   }
+  // How notifications name who's talking: the session's agent, or the owner's personal agent by its own name.
+  const nameOf = (s: SessionRow) => (s.origin_kind === 'assistant' ? 'Hamasa' : agentName(s.harness))
   const alert = (s: SessionRow, kind: NotificationKind, title: string, body?: string) => {
-    if (!s.listed) return // the feature that started an unlisted session tells people what matters
+    if (!s.listed && s.origin_kind !== 'assistant') return // the feature that started an unlisted session tells people what matters
     if (kind === 'errors') {
       if (Date.now() - (lastError.get(s.id) ?? 0) < 60_000) return
       lastError.set(s.id, Date.now())
@@ -414,9 +417,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         // Claude may have committed: look for "fixes #N" now rather than at the next fetch.
         if (s.project_id && s.status === 'working' && st !== 'working') projects.rescan(s.project_id)
         // Chat mode notifies from the richer permission/result events below; the CLI only reports status.
-        if (st === 'error') alert(s, 'errors', `${agentName(s.harness)} stopped with an error: ${s.title}`, typeof ev.detail === 'string' ? clip(ev.detail) : undefined)
-        else if (s.mode === 'cli' && st === 'waiting' && s.status !== 'waiting') alert(s, 'needs_you', `${agentName(s.harness)} needs you: ${s.title}`, 'Waiting for you in the CLI')
-        else if (s.mode === 'cli' && st === 'idle' && s.status === 'working') alert(s, 'finished', `${agentName(s.harness)} finished: ${s.title}`)
+        if (st === 'error') alert(s, 'errors', `${nameOf(s)} stopped with an error: ${s.title}`, typeof ev.detail === 'string' ? clip(ev.detail) : undefined)
+        else if (s.mode === 'cli' && st === 'waiting' && s.status !== 'waiting') alert(s, 'needs_you', `${nameOf(s)} needs you: ${s.title}`, 'Waiting for you in the CLI')
+        else if (s.mode === 'cli' && st === 'idle' && s.status === 'working') alert(s, 'finished', `${nameOf(s)} finished: ${s.title}`)
         if (s.mode === 'cli' && s.status === 'working' && (st === 'idle' || st === 'stopped')) turnEnded({ session: s, ok: true, aborted: false, result: null, costUsd: 0 })
         return publish(s.id)
       }
@@ -450,8 +453,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         }
         // Pressing Stop ends the turn with an "aborted" reason: nothing to tell anyone.
         if (m.type === 'result' && !m.terminal_reason?.startsWith('aborted')) {
-          if (m.subtype === 'success' && !m.is_error) alert(s, 'finished', `${agentName(s.harness)} finished: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
-          else alert(s, 'errors', `${agentName(s.harness)} stopped with an error: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
+          if (m.subtype === 'success' && !m.is_error) alert(s, 'finished', `${nameOf(s)} finished: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
+          else alert(s, 'errors', `${nameOf(s)} stopped with an error: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
         }
         // The last message of the answer so far: where the answer's numbers go in the transcript.
         const top = ev.msg as { uuid?: string; parent_tool_use_id?: string | null; message?: { model?: string } }
@@ -474,13 +477,13 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         const askedBy = ev.askedBy as { id: number; name: string } | undefined
         if (ev.ownerOnly && askedBy) {
           // Only the owner can allow it: tell them, not the others who can send.
-          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title, agentName(s.harness))
-          if (s.listed) {
-            void notify(s.owner_id, 'needs_you', { title: `${askedBy.name} asked ${agentName(s.harness)} to use your access`, body: n.body ?? s.title, url: `/sessions/${s.id}`, tag: `session:${s.id}` })
+          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title, nameOf(s))
+          if (s.listed || s.origin_kind === 'assistant') {
+            void notify(s.owner_id, 'needs_you', { title: `${askedBy.name} asked ${nameOf(s)} to use your access`, body: n.body ?? s.title, url: `/sessions/${s.id}`, tag: `session:${s.id}` })
               .catch((err) => console.error('notify:', err))
           }
         } else {
-          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title, agentName(s.harness))
+          const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title, nameOf(s))
           alert(s, 'needs_you', n.title, n.body)
         }
         return hub.publish(`session:${s.id}`, {
@@ -545,7 +548,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       repo.setStatus(s.id, 'working', null, 'chat')
     } catch (err) {
       repo.setStatus(s.id, 'error', `Interrupted by a server restart and could not continue: ${(err as Error).message}`.slice(0, 500), 'chat')
-      alert(s, 'errors', `${agentName(s.harness)} was interrupted: ${s.title}`, 'Send a message to continue.')
+      alert(s, 'errors', `${nameOf(s)} was interrupted: ${s.title}`, 'Send a message to continue.')
     }
     publish(s.id)
   }
@@ -771,7 +774,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         instructions: extra.instructions ?? (project?.instructions?.trim() || undefined), tool_policy: extra.toolPolicy ? JSON.stringify(extra.toolPolicy) : undefined,
         listed: extra.listed === false ? 0 : undefined,
         shared: sharing.shared ? 1 : undefined, shared_can_send: sharing.shared && sharing.canSend ? 1 : undefined,
-        origin_kind: extra.origin?.kind, origin_role: extra.origin?.role,
+        origin_kind: extra.origin?.kind, origin_role: extra.origin && 'role' in extra.origin ? extra.origin.role : undefined,
       })
       const s = repo.byId(id)!
       try {
@@ -918,11 +921,14 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       title?: string; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
       model?: string | null; effort?: string | null; permissionMode?: string; fastMode?: boolean; remoteControl?: boolean
       reachTailnet?: boolean; tailnetMcp?: string | null; tailnetMcps?: TailnetMcp[] | null
+      /** Whether it gets the owner's Google Drive set up (server features only, like the personal agent's settings). */
+      drive?: boolean
     }) {
       const s = find(user, id)
       if (p.effort && s.harness === 'claude' && !(EFFORTS as readonly string[]).includes(p.effort)) throw new AppError(400, 'bad_effort', 'Unknown effort level.')
       const ownerOnly = p.title !== undefined || p.shared !== undefined || p.sharedCanSend !== undefined || p.archived !== undefined
         || p.remoteControl !== undefined || p.reachTailnet !== undefined || p.tailnetMcp !== undefined || p.tailnetMcps !== undefined
+        || p.drive !== undefined
       if (ownerOnly) requireOwner(user, s)
       else requireSend(user, s)
       // Tailnet routing (owner-only): only allow turning it on if the owner has a connected tailnet node; validate each
@@ -935,7 +941,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         : p.tailnetMcp !== undefined ? (p.tailnetMcp?.trim() ? [{ name: 'ida', url: p.tailnetMcp }] : [])
         : undefined
       const tailnetMcps = mcps === undefined ? undefined : JSON.stringify(checkTailnetMcps(mcps ?? []))
-      const touchedTailnet = p.reachTailnet !== undefined || p.tailnetMcp !== undefined || p.tailnetMcps !== undefined
+      const touchedTailnet = p.reachTailnet !== undefined || p.tailnetMcp !== undefined || p.tailnetMcps !== undefined || p.drive !== undefined
       const patch: Patch = {
         title: p.title?.trim().slice(0, 120) || undefined,
         shared: p.shared === undefined ? undefined : p.shared ? 1 : 0,
@@ -945,6 +951,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         fast_mode: p.fastMode === undefined ? undefined : p.fastMode ? 1 : 0,
         reach_tailnet: p.reachTailnet === undefined ? undefined : p.reachTailnet ? 1 : 0,
         tailnet_mcps: tailnetMcps,
+        drive: p.drive === undefined ? undefined : p.drive ? 1 : 0,
       }
       if (patch.title) {
         patch.title_custom = 1

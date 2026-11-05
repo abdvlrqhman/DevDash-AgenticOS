@@ -4,6 +4,7 @@
 import { connect } from 'node:net'
 import { createInterface } from 'node:readline'
 import { teamTools } from './team.mjs' // Team (optional)
+import { assistantTools } from './assistant.mjs'
 
 const SOCKET = process.env.DEVDASH_AGENT_SOCKET
 const context = { sessionId: process.env.DEVDASH_SESSION_ID ?? null, cwd: process.cwd() }
@@ -64,7 +65,8 @@ const NET_TOOLS = [
 const netTools = () => call('mcp.net_here', { ...context, args: {} }).then((r) => (r?.available ? NET_TOOLS : []), () => [])
 
 let listed
-const tools = () => (listed ??= Promise.all([teamTools(call, context), deployTools(), netTools()]).then(([team, deploy, net]) => [...TOOLS, ...deploy, ...net, ...team]))
+const tools = () => (listed ??= Promise.all([teamTools(call, context), deployTools(), netTools(), assistantTools(call, context)])
+  .then(([team, deploy, net, assistant]) => [...TOOLS, ...deploy, ...net, ...team, ...assistant]))
 
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n')
 

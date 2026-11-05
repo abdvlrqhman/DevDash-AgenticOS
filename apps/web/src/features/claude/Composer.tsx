@@ -54,11 +54,13 @@ function mentionAt(text: string, caret: number) {
 
 type Item = { key: string; label: string; hint?: string; icon?: ReactNode; apply: () => void }
 
-export function Composer({ sessionId, profile, harness = 'claude', working, disabledReason, footer, onSend, onStop }: {
+export function Composer({ sessionId, profile, harness = 'claude', name, working, disabledReason, footer, onSend, onStop }: {
   sessionId: string
   profile: string
   /** The session's agent: its slash commands are its own. */
   harness?: Harness
+  /** Who the message goes to, when not the agent's own name (the personal agent's). */
+  name?: string
   working: boolean
   disabledReason?: ReactNode
   /** Small status row under the message box (context used, fast mode, Remote Control). */
@@ -321,7 +323,7 @@ export function Composer({ sessionId, profile, harness = 'claude', working, disa
       <Textarea ref={area} value={text} rows={1} onKeyDown={onKey} onPaste={onPaste} aria-label="Message Claude"
         onChange={(e) => { write(e.target.value); setCaret(e.target.selectionStart) }}
         onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-        placeholder={working ? `Add a message for ${HARNESS[harness].name}` : `Message ${HARNESS[harness].name}, @ to mention a file`}
+        placeholder={working ? `Add a message for ${name ?? HARNESS[harness].name}` : `Message ${name ?? HARNESS[harness].name}, @ to mention a file`}
         className="max-h-[40vh] min-h-9 resize-none rounded-none border-0 bg-transparent px-1.5 py-1 text-base leading-6 shadow-none [field-sizing:content] placeholder:truncate focus-visible:ring-0 md:text-sm md:leading-6 dark:bg-transparent" />
       <div className="flex items-center gap-1">
         <Button size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-muted-foreground" aria-label="Attach files" title="Attach images, PDFs or any file" onClick={() => picker.current?.click()}><Paperclip /></Button>

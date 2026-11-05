@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { AssistantHeaderButton } from '@/features/assistant/AssistantDock'
 import { cn } from '@/lib/utils'
 
 /**
@@ -40,6 +41,8 @@ export function PageHeader({ title, description, back, backOnSmall, actions, wid
         {description && <div className="truncate text-xs text-muted-foreground">{description}</div>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
+      {/* Phones and tablets have no sidebar: Hamasa, the personal agent, opens from every page's top bar. */}
+      <AssistantHeaderButton className="md:hidden" />
     </header>
   )
 }

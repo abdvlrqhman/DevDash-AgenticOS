@@ -157,8 +157,9 @@ export function buildTranscript(raws: Raw[]): Block[] {
         else if (stdout.trim()) top.push({ kind: 'note', key, text: stdout.trim() })
         return
       }
-      // Reminders Claude Code appends for the model aren't the person's words.
-      const said = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+      // Reminders Claude Code appends for the model aren't the person's words, nor the page the personal agent's panel
+      // says they had open (AssistantPanel).
+      const said = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/^\s*<devdash-page\b[^>]*\/>\s*/, '').trim()
       if (!said && !images.length && !files.length) return
       const machine = injected(r, said || text, key, images)
       if (machine) return void top.push(machine)

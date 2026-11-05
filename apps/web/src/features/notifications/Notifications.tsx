@@ -14,6 +14,7 @@ import { disablePush, enablePush, needsHomeScreen, pushEnabled, pushSupported } 
 import { backgroundOff, inIosShell, inShell, notificationPermission, setBackgroundNotifications, syncBackgroundNotifications } from '@/lib/shell'
 import { ErrorAlert } from '../auth/LoginPage'
 import { deliver } from './deliver'
+import { assistantShows } from '../assistant/store'
 
 type Event = { notification: { title: string; body: string; url: string } }
 
@@ -26,7 +27,7 @@ export function useNotificationEvents() {
     const open = { label: 'Open', onClick: () => void navigate({ to: n.url }) }
     switch (deliver({
       looking: looking(),
-      onPage: location.pathname === n.url,
+      onPage: location.pathname === n.url || assistantShows(n.url), // or the agent's panel shows it
       // The device's own pushes show it: Android's background connection, or Apple push in the iPhone app.
       backgroundPush: !!window.DevDashAndroid?.backgroundNotifications() || iosPushActive(),
       nativeNotify: !!window.devdashShell?.notify, // the Tauri shell (desktop/iOS) posts a native OS notification

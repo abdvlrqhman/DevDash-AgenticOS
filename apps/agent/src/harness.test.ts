@@ -31,6 +31,11 @@ test('prompts: text, images and attached documents become ACP content', () => {
 test("permission modes decide like Claude Code's: reads always run, edits in Accept edits, everything in Bypass", () => {
   for (const mode of ['default', 'plan', 'acceptEdits', 'bypassPermissions']) assert.equal(autoAllowed(mode, 'Read'), true, mode)
   assert.equal(autoAllowed('default', 'Edit'), false)
+  // DevDash's own tools run, except the personal agent's that reach other sessions or its schedules, and the tailnet's.
+  assert.equal(autoAllowed('default', 'mcp__plugin_devdash_devdash__task_create'), true)
+  assert.equal(autoAllowed('default', 'mcp__plugin_devdash_devdash__session_read'), true)
+  for (const t of ['session_send', 'session_create', 'schedule_delete', 'net_devices']) assert.equal(autoAllowed('default', `mcp__plugin_devdash_devdash__${t}`), false, t)
+  assert.equal(autoAllowed('bypassPermissions', 'mcp__plugin_devdash_devdash__session_send'), true)
   assert.equal(autoAllowed('acceptEdits', 'Edit'), true)
   assert.equal(autoAllowed('acceptEdits', 'Bash'), false)
   assert.equal(autoAllowed('bypassPermissions', 'Bash'), true)
