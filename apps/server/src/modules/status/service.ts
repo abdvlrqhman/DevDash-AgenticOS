@@ -61,14 +61,19 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
       latest = { at: Date.now(), version: v ?? latest.version }
       return latest.version
     }
-    const askUpdating = () => helper<{ state: string; result: string }>(`${o.name}-update-status`).then((r) => r.state === 'activating' || r.state === 'active', () => false)
+    // The job's unit: running, or how the last run ended (a failed oneshot stays "failed" until the next run).
+    const askStatus = () => helper<{ state: string; result: string }>(`${o.name}-update-status`).then(
+      (r) => ({ running: r.state === 'activating' || r.state === 'active', failed: r.state === 'failed' }),
+      () => ({ running: false, failed: false }),
+    )
+    const askUpdating = () => askStatus().then((s) => s.running)
     // Each helper call starts a root process: the Server page (polled every 15 s) reuses the answer for 30 s.
-    let updatingSeen = { at: 0, value: false }
+    let statusSeen = { at: 0, value: { running: false, failed: false } }
     let watching = false
-    async function updating() {
-      if (watching) return true
-      if (Date.now() - updatingSeen.at > 30_000) updatingSeen = { at: Date.now(), value: await askUpdating() }
-      return updatingSeen.value
+    async function status() {
+      if (watching) return { running: true, failed: false }
+      if (Date.now() - statusSeen.at > 30_000) statusSeen = { at: Date.now(), value: await askStatus() }
+      return statusSeen.value
     }
     // After an update finishes: read the version again, then whatever the agent needs (Claude: agents restart onto it).
     async function watch() {
@@ -80,7 +85,7 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
           await new Promise((r) => setTimeout(r, 5000))
         } while ((await askUpdating()) && Date.now() - started < 20 * 60_000)
         running = { at: 0, version: null }
-        updatingSeen = { at: 0, value: false }
+        statusSeen = { at: 0, value: { running: false, failed: false } }
         await o.afterUpdate?.()
       } finally {
         watching = false
@@ -88,7 +93,10 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
     }
     return {
       version,
-      state: async () => ({ installed: installed(), latest: await newest(), updating: await updating() }),
+      state: async () => {
+        const s = await status()
+        return { installed: installed(), latest: await newest(), updating: s.running, failed: s.failed }
+      },
       async update() {
         if (await askUpdating()) return
         await helper(`${o.name}-update`)

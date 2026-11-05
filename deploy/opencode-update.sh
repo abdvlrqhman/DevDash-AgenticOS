@@ -25,7 +25,14 @@ fi
 
 "$DIR/bin/opencode" --version >/dev/null # smoke test
 ln -sfn "$DIR" "$BASE/current.new" && mv -T "$BASE/current.new" "$BASE/current"
-ln -sfn "$BASE/current/bin/opencode" /usr/local/bin/opencode
+# The `opencode` command in members' shells, unless one is there already that isn't DevDash's (a member's own install,
+# with its own version): that one stays. DevDash itself always runs $BASE/current/bin/opencode.
+LINK=/usr/local/bin/opencode
+if [[ ! -e $LINK || "$(readlink -f "$LINK")" == "$BASE"/* ]]; then
+  ln -sfn "$BASE/current/bin/opencode" "$LINK"
+else
+  echo "kept the existing $LINK ($(readlink -f "$LINK")); DevDash uses $BASE/current/bin/opencode"
+fi
 
 # Keep the two newest versions.
 ls -1dt "$BASE"/[0-9]*/ | tail -n +3 | xargs -r rm -rf

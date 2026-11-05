@@ -68,8 +68,13 @@ export function ServerPage() {
                 {d.software.release && <Line label="Deployed" value={relativeTime(d.software.release.since)} />}
                 <Line label="Claude Code" value={<span className="tabular-nums">{d.software.claude ?? 'Not found'}</span>} />
                 <Line label="Updates" value={<UpdateState sdk={d.software.claudeSdk} />} />
-                <Line label="OpenCode" value={<span className="tabular-nums">{d.software.opencode.version ?? 'Not installed'}</span>} />
-                {d.software.opencode.installed && <Line label="Updates" value={<UpdateState sdk={d.software.opencode} />} />}
+                <Line label="OpenCode" value={d.software.opencode.version ? <span className="tabular-nums">{d.software.opencode.version}</span> : <UpdateState sdk={d.software.opencode} agent="opencode" />} />
+                {d.software.opencode.installed && <Line label="Updates" value={<UpdateState sdk={d.software.opencode} agent="opencode" />} />}
+                {d.canAct && (d.software.opencode.failed || d.software.claudeSdk.failed) && (
+                  <p className="px-3 pb-2 text-xs text-pretty text-muted-foreground">
+                    Why it failed is in its log on the server: <code className="font-mono">journalctl -u devdash-{d.software.opencode.failed ? 'opencode' : 'claude'}-update</code>. Install again when it's fixed.
+                  </p>
+                )}
                 <Line label="Node.js" value={<span className="tabular-nums">{d.software.node}</span>} />
               </Panel>
             </Block>
@@ -179,13 +184,15 @@ const newer = (a: string, b: string) => {
 
 // Claude Code comes from the Agent SDK package (deploy/claude-update.sh), OpenCode from its own (deploy/opencode-update.sh);
 // admins install and update them for everyone from here.
-type Sdk = { installed: string | null; latest: string | null; updating: boolean }
+type Sdk = { installed: string | null; latest: string | null; updating: boolean; failed?: boolean }
 const updateAvailable = (sdk: Sdk) => !!sdk.latest && !!sdk.installed && newer(sdk.latest, sdk.installed)
 
-function UpdateState({ sdk }: { sdk: Sdk }) {
-  if (sdk.updating) return <span className="flex items-center gap-1.5"><Spinner />Updating…</span>
+function UpdateState({ sdk, agent = 'claude' }: { sdk: Sdk; agent?: 'claude' | 'opencode' }) {
+  if (sdk.updating) return <span className="flex items-center gap-1.5"><Spinner />{sdk.installed ? 'Updating…' : 'Installing…'}</span>
+  // Why is in the job's log on the server; the button stays, to try again.
+  if (sdk.failed) return <span className="text-destructive" title={`On the server: journalctl -u devdash-${agent}-update`}>{sdk.installed ? 'The update failed' : 'The install failed'}</span>
   if (updateAvailable(sdk)) return <span className="text-attention-foreground">{sdk.latest} available</span>
-  return <span className="text-muted-foreground">{!sdk.installed ? 'Not installed' : sdk.latest ? `Up to date, SDK ${sdk.installed}` : 'Could not check'}</span>
+  return <span className="text-muted-foreground">{!sdk.installed ? 'Not installed' : sdk.latest ? `Up to date, ${agent === 'claude' ? 'SDK ' : ''}${sdk.installed}` : 'Could not check'}</span>
 }
 
 function UpdateButton({ sdk, agent }: { sdk: Sdk; agent: 'claude' | 'opencode' }) {

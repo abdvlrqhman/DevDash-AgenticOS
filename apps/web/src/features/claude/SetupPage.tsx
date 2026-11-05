@@ -152,6 +152,9 @@ function OpenCodeSection({ agent, onConnect }: { agent: Agent | undefined; onCon
           <p className="text-sm text-pretty text-muted-foreground">
             Signing in opens a terminal running OpenCode's own sign-in: enter the code it shows on any device, or paste a key. Keys and tokens are saved in your account only, never in DevDash. OpenCode {agent.version}.
           </p>
+          <p className="text-sm text-pretty text-muted-foreground">
+            DevDash never changes your OpenCode settings: your opencode.json, agents, commands and skills apply here as they are. Already use OpenCode 1 on this server? Its settings work in OpenCode 2, but both keep their data in ~/.local/share/opencode: back that up first, or add a profile here, which keeps a database of its own.
+          </p>
           <FinishSignIn />
         </>
       )}
