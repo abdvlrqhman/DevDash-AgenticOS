@@ -13,8 +13,9 @@
 ![Node 24](https://img.shields.io/badge/node-%E2%89%A5%2024.7-339933?logo=node.js&logoColor=white)
 ![Ubuntu 24.04](https://img.shields.io/badge/server-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
 ![Platforms](https://img.shields.io/badge/apps-web%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-555)
+[![Agents: Claude Code and OpenCode](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20OpenCode-8A63D2)](#supported-agents)
 
-[Features](#features) · [How it works](#how-it-works) · [Self-hosting](#self-hosting) · [Configuration](#configuration) · [Native apps](#native-apps) · [Development](#development) · [Security](#security)
+[Supported agents](#supported-agents) · [Features](#features) · [How it works](#how-it-works) · [Self-hosting](#self-hosting) · [Configuration](#configuration) · [Native apps](#native-apps) · [Development](#development) · [Security](#security)
 
 </div>
 
@@ -35,6 +36,24 @@ turns a single server into that place:
   you choose to connect.
 
 > The screenshots in this README show a demo space with sample data.
+
+## Supported agents
+
+Every session runs one of these coding agents, picked when you start it, as the member who started it and with their
+own sign-in.
+
+| Agent | Sign in with | Models | Terminal app | Connected through |
+| --- | --- | --- | --- | --- |
+| **[Claude Code](https://claude.com/product/claude-code)** | Your Claude plan, or an Anthropic API key | Claude: Opus, Sonnet, Haiku | The Claude Code CLI | [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) |
+| **[OpenCode](https://opencode.ai)** | The OpenCode account, an OpenCode Go subscription, or any provider: ChatGPT, GitHub Copilot, API keys | Any provider's: Anthropic, OpenAI, Google, OpenRouter, local models and more | OpenCode's TUI | [Agent Client Protocol](https://agentclientprotocol.com) |
+
+Both get the same DevDash around them: the chat view with tool steps, diffs, permission prompts and questions, to-dos,
+subagents, cost and context; sessions shared with teammates; a worktree per session; team roles; profiles; and
+DevDash's own tools for tasks, notes and services. Claude Code also shows your Claude plan's limits, fast mode and
+Remote Control.
+
+More agents that speak ACP (Gemini CLI, Goose, Codex through its adapter and others) can follow: each one is an entry in
+[`apps/agent/src/harness.ts`](apps/agent/src/harness.ts).
 
 ## Features
 
