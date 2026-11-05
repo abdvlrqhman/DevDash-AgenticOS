@@ -485,7 +485,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         }
         return hub.publish(`session:${s.id}`, {
           type: 'permission',
-          request: { requestId: ev.requestId, toolName: ev.toolName, input: ev.input, suggestions: ev.suggestions, ownerOnly: !!ev.ownerOnly, askedBy: askedBy ?? null },
+          request: { requestId: ev.requestId, toolName: ev.toolName, input: ev.input, suggestions: ev.suggestions, ownerOnly: !!ev.ownerOnly, askedBy: askedBy ?? null, info: (ev.info as Record<string, unknown> | undefined) ?? null },
         }, viewers)
       }
       case 'claude.native': {

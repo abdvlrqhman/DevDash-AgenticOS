@@ -62,7 +62,19 @@ export type Status = 'working' | 'waiting' | 'idle' | 'stopped' | 'error'
 /** `ownerOnly`: it would use the owner's access for a teammate (`askedBy`), so only the owner may answer (guest.ts). */
 export type Pending = {
   requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[]; resolve: (r: PermissionResult) => void
-  ownerOnly?: boolean; askedBy?: Guest
+  ownerOnly?: boolean; askedBy?: Guest; info?: AskInfo
+}
+/**
+ * What Claude Code says about its own permission prompt, for the card: its sentence for it, why it asks (a dangerous
+ * rm it can't rule out, a path outside the folder…), and whether to lean to "no" and leave out "always allow".
+ */
+export type AskInfo = { title?: string; description?: string; reason?: string; blockedPath?: string; defaultToNo?: boolean; noAlwaysAllow?: boolean }
+type AskOptions = { signal: AbortSignal; suggestions?: unknown[]; title?: string; description?: string; decisionReason?: string; blockedPath?: string; defaultToNo?: boolean; suppressAlwaysAllowRule?: boolean }
+const askInfo = (o: AskOptions): AskInfo | undefined => {
+  const info: AskInfo = { title: o.title, description: o.description, reason: o.decisionReason, blockedPath: o.blockedPath,
+    defaultToNo: o.defaultToNo || undefined, noAlwaysAllow: o.suppressAlwaysAllowRule || undefined }
+  const set = Object.fromEntries(Object.entries(info).filter(([, v]) => v !== undefined && v !== '')) as AskInfo
+  return Object.keys(set).length ? set : undefined
 }
 export type Guest = { id: number; name: string }
 /** `bg`: background shells, subagents and monitors still running; Claude picks their results up when they finish. */
@@ -198,7 +210,8 @@ Be light on the shared machine — its disk and CPU are limited and used by ever
 - Clean up build outputs and scratch files you don't need; write throwaway files under /tmp, not into the repo. Worktrees are temporary — DevDash removes abandoned ones automatically once they're stale and their work is merged, so commit or merge anything you want to keep.
 - Don't commit large binaries or build artifacts.
 - The CPU is shared by the whole team and other services: don't fan out many heavy parallel subagents or run several big builds/test suites at once — do heavy work in sequence.
-People read your replies in DevDash, where a file path you write opens that file. When you mention a file or folder, write its full path (from / or ~/), also when it's in a worktree or another checkout; never just its name.`
+People read your replies in DevDash, where a file path you write opens that file. When you mention a file or folder, write its full path (from / or ~/), also when it's in a worktree or another checkout; never just its name.
+When you delete something, name exactly what (rm -rf /tmp/build-1234), never a path worked out while the command runs (rm -rf "$(ls … | head -1)" or an unset variable): Claude Code can't check those and stops to ask a person, in every mode. Scripts that clean up after themselves need no rm at all.`
 
 /**
  * Teammates can send messages in a shared session, and Claude runs as the owner for them too. DevDash stops what it can
@@ -251,13 +264,14 @@ async function startChat(l: Launch): Promise<Chat> {
   const inbox = new Inbox()
   const pending = new Map<string, Pending>()
   let chat: Chat | undefined
-  const ask = (toolName: string, input: Record<string, unknown>, suggestions: unknown[] | undefined, signal: AbortSignal, askedBy?: Guest) =>
+  const ask = (toolName: string, input: Record<string, unknown>, suggestions: unknown[] | undefined, signal: AbortSignal, askedBy?: Guest, info?: AskInfo) =>
     new Promise<PermissionResult>((resolve) => {
       const requestId = randomUUID()
       const ownerOnly = !!askedBy
-      pending.set(requestId, { requestId, toolName, input, suggestions, resolve, ...(askedBy ? { ownerOnly, askedBy } : {}) })
+      const extra = { ...(askedBy ? { ownerOnly, askedBy } : {}), ...(info ? { info } : {}) }
+      pending.set(requestId, { requestId, toolName, input, suggestions, resolve, ...extra })
       setStatus(chat, l.id, 'waiting')
-      emit({ ev: 'claude.permission', id: l.id, requestId, toolName, input, suggestions, ...(askedBy ? { ownerOnly, askedBy } : {}) })
+      emit({ ev: 'claude.permission', id: l.id, requestId, toolName, input, suggestions, ...extra })
       signal.addEventListener('abort', () => {
         if (!pending.delete(requestId)) return
         emit({ ev: 'claude.permission_done', id: l.id, requestId })
@@ -284,8 +298,8 @@ async function startChat(l: Launch): Promise<Chat> {
       ...(l.toolPolicy?.allow ? { allowedTools: l.toolPolicy.allow } : {}),
       plugins: [{ type: 'local', path: PLUGIN_DIR }],
       includePartialMessages: true,
-      canUseTool: async (toolName: string, input: Record<string, unknown>, o: { signal: AbortSignal; suggestions?: unknown[] }) =>
-        INTERACTIVE.has(toolName) ? { behavior: 'allow', updatedInput: input } : ask(toolName, input, o.suggestions, o.signal),
+      canUseTool: async (toolName: string, input: Record<string, unknown>, o: AskOptions) =>
+        INTERACTIVE.has(toolName) ? { behavior: 'allow', updatedInput: input } : ask(toolName, input, o.suggestions, o.signal, undefined, askInfo(o)),
       hooks: {
         PreToolUse: [{
           matcher: 'AskUserQuestion|ExitPlanMode',

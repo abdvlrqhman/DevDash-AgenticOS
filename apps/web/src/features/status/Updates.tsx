@@ -62,6 +62,9 @@ export function Updates() {
     }).then((ok) => { if (ok) deploy.mutate(o) })
   }
   const ahead = d.ahead ?? []
+  // Newer commits, or a newest one when the live commit isn't on main at all (deployed from a computer, long ago, or
+  // the repository's history was rewritten): either way the server can update to main's newest.
+  const canUpdate = !!d.newest && (d.ahead === null || ahead.length > 0)
   const shown = showAll ? ahead : ahead.slice(0, 5)
   return (
     <Card action={
@@ -69,10 +72,10 @@ export function Updates() {
         <Button size="icon-sm" variant="ghost" aria-label="Check GitHub again" title="Check GitHub again" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
           {refresh.isPending ? <Spinner /> : <RefreshCw />}
         </Button>
-        {d.canAct && d.newest && ahead.length > 0 && !d.requests.length && (
+        {d.canAct && canUpdate && !d.requests.length && (
           <Button size="sm" variant="outline" disabled={busy} onClick={() => go({ sha: d.newest!.sha }, d.newest!.sha)}><ArrowUpCircle />Deploy newest</Button>
         )}
-        {!d.canAct && ahead.length > 0 && !d.requests.length && !d.running && (
+        {!d.canAct && canUpdate && !d.requests.length && !d.running && (
           <Button size="sm" variant="outline" disabled={ask.isPending} onClick={() => ask.mutate()}>Ask to deploy</Button>
         )}
       </div>
@@ -115,7 +118,7 @@ export function Updates() {
       ))}
 
       {d.ahead === null ? (
-        d.newest && <p className="text-sm text-pretty text-muted-foreground">The live version isn't among the newest commits on main (deployed from a computer, or long ago). Newest: <span className="font-mono text-[13px]">{short(d.newest.sha)}</span> {firstLine(d.newest.message)}</p>
+        d.newest && <p className="text-sm text-pretty text-muted-foreground">The live version isn't on main's recent history: it was deployed from a computer, long ago, or before the repository's history was rewritten. You can still update to the newest: <span className="font-mono text-[13px]">{short(d.newest.sha)}</span> {firstLine(d.newest.message)}</p>
       ) : ahead.length === 0 ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground"><StatusLight state="live" />Up to date with main</p>
       ) : (
@@ -168,7 +171,7 @@ export function Updates() {
           DevDash's GitHub token (DEVDASH_GITHUB_TOKEN) expires on {new Date(d.tokenExpires * 1000).toLocaleDateString()}. Make a new one before then, or updates stop.
         </p>
       )}
-      {!d.canAct && d.requests.length === 0 && ahead.length > 0 && <p className="text-xs text-pretty text-muted-foreground">Admins deploy. Your Claude session can ask too, from DevDash's own project.</p>}
+      {!d.canAct && d.requests.length === 0 && canUpdate && <p className="text-xs text-pretty text-muted-foreground">Admins deploy. Your Claude session can ask too, from DevDash's own project.</p>}
     </Card>
   )
 }

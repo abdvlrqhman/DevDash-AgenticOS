@@ -13,6 +13,8 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type PendingRequest = {
   requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[]
   ownerOnly?: boolean; askedBy?: { id: number; name: string } | null
+  /** What Claude Code says about its own prompt: its sentence, why it asks, and how careful the answer should be. */
+  info?: { title?: string; description?: string; reason?: string; blockedPath?: string; defaultToNo?: boolean; noAlwaysAllow?: boolean } | null
 }
 
 export const sessionsQuery = (archived = false) => queryOptions({

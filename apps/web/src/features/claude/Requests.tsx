@@ -183,24 +183,49 @@ function describe(req: PendingRequest) {
   return JSON.stringify(i, null, 2).slice(0, 600)
 }
 
+/**
+ * Why Claude Code asks, in plain words when it's one of its known safety checks (they ask in every mode, Bypass too),
+ * else its own wording.
+ */
+export function askReason(reason?: string): string | undefined {
+  if (!reason) return undefined
+  if (/^dangerous rm/i.test(reason)) {
+    return 'It deletes something whose exact path is only worked out while it runs (like rm -rf "$(…)"), so Claude Code can\'t check it isn\'t something important. It asks about these in every mode. Check what it deletes before you allow it.'
+  }
+  return reason
+}
+
 function PermissionCard({ sessionId, req, disabled, waitingOn }: { sessionId: string; req: PendingRequest; disabled: boolean; waitingOn?: string }) {
   const answer = useAnswer(sessionId, req.requestId)
+  const info = req.info ?? {}
+  const why = askReason(info.reason)
   return (
     <Card className={waitingCard}>
       <CardHeader className="px-4">
-        <CardTitle className="flex items-center gap-2 text-sm"><StatusLight state="waiting" /><ShieldQuestion className="size-4" />Allow {req.toolName}?</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-sm"><StatusLight state="waiting" /><ShieldQuestion className="size-4" />{info.title || `Allow ${req.toolName}?`}</CardTitle>
       </CardHeader>
-      <CardContent className="px-4">
+      <CardContent className="flex flex-col gap-2 px-4">
+        {(why || info.description) && (
+          <p className="text-sm text-muted-foreground">
+            {why && <><span className="font-medium text-foreground">Why it asks: </span>{why}</>}
+            {why && info.description && ' '}
+            {info.description}
+          </p>
+        )}
+        {info.blockedPath && <p className="text-xs text-muted-foreground">Path: <code className="font-mono">{info.blockedPath}</code></p>}
         <pre className="max-h-60 overflow-auto rounded-md border bg-background px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap">{describe(req)}</pre>
         <ErrorAlert error={answer.error} />
       </CardContent>
       {disabled ? <WaitingOn who={waitingOn} /> : (
         <CardFooter className="flex flex-wrap gap-2 px-4">
-          <Button className="h-10 flex-1 sm:flex-none" disabled={answer.isPending} onClick={() => answer.mutate({ behavior: 'allow', updatedInput: req.input })}>Allow</Button>
-          {!!req.suggestions?.length && (
+          {/* A risky ask (defaultToNo) leads with "no": Deny takes the focus and Allow isn't the bold button. */}
+          <Button variant={info.defaultToNo ? 'outline' : 'default'} className="h-10 flex-1 sm:flex-none" disabled={answer.isPending}
+            onClick={() => answer.mutate({ behavior: 'allow', updatedInput: req.input })}>Allow</Button>
+          {!!req.suggestions?.length && !info.noAlwaysAllow && (
             <Button variant="outline" className="h-10 flex-1 sm:flex-none" disabled={answer.isPending} onClick={() => answer.mutate({ behavior: 'allow', updatedInput: req.input, updatedPermissions: req.suggestions })}>Always allow</Button>
           )}
-          <Button variant="destructive" className="h-10 flex-1 sm:flex-none" disabled={answer.isPending} onClick={() => answer.mutate({ behavior: 'deny', message: 'The user denied this.' })}>Deny</Button>
+          <Button variant="destructive" autoFocus={!!info.defaultToNo} className="h-10 flex-1 sm:flex-none" disabled={answer.isPending}
+            onClick={() => answer.mutate({ behavior: 'deny', message: 'The user denied this.' })}>Deny</Button>
         </CardFooter>
       )}
     </Card>

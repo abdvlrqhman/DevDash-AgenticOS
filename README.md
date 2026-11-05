@@ -218,6 +218,12 @@ DEVDASH_GITHUB_TOKEN=github_pat_...   # only for a private fork: fine-grained, C
 ```
 
 You can always redeploy from a clone with `deploy/deploy.sh root@SERVER`.
+Or on the server, as root, deploy the newest commit of your DevDash repository's `main` (the same job the *Server* page
+starts; follow it with `journalctl -fu 'devdash-deploy@*'`):
+
+```sh
+systemctl start "devdash-deploy@$(git ls-remote https://github.com/OWNER/REPO refs/heads/main | cut -f1).service"
+```
 
 ## Configuration
 
