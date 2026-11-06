@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { Link } from '@tanstack/react-router'
-import { Activity, ArrowLeftRight, ChevronRight, Cloud, Download, Globe, HardDrive, Inbox, KeyRound, LogOut, Network, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Users } from 'lucide-react'
+import { Activity, ArrowLeftRight, ChevronRight, Cloud, Download, Globe, HardDrive, Inbox, KeyRound, LogOut, Network, Plane, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Users } from 'lucide-react'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { useSignOut } from '@/components/app/shell'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -19,6 +19,7 @@ type Destination = { to: string; label: string; description: string; icon: typeo
 const GROUPS: { title: string; links: Destination[] }[] = [
   { title: 'Work', links: [
     { to: '/approvals', label: 'Approvals', description: 'What your AI team wants to do that needs a person', icon: Inbox }, // Team
+    { to: '/autopilot', label: 'Autopilot', description: 'Routine decisions made for you, and what needs you', icon: Plane },
     { to: '/notes', label: 'Notes', description: 'Decisions, setup steps and links for the team', icon: StickyNote },
     { to: '/tools', label: 'Tools', description: 'Offline developer utilities: JSON, base64, cron and more', icon: PocketKnife },
     { to: '/vault', label: 'Vault', description: 'Passwords and 2FA codes, encrypted on your device', icon: KeyRound },

@@ -9,6 +9,7 @@ import { ClaudeIndex, ClaudeLayout } from './features/claude/ClaudeLayout'
 import { ApiError, meQuery } from './lib/api'
 import { handleAppLinksAndDownloads, inShell } from './lib/shell'
 import { getTheme, setTheme } from './lib/theme'
+import { validateActivitySearch } from './features/autopilot/search'
 import './styles.css'
 
 setTheme(getTheme())
@@ -60,6 +61,11 @@ const terminal = createRoute({
   validateSearch: (s: Record<string, unknown>): { open?: string } => (typeof s.open === 'string' ? { open: s.open } : {}),
 })
 const account = createRoute({ getParentRoute: () => app, path: '/account', component: lazy(() => import('./features/account/AccountPage'), 'AccountPage') })
+const autopilotActivity = createRoute({
+  getParentRoute: () => app, path: '/autopilot/activity', validateSearch: validateActivitySearch,
+  component: lazy(() => import('./features/autopilot/ActivityPage'), 'ActivityPage'),
+})
+const autopilot = createRoute({ getParentRoute: () => app, path: '/autopilot', component: lazy(() => import('./features/autopilot/AutopilotPage'), 'AutopilotPage') })
 const more = createRoute({ getParentRoute: () => app, path: '/more', component: lazy(() => import('./features/more/MorePage'), 'MorePage') })
 const projects = createRoute({ getParentRoute: () => app, path: '/projects', component: lazy(() => import('./features/projects/ProjectsPage'), 'ProjectsPage') })
 const project = createRoute({ getParentRoute: () => app, path: '/projects/$slug', component: lazy(() => import('./features/projects/ProjectPage'), 'ProjectPage') })
@@ -119,7 +125,7 @@ const legacyClaude = createRoute({
 })
 
 const router = createRouter({
-  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more])]),
+  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity])]),
   context: { queryClient },
   defaultPreload: 'intent',
 })

@@ -15,7 +15,7 @@
 ![Platforms](https://img.shields.io/badge/apps-web%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-555)
 [![Agents: Claude Code and OpenCode](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20OpenCode-8A63D2)](#supported-agents)
 
-[Supported agents](#supported-agents) · [Features](#features) · [How it works](#how-it-works) · [Self-hosting](#self-hosting) · [Configuration](#configuration) · [Native apps](#native-apps) · [Development](#development) · [Security](#security)
+[Supported agents](#supported-agents) · [Hamasa](#hamasa-your-personal-agent) · [Autopilot](#autopilot) · [Features](#features) · [How it works](#how-it-works) · [Self-hosting](#self-hosting) · [Configuration](#configuration) · [Native apps](#native-apps) · [Development](#development) · [Security](#security)
 
 </div>
 
@@ -30,6 +30,10 @@ turns a single server into that place:
   own git worktree, so parallel work never collides.
 - **Agents are teammates, not tabs.** Start Claude Code or OpenCode from the browser or your phone, watch it work live,
   share the session with a colleague, answer its questions, and pick up the result as a branch, a pull request or a merge.
+- **An agent of your own.** Hamasa, a personal agent on every page, answers across all your projects, starts and steers
+  sessions and runs your scheduled checks, with your access only.
+- **Fewer interruptions, with you in charge.** Autopilot lets your own sessions make routine decisions by rules you
+  write, keeps stalled sessions moving, and collects everything that needs you on one page.
 - **Everyone stays separate.** Each person is a real Linux user with their own home, shell, agent logins, cloud
   storage and private network. DevDash itself never runs as root.
 - **You own it.** One server, one domain, free for noncommercial use. No SaaS account and no data leaving your machine, except what
@@ -57,6 +61,92 @@ More agents that speak ACP (Gemini CLI, Goose, Codex through its adapter and oth
 
 ## Features
 
+### Hamasa, your personal agent
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/hamasa-dark.png">
+  <img alt="Hamasa's panel open over the task board: it lists what needs the member today and starts a review session for a task" src=".github/assets/hamasa-light.png">
+</picture>
+
+Every member has their own agent, one shortcut away (⌘I or Ctrl+I) on every page, in the browser and the apps.
+
+- **Knows your work.** It answers from everything you can see, across all projects: tasks, notes, sessions, services and
+  your devices. It knows which page you're on, so "this" and "here" mean what you're looking at.
+- **Acts for you.** It creates and updates tasks and notes, starts a coding session in the right project with a full
+  brief, sends follow-ups to your running sessions or stops them, opens pages for you and notifies your phone.
+- **Works on a schedule.** Ask for a morning brief on weekdays, or a one-off check after tonight's deploy. Scheduled runs
+  report in a few lines and notify you only when something needs you.
+- **Your agent, your access.** It runs as your own Linux user, on Claude Code or OpenCode, with the model, effort and
+  permission level you pick. Reading is free; anything that changes things asks first unless you choose otherwise. It
+  can reach your tailnet and your Google Drive when you switch them on. It can't answer another session's questions
+  for you: it tells you which one is waiting and links it.
+- **A real session underneath.** Questions, permissions, history, past conversations and notifications work as in any
+  other session.
+
+### Autopilot
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/autopilot-dark.png">
+  <img alt="The Autopilot page on a desktop and a phone: the switch, two items in Needs you, and what autopilot approved, answered and left for the member" src=".github/assets/autopilot-light.png">
+</picture>
+
+Autopilot lets your own sessions make routine decisions for you, by rules you write, and keeps them moving while you're
+away. It's per member and off until you turn it on at `/autopilot`.
+
+**Your rules.** Plain text you can edit, in three tiers. The default rules start out like this:
+
+| Tier | What happens | Examples |
+| --- | --- | --- |
+| **Green** | Decide, log it, keep going | The next step of a plan you agreed to; choosing between options by your known preferences; test runs, renders, screenshots; fixing bugs it found; committing |
+| **Yellow** | Decide, log it as yellow, keep going | Changing something you already decided (with data behind it); restructuring work that already works; adding a new library, service or database change; touching more than one project |
+| **Red** | Never decided, always waits for you | Publishing outside an agreed plan; sending to people; anything paid; deleting what isn't scratch work; accounts, credentials, sharing or security; starting a new project; changing the rules |
+
+**In your sessions.** While autopilot is on, DevDash adds your rules to the messages you send in your own sessions, Claude
+Code and OpenCode alike: in full the first time, then as a one-line reminder. A teammate's message in your session never
+carries them. Each decision is logged with the `autopilot_log` tool, which refuses red decisions, a teammate's turn and
+autopilot being off. Turning autopilot off reaches running sessions with your next message.
+
+**The supervisor.** For your own sessions only, it steps in when one goes quiet or asks something:
+
+- **A session stopped before it was done** gets a nudge after a quiet gap (20 minutes by default): the next step, as
+  you'd write it. At most 3 nudges per goal; the same error twice, and it goes to *Needs you* instead.
+- **A question, a plan or a permission prompt** gets a look 2 minutes after it appears (1 to 5, your choice), so you
+  can answer first. Green and yellow answers and approvals go through, marked as autopilot's. A question about anything
+  red is never answered, not even with the safe "No". With *Autopilot handles approvals* on, a red request is declined
+  with a note that tells the session to carry on with other work, and lands in *Needs you*. Requests that are red on
+  their face (deleting outside `/tmp`, a force-push, `git reset --hard`, dropping data, publishing, sudo) are declined
+  without a model call.
+- **Never automatic:** a teammate's request that would use your access, and DevDash deploy requests.
+- **Never while someone's there:** nobody may have the session open, a teammate's message mustn't be the last, and a
+  turn mustn't be running.
+
+**Your AI team.** In the projects you turn on (each one off by default), autopilot also answers what the project's role
+agents ask people: proposals on *Approvals* and questions in team threads. Each waits 30 minutes for a teammate first.
+Green and yellow ones are approved or answered as you, marked as autopilot's; it never declines, and the rest lands in
+*Needs you*. When a role replies in a thread one of your sessions started, the session gets the reply.
+
+**Limits.** Autopilot runs on your own Claude plan and leaves room for you: it backs off at 80% of a 5-hour window and
+90% of a weekly one, and resumes when the window resets. A nightly cap (20 messages by default) bounds it further.
+
+**One page for all of it.** `/autopilot` has the switch, *Needs you* (red questions, declined requests, stuck
+sessions, with links), what autopilot did lately, your settings and your rules. The full activity log, with search,
+filters and sorting, is one tap away. A morning ping (09:00 by default) arrives only when something needs you or a
+yellow decision is new.
+
+<details>
+<summary>How a decision flows</summary>
+
+1. A session of yours asks: *"Should the checkout use Stripe Checkout or Elements?"*
+2. For 2 minutes, nothing happens: you can answer yourself.
+3. Then autopilot checks that nobody has the session open, that the turn is yours, and that the nightly cap and your
+   plan's usage leave room.
+4. It reads the end of the conversation and your rules. Choosing by your known preferences is green, so it answers
+   *"Checkout (answered by Autopilot…)"* and the session continues.
+5. The log shows what it chose and why. Had the question been *"Publish the pricing page now?"*, it would have gone
+   straight to *Needs you* without an answer.
+
+</details>
+
 ### AI agents
 
 <picture>
@@ -66,12 +156,6 @@ More agents that speak ACP (Gemini CLI, Goose, Codex through its adapter and oth
 
 Every session is a real coding agent, run as the member who started it.
 
-- **Hamasa, a personal agent for each member.** An expandable chat on every page (⌘I), on Claude Code or OpenCode, that
-  works across every project you can see: it answers from tasks, notes, sessions and services, knows which page you're
-  on, starts sessions and messages or stops the ones you have, and runs prompts on a schedule (a morning brief, a check
-  after a deploy) with a notification when something needs you. It's a full session underneath: pick its model, effort
-  and permission level any time, switch on your tailnet and Google Drive for it, and it asks questions and permissions
-  like any other session, acting with your access only.
 - **Your choice of agent.** Each session runs Claude Code, or OpenCode with any model provider: Anthropic, OpenAI,
   Google, OpenRouter, GitHub Copilot, local models and more. Pick it per session; team roles pick theirs too. DevDash
   drives Claude Code through its Agent SDK and OpenCode over the [Agent Client Protocol](https://agentclientprotocol.com),

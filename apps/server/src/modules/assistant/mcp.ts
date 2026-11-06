@@ -12,6 +12,8 @@ type Msg = { type?: string; message?: { content?: string | Block[] } }
 
 const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t)
 const PAGE = new RegExp(`^<${PAGE_TAG}\\b[^>]*/>\\s*`)
+// DevDash's notes for the agent inside a message (a teammate's note, autopilot's rules): not what anyone said.
+const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 
 /**
  * A session's conversation as the personal agent reads it: who said what, and which tools the session's agent used,
@@ -23,7 +25,7 @@ export function condense(messages: Msg[], max = 40) {
     if (m.type !== 'user' && m.type !== 'assistant') continue
     const content = m.message?.content
     const blocks: Block[] = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []
-    const text = blocks.filter((b) => b.type === 'text' && b.text?.trim()).map((b) => b.text!.replace(PAGE, '').trim()).join('\n\n')
+    const text = blocks.filter((b) => b.type === 'text' && b.text?.trim()).map((b) => b.text!.replace(REMINDER, '').replace(PAGE, '').trim()).filter(Boolean).join('\n\n')
     const tools = blocks.filter((b) => b.type === 'tool_use' && b.name).map((b) => {
       const i = b.input ?? {}
       const what = [i.command, i.file_path, i.description, i.pattern, i.url].find((v) => typeof v === 'string') as string | undefined

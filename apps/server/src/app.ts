@@ -13,6 +13,9 @@ import { registerMcp } from './modules/mcp/rpc.ts'
 import { registerAssistantMcp } from './modules/assistant/mcp.ts'
 import { assistantRoutes } from './modules/assistant/routes.ts'
 import { assistantService } from './modules/assistant/service.ts'
+import { registerAutopilotMcp } from './modules/autopilot/mcp.ts'
+import { autopilotRoutes } from './modules/autopilot/routes.ts'
+import { autopilotService } from './modules/autopilot/service.ts'
 import { filesRoutes, publicShareRoutes } from './modules/files/routes.ts'
 import { sharesService } from './modules/files/shares.ts'
 import { buildsRoutes } from './modules/builds/routes.ts'
@@ -100,6 +103,9 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const assistant = assistantService({
     db, hub, claude, notify: notifications.notify, tailnetConnected: (userId) => !!tailnet?.isConnected(userId), driveConnected: (userId) => !!storage.forLaunch(userId),
   })
+
+  // Autopilot: a member's sessions decide routine things by their rules, and a supervisor keeps their stalled ones moving.
+  const autopilot = autopilotService({ db, hub, claude, notify: notifications.notify, team: () => team?.service?.autopilotPort() })
 
   // "Give to an agent": a Chat session in the task's project (its own worktree by default), linked to the task, with the
   // member's default agent.
@@ -189,6 +195,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     .route('/api/terminals', terminalsRoutes(terms, auth, mw, provisioning, ip))
     .route('/api/claude', claudeRoutes(claude, mw))
     .route('/api/assistant', assistantRoutes(assistant, mw))
+    .route('/api/autopilot', autopilotRoutes(autopilot, mw))
     .route('/api/notifications', notificationsRoutes(notifications, apns, ntfy, mw))
     .route('/api/services', servicesRoutes(services, mw))
     .route('/api/projects', projectsRoutes(projects, activity, mw))
@@ -216,10 +223,12 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   // Items a team role creates through its session are attributed to the role, not the account the team runs as.
   registerMcp({ db, agents, projects, tasks, notes, services, authorRole: (u, s) => team?.service?.roleOf(u, s)?.r.name ?? null })
   registerAssistantMcp({ agents, claude, assistant, notify: notifications.notify })
+  registerAutopilotMcp({ agents, autopilot })
   reviews.registerMcp()
   deploys.registerMcp()
   deploys.resume()
   projects.start()
+  autopilot.start()
   return { app, auth, provisioning, terms, agents, claude, services, projects, tasks, notes, hub, previews }
 }
 

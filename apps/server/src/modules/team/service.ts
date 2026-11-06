@@ -1089,6 +1089,38 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       return proposalDto(repo.proposal(id)!)
     },
 
+    /**
+     * What autopilot sees of Team (app.ts hands it over; autopilot never imports Team): the projects with Team on, what
+     * in one of them waits for a person (proposals, and threads where a role asked people something), and acting on
+     * them as the member, the same as their own taps on /approvals or a reply in the thread.
+     */
+    autopilotPort() {
+      return {
+        projects: () => db.prepare(`select p.id, p.slug, p.name from team_projects t join projects p on p.id = t.project_id
+          where p.archived = 0 order by p.name`).all() as { id: number; slug: string; name: string }[],
+        waiting(projectId: number) {
+          const proposals = repo.proposals(projectId, 'pending', 50, 'people').map((x) => ({
+            id: x.id, kind: x.kind, title: x.title, why: x.why, role: x.role_name, project: x.project_slug, createdAt: x.created_at,
+            url: `/approvals/${x.project_slug}`,
+          }))
+          const slug = (db.prepare('select slug from projects where id = ?').get(projectId) as { slug: string }).slug
+          const asks = (db.prepare(`select t.id, t.title, t.ask, t.updated_at, r.name as role,
+              (select max(id) from team_messages m where m.thread_id = t.id) as last_message
+            from team_threads t left join team_roles r on r.id = t.owner_role_id
+            where t.project_id = ? and t.status = 'open' and t.needs_people = 1 order by t.updated_at`).all(projectId) as
+            { id: number; title: string; ask: string | null; updated_at: number; role: string | null; last_message: number | null }[]).map((t) => ({
+            id: t.id, title: t.title, ask: t.ask, role: t.role ?? 'A role', project: slug, updatedAt: t.updated_at, lastMessage: t.last_message ?? 0,
+            url: `/projects/${slug}/team/threads/${t.id}`,
+            recent: (db.prepare('select author_label, body from team_messages where thread_id = ? order by id desc limit 6').all(t.id) as { author_label: string; body: string }[])
+              .reverse().map((m) => `${m.author_label}: ${clipText(m.body, 800)}`),
+          }))
+          return { proposals, asks }
+        },
+        approve: (user: User, id: number, reply: string) => this.decide(user, id, true, reply),
+        answer: (user: User, slug: string, threadId: number, body: string) => this.postAsPerson(user, slug, { thread: threadId, kind: 'reply', body }),
+      }
+    },
+
     // ---- What roles call from their sessions (the DevDash plugin's team tools) ----
 
     /** The role a session belongs to, if the session is one of its own and runs as `username`. */

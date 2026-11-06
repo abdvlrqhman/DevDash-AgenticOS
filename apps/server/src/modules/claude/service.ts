@@ -186,6 +186,9 @@ export type SessionExtras = {
   origin?: { kind: 'proposal'; role: string } | { kind: 'assistant' }
 }
 
+/** Text blocks a feature puts before the owner's own message (see addPreamble); `role`: a team role's session. */
+export type Preamble = (s: SessionRow, o: { role: boolean }) => { type: string; text: string }[]
+
 /** What a feature that starts sessions says about them on a project's page (a team role's chat or one of its shifts). */
 export type SessionLabel = { kind: 'role' | 'shift'; role: { id: number; name: string } }
 export type SessionKind = 'mine' | 'shared' | 'proposal' | SessionLabel['kind']
@@ -298,6 +301,10 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   })
   const turnEnds = new Set<(t: TurnEnd) => void>()
   const labellers = new Set<(projectId: number) => Map<string, SessionLabel>>()
+  // What a feature adds before the owner's own messages (autopilot's rules): never before a teammate's.
+  const preambles = new Set<Preamble>()
+  // Features told the moment a session asks something (a question, a permission, a plan): autopilot.
+  const prompts = new Set<(s: SessionRow, request: { requestId: string; toolName: string; ownerOnly: boolean }) => void>()
   function labels(projectId: number) {
     const all = new Map<string, SessionLabel>()
     for (const fn of labellers) {
@@ -475,6 +482,13 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       }
       case 'claude.permission': {
         const askedBy = ev.askedBy as { id: number; name: string } | undefined
+        for (const fn of prompts) {
+          try {
+            fn(s, { requestId: String(ev.requestId), toolName: String(ev.toolName), ownerOnly: !!ev.ownerOnly })
+          } catch (err) {
+            console.error('prompt listener:', err)
+          }
+        }
         if (ev.ownerOnly && askedBy) {
           // Only the owner can allow it: tell them, not the others who can send.
           const n = requestNotification(String(ev.toolName), (ev.input as Record<string, unknown>) ?? {}, s.title, nameOf(s))
@@ -646,9 +660,17 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     repo.addSender(s.id, uuid, user.id)
     const message = { role: 'user', content: content(`${text}${note}`.trim(), images, docs) }
     const guest = guestOf(user, s)
+    const before = user.id === s.owner_id ? [...preambles].flatMap((fn) => {
+      try {
+        return fn(s, { role: !!roleLabel(s) })
+      } catch (err) {
+        console.error('session preamble:', err)
+        return []
+      }
+    }) : []
     await agents.request(s.owner_username, {
       op: 'claude.send', launch: launch(s), uuid, guest,
-      content: guest ? [guestNote(guest, s), ...message.content] : message.content,
+      content: guest ? [guestNote(guest, s), ...message.content] : [...before, ...message.content],
     })
     if (!s.started) repo.patch(s.id, { started: 1 })
     repo.touch(s.id)
@@ -1012,6 +1034,24 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       })
       publish(id)
     },
+
+    /**
+     * Adds text before every message the session's owner sends themself (never a teammate's, whatever their access);
+     * the blocks reach the agent but aren't part of the message people see. Returns a function that stops it.
+     */
+    addPreamble(fn: Preamble) {
+      preambles.add(fn)
+      return () => void preambles.delete(fn)
+    },
+
+    /** Tells `fn` the moment a session asks its people something. Returns a function that stops it. */
+    onPrompt(fn: (s: SessionRow, request: { requestId: string; toolName: string; ownerOnly: boolean }) => void) {
+      prompts.add(fn)
+      return () => void prompts.delete(fn)
+    },
+
+    /** A member's sessions that aren't archived, for features that watch them, each saying whether it's a team role's. */
+    ownedActive: (username: string) => repo.ownedActive(username).map((s) => ({ ...s, role: !!roleLabel(s) })),
 
     /** Tells `fn` whenever a Claude turn ends in any session. Returns a function that stops it. */
     onTurnEnd(fn: (t: TurnEnd) => void) {
