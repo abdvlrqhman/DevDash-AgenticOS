@@ -291,7 +291,8 @@ function PreviewView({ p }: { p: Preview }) {
       return <div className="rounded-md border bg-card px-3 py-2"><Prose text={p.text} /></div>
     case 'fields':
       return (
-        <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-md border bg-muted/30 px-2.5 py-2 text-xs">
+        // The name column wraps past 40%: a long one (an answered question) must not squeeze its value to one letter wide.
+        <dl className="grid grid-cols-[fit-content(40%)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-md border bg-muted/30 px-2.5 py-2 text-xs">
           {p.fields.map(([k, v], i) => (
             <div key={i} className="contents">
               <dt className="text-muted-foreground">{k}</dt>
