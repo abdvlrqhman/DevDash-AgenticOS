@@ -32,7 +32,8 @@ export type ToolBlock = {
 /** What Claude Code itself put in the conversation: not the person, shown as a quiet line with the raw text one tap away. */
 export type EventTone = 'task' | 'skill' | 'peer' | 'schedule' | 'system'
 export type Block =
-  | { kind: 'user'; key: string; uuid?: string; text: string; images: string[]; files: string[]; at?: number }
+  /** `state`: sent but not taken in yet (a slash command waits for the turn to end), or never delivered (the session stopped first). */
+  | { kind: 'user'; key: string; uuid?: string; text: string; images: string[]; files: string[]; at?: number; state?: 'queued' | 'lost' }
   | { kind: 'text'; key: string; text: string; cwd?: string }
   | { kind: 'thinking'; key: string; text: string }
   | ToolBlock
@@ -163,7 +164,7 @@ export function buildTranscript(raws: Raw[]): Block[] {
       if (!said && !images.length && !files.length) return
       const machine = injected(r, said || text, key, images)
       if (machine) return void top.push(machine)
-      top.push({ kind: 'user', key, uuid: r.uuid, text: said, images, files, at: when(r) })
+      top.push({ kind: 'user', key, uuid: r.uuid, text: said, images, files, at: when(r), ...(r.devdash_lost ? { state: 'lost' as const } : r.devdash_queued ? { state: 'queued' as const } : {}) })
       return
     }
 

@@ -380,6 +380,9 @@ async function pump(c: Chat) {
   } finally {
     if (chats.get(id) === c) chats.delete(id)
     teardownTailnet(id) // the session process is gone: close its tailnet MCP forwarder
+    // Messages it never took in (it was stopped, or crashed, with them queued) can't arrive any more: mark them lost.
+    const box = outboxes.get(id)
+    if (box) try { settleOutbox(box, transcriptLines(c.launch), true) } catch { /* an unreadable transcript: they stay queued */ }
     // Clear any still-open question/permission on viewers' screens: the session is gone, nothing can answer it now.
     for (const p of c.pending.values()) {
       emit({ ev: 'claude.permission_done', id, requestId: p.requestId })
@@ -459,6 +462,8 @@ export const send = (l: Launch, content: unknown[], uuid: string, guest: Guest |
   if (guest) c.guest = guest
   else if (c.status === 'idle') endGuest(c)
   c.inbox.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: l.id, uuid })
+  if (!outboxes.has(l.id)) outboxes.set(l.id, new Map())
+  outboxes.get(l.id)!.set(uuid, { content, at: Date.now() })
   c.lastActive = Date.now()
   setStatus(c, l.id, 'working')
 })
@@ -607,6 +612,54 @@ type TranscriptLine = {
   timestamp?: string
   /** The folder Claude was in: it moves with `cd`, or into a worktree, so a relative path it wrote is relative to this. */
   cwd?: string
+  /** A message taken in mid-turn is kept only as this (type "queued_command"), under the id DevDash sent it with. */
+  attachment?: { type?: string; prompt?: unknown; source_uuid?: string }
+}
+
+/**
+ * Messages Claude Code took in mid-turn: its transcript keeps them only as `queued_command` attachments, not as
+ * prompts, so without this they vanished from the conversation on reload. Each comes back as a prompt under the id
+ * DevDash sent it with (the live view already shows it under that id), where Claude Code took it in. Pure, tested.
+ */
+export function withAbsorbed(all: HistoryMessage[], raw: TranscriptLine[]): HistoryMessage[] {
+  const have = new Set(all.map((m) => m.uuid))
+  const absorbed = raw.flatMap((m, i) => {
+    const a = m.attachment
+    const uuid = a?.source_uuid ?? m.uuid
+    if (m.type !== 'attachment' || a?.type !== 'queued_command' || m.isSidechain || !uuid || have.has(uuid)) return []
+    have.add(uuid)
+    const msg = { type: 'user', uuid, parent_tool_use_id: null, message: { role: 'user', content: a.prompt }, ...(m.timestamp && { timestamp: m.timestamp }) }
+    return [{ i, msg: msg as HistoryMessage }]
+  })
+  if (!absorbed.length) return all
+  const pos = new Map<string, number>()
+  raw.forEach((m, i) => { if (m.uuid && !pos.has(m.uuid)) pos.set(m.uuid, i) })
+  const out: HistoryMessage[] = []
+  let k = 0
+  for (const m of all) {
+    const p = pos.get(m.uuid)
+    while (p !== undefined && k < absorbed.length && absorbed[k]!.i < p) out.push(absorbed[k++]!.msg)
+    out.push(m)
+  }
+  return [...out, ...absorbed.slice(k).map((x) => x.msg)]
+}
+
+/**
+ * Every message DevDash handed to Claude Code, per session, until the transcript shows it (as a prompt, or taken in
+ * mid-turn). Until then history lists it as queued, so a reload never hides a message that's still waiting (a slash
+ * command waits for the turn to end). If the process ends first it's marked lost: the person sees it wasn't delivered.
+ */
+type Sent = { content: unknown[]; at: number; lost?: boolean }
+const outboxes = new Map<string, Map<string, Sent>>()
+
+/** Drops what the transcript shows delivered and returns the rest, oldest first; `ended`: what's left can't arrive now. */
+export function settleOutbox(box: Map<string, Sent>, lines: TranscriptLine[], ended = false) {
+  const delivered = new Set(lines.flatMap((m) => [m.uuid, m.attachment?.source_uuid]))
+  for (const [uuid, s] of box) {
+    if (delivered.has(uuid)) box.delete(uuid)
+    else if (ended) s.lost = true
+  }
+  return [...box]
 }
 
 /** A message the person typed (not a tool result Claude Code sends back as a "user" message). */
@@ -760,10 +813,14 @@ export async function history(l: Launch, o: { before?: string; turns?: number } 
   let all = active
   const times = new Map<string, string>()
   const folders = new Map<string, string>()
+  let waiting: [string, Sent][] = []
   try {
     // The transcript on disk carries the pre-compaction turns the SDK drops, and the timestamps and folders it leaves out.
     const lines = transcriptLines(l)
-    all = mergeHistory(active, lines)
+    all = withAbsorbed(mergeHistory(active, lines), lines)
+    const box = outboxes.get(l.id)
+    if (box) waiting = settleOutbox(box, lines)
+    if (box && !box.size) outboxes.delete(l.id)
     for (const e of lines) {
       if (e.uuid && e.timestamp) times.set(e.uuid, e.timestamp)
       if (e.uuid && e.cwd && e.cwd !== l.cwd) folders.set(e.uuid, e.cwd) // only where Claude had moved: most messages don't need it
@@ -777,6 +834,12 @@ export async function history(l: Launch, o: { before?: string; turns?: number } 
     const cwd = folders.get(m.uuid)
     return timestamp || cwd ? { ...m, ...(timestamp ? { timestamp } : {}), ...(cwd ? { cwd } : {}) } : m
   })
+  // At the end of the latest page: messages sent that Claude Code hasn't taken in yet, or never will (the process ended).
+  if (!o.before) {
+    for (const [uuid, s] of waiting) {
+      messages.push({ type: 'user', uuid, parent_tool_use_id: null, message: { role: 'user', content: s.content }, timestamp: new Date(s.at).toISOString(), [s.lost ? 'devdash_lost' : 'devdash_queued']: true } as HistoryMessage)
+    }
+  }
   return { messages, more: start > 0 }
 }
 

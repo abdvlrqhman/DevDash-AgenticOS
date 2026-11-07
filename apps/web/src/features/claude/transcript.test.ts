@@ -105,3 +105,12 @@ test("the page the personal agent's panel adds to a message isn't shown as the p
   const blocks = buildTranscript([{ type: 'user', uuid: 'u1', message: { role: 'user', content: '<devdash-page path="/tasks/shop/12" title="Fix login"/>\n\nWhat is left here?' } }])
   assert.deepEqual(blocks.map((b) => b.kind === 'user' && b.text), ['What is left here?'])
 })
+
+test("a message the agent hasn't taken in yet shows as queued, one it never got as not delivered", () => {
+  const blocks = buildTranscript([
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: '/goal ship it' }, devdash_queued: true },
+    { type: 'user', uuid: 'u2', message: { role: 'user', content: 'and add tests' }, devdash_lost: true },
+    { type: 'user', uuid: 'u3', message: { role: 'user', content: 'plain' } },
+  ])
+  assert.deepEqual(blocks.map((b) => b.kind === 'user' && b.state), ['queued', 'lost', undefined])
+})

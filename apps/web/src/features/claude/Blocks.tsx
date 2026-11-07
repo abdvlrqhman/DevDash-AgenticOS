@@ -72,8 +72,10 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
             const text = b.text.trim()
             return (
               <div key={b.key} className="group/msg flex max-w-[85%] min-w-0 flex-col items-end gap-1 self-end">
-                {(who || b.at || text) && (
+                {(who || b.at || text || b.state) && (
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {b.state === 'queued' && <span className="mr-1 font-medium text-foreground/80" title="Sent; the agent takes it in when it gets to it (a /command waits for the current turn to end)">Queued</span>}
+                    {b.state === 'lost' && <span className="mr-1 font-medium text-destructive" title="The session stopped before the agent took it in">Not delivered: send it again</span>}
                     {/* Shown on hover (or focus) with a mouse, always on touch screens. */}
                     {text && <CopyButton text={b.text} label="Copy message" className="opacity-0 group-hover/msg:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100" />}
                     {(who || b.at) && (
@@ -99,7 +101,7 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
                 )}
                 {/* data-selectable: the app selects only what people copy (styles.css), and your own messages are that too. */}
                 {/* overflow-wrap: anywhere, not break-word: a long link must narrow the bubble too, or it pushes it off the left. */}
-                {text && <div data-selectable className="max-w-full rounded-[22px] rounded-br-lg bg-primary px-4 py-2.5 text-[15px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-primary-foreground md:text-sm md:leading-relaxed">{b.text}</div>}
+                {text && <div data-selectable className={cn('max-w-full rounded-[22px] rounded-br-lg bg-primary px-4 py-2.5 text-[15px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-primary-foreground md:text-sm md:leading-relaxed', b.state && 'opacity-60')}>{b.text}</div>}
               </div>
             )
           }

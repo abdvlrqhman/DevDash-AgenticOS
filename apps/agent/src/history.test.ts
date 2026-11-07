@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mergeHistory, pageOf, type HistoryMessage } from './claude.ts'
+import { mergeHistory, pageOf, settleOutbox, withAbsorbed, type HistoryMessage } from './claude.ts'
 
 const prompt = (uuid: string): HistoryMessage => ({ type: 'user', uuid, parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'do it' }] } })
 const reply = (uuid: string): HistoryMessage => ({ type: 'assistant', uuid, parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'ok' }] } })
@@ -53,4 +53,26 @@ test('mergeHistory de-dupes by uuid so a line in both sources is not doubled', (
 
 test('mergeHistory keeps the active thread when none of it is on disk yet', () => {
   assert.deepEqual(mergeHistory([prompt('live')], [rawPrompt('o1')]), [prompt('live')])
+})
+
+// As Claude Code 2.1 writes a message taken in mid-turn: no prompt line, only an attachment under the id DevDash sent.
+const absorbed = (sent: string, text: string) => ({ type: 'attachment', uuid: `att-${sent}`, timestamp: `t-${sent}`, attachment: { type: 'queued_command', prompt: [{ type: 'text', text }], source_uuid: sent } })
+
+test('messages taken in mid-turn come back as prompts under the id DevDash sent, where Claude Code took them in', () => {
+  // On disk: p1, a tool call and its result, then message m1 taken in, then the reply that answered it.
+  const raw = [rawPrompt('p1'), rawReply('a1'), rawPrompt('t1'), absorbed('m1', 'not only readings*'), rawReply('a2')]
+  const active = [prompt('p1'), reply('a1'), toolResult('t1'), reply('a2')]
+  const out = withAbsorbed(active, raw)
+  assert.deepEqual(out.map((m) => m.uuid), ['p1', 'a1', 't1', 'm1', 'a2'])
+  assert.deepEqual(out[3], { type: 'user', uuid: 'm1', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: 'not only readings*' }] }, timestamp: 't-m1' })
+  assert.equal(withAbsorbed(out, raw).length, 5, 'one already there is not added twice')
+  assert.equal(withAbsorbed(active, [...raw.slice(0, 3), raw[4]!]), active, 'nothing taken in: unchanged')
+})
+
+test("sent messages stay listed until the transcript shows them, and are marked lost once the process ends without them", () => {
+  const box = new Map([['m1', { content: [], at: 1 }], ['m2', { content: [], at: 2 }], ['m3', { content: [], at: 3 }]])
+  // m1 ran as a prompt (a slash command keeps the id too), m2 was taken in mid-turn, m3 still waits.
+  assert.deepEqual(settleOutbox(box, [rawPrompt('m1'), absorbed('m2', 'x')]).map(([u]) => u), ['m3'])
+  assert.deepEqual(settleOutbox(box, [], true), [['m3', { content: [], at: 3, lost: true }]])
+  assert.deepEqual(settleOutbox(box, [rawPrompt('m3')]), [], 'a lost one that shows up after all is dropped')
 })
