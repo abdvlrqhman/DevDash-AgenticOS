@@ -9,6 +9,8 @@
 
 **A self-hosted workspace where a small team and its AI agents build software together, on one Linux server you own.**
 
+Built by [Abdulrahman Mohamed](https://github.com/abdvlrqhman) and [Youssef Eldeeb](https://github.com/yovsefx).
+
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 ![Node 24](https://img.shields.io/badge/node-%E2%89%A5%2024.7-339933?logo=node.js&logoColor=white)
 ![Ubuntu 24.04](https://img.shields.io/badge/server-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
