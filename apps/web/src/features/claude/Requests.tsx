@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { api, unwrap } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { textDir } from '@/lib/dir'
 import { ErrorAlert } from '../auth/LoginPage'
 import { Prose } from './Blocks'
 import type { PendingRequest } from './data'
@@ -85,7 +86,7 @@ function QuestionCard({ sessionId, req, disabled, waitingOn }: { sessionId: stri
       </CardHeader>
       <CardContent className="flex flex-col gap-5 px-4">
         {questions.map((q, qi) => (
-          <fieldset key={q.question} disabled={disabled} className="flex flex-col gap-2">
+          <fieldset key={q.question} disabled={disabled} dir={textDir(q.question)} className="flex flex-col gap-2">
             <legend className="mb-2 flex flex-wrap items-center gap-2 text-[15px] font-medium md:text-sm">
               {q.header && <span className="rounded-full bg-attention/20 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-attention-foreground uppercase">{q.header}</span>}
               {q.question}
@@ -105,7 +106,7 @@ function QuestionCard({ sessionId, req, disabled, waitingOn }: { sessionId: stri
                 )
               })
             ) : (
-              <RadioGroup value={picked[q.question]?.[0] ?? ''} onValueChange={(v) => setPicked((p) => ({ ...p, [q.question]: [v] }))} className="gap-2">
+              <RadioGroup dir={textDir(q.question)} value={picked[q.question]?.[0] ?? ''} onValueChange={(v) => setPicked((p) => ({ ...p, [q.question]: [v] }))} className="gap-2">
                 {[...q.options, { label: OTHER }].map((o, oi) => {
                   const id = `q${qi}-${oi}`
                   return (
@@ -118,7 +119,7 @@ function QuestionCard({ sessionId, req, disabled, waitingOn }: { sessionId: stri
               </RadioGroup>
             )}
             {picked[q.question]?.includes(OTHER) && (
-              <Input autoFocus placeholder="Type your answer" className="h-10 bg-background" value={other[q.question] ?? ''}
+              <Input autoFocus dir="auto" placeholder="Type your answer" className="h-10 bg-background" value={other[q.question] ?? ''}
                 onChange={(e) => setOther((x) => ({ ...x, [q.question]: e.target.value }))} />
             )}
           </fieldset>

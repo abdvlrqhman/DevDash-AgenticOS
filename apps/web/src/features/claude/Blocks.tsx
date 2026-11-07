@@ -101,7 +101,8 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
                 )}
                 {/* data-selectable: the app selects only what people copy (styles.css), and your own messages are that too. */}
                 {/* overflow-wrap: anywhere, not break-word: a long link must narrow the bubble too, or it pushes it off the left. */}
-                {text && <div data-selectable className={cn('max-w-full rounded-[22px] rounded-br-lg bg-primary px-4 py-2.5 text-[15px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-primary-foreground md:text-sm md:leading-relaxed', b.state && 'opacity-60')}>{b.text}</div>}
+                {/* dir auto + plaintext: each line reads in its own direction (Arabic right to left), as typed. */}
+                {text && <div data-selectable dir="auto" className={cn('max-w-full rounded-[22px] rounded-br-lg bg-primary px-4 py-2.5 text-start text-[15px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap text-primary-foreground [unicode-bidi:plaintext] md:text-sm md:leading-relaxed', b.state && 'opacity-60')}>{b.text}</div>}
               </div>
             )
           }
@@ -216,7 +217,7 @@ function Thinking({ text }: { text: string }) {
       <CollapsibleTrigger className="group flex items-center gap-1.5 hover:text-foreground">
         <Brain className="size-4" />Thinking<ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-1.5 border-l-2 pl-3 whitespace-pre-wrap">{text}</CollapsibleContent>
+      <CollapsibleContent dir="auto" className="mt-1.5 border-s-2 ps-3 text-start whitespace-pre-wrap [unicode-bidi:plaintext]">{text}</CollapsibleContent>
     </Collapsible>
   )
 }

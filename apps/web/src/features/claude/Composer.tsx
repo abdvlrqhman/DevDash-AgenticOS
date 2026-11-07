@@ -320,7 +320,7 @@ export function Composer({ sessionId, profile, harness = 'claude', name, working
           ))}
         </div>
       )}
-      <Textarea ref={area} value={text} rows={1} onKeyDown={onKey} onPaste={onPaste} aria-label="Message Claude"
+      <Textarea ref={area} dir="auto" value={text} rows={1} onKeyDown={onKey} onPaste={onPaste} aria-label="Message Claude"
         onChange={(e) => { write(e.target.value); setCaret(e.target.selectionStart) }}
         onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
         placeholder={working ? `Add a message for ${name ?? HARNESS[harness].name}` : `Message ${name ?? HARNESS[harness].name}, @ to mention a file`}

@@ -2,6 +2,7 @@ import { createContext, memo, useContext, useMemo, type ComponentProps, type Mou
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useRouter } from '@tanstack/react-router'
+import { textDir } from '@/lib/dir'
 import { openExternal } from '@/lib/shell'
 import { FileLinksContext, useFileLinks } from '../files/open-file'
 import { appPath, codeFile, folderOf, foldersIn, hrefFile, lookIn, type FileRef } from './file-links'
@@ -39,7 +40,28 @@ function FileAnchor({ f, said, className, children }: { f: FileRef; said: string
   )
 }
 
+type Hast = { type?: string; value?: string; children?: Hast[] }
+const textOf = (n: Hast | undefined): string => (n?.type === 'text' ? n.value ?? '' : (n?.children ?? []).map(textOf).join(''))
+
+/**
+ * Direction follows the text: an Arabic paragraph reads right to left, an English one left to right. Paragraphs and
+ * headings decide for themselves (dir auto). Lists, quotes and tables decide from their whole text, and their items and
+ * cells follow them, so bullets, the quote bar and the column order sit on the right side for Arabic.
+ */
+const auto = <T extends 'p' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'>(Tag: T) =>
+  function Auto({ node: _, ...props }: ComponentProps<T> & { node?: unknown }) {
+    const El = Tag as 'p'
+    return <El dir="auto" {...(props as ComponentProps<'p'>)} />
+  }
+const byText = <T extends 'ul' | 'ol' | 'blockquote' | 'table'>(Tag: T) =>
+  function ByText({ node, ...props }: ComponentProps<T> & { node?: unknown }) {
+    const El = Tag as 'ul'
+    return <El dir={textDir(textOf(node as Hast))} {...(props as ComponentProps<'ul'>)} />
+  }
+
 const COMPONENTS: Components = {
+  p: auto('p'), h1: auto('h1'), h2: auto('h2'), h3: auto('h3'), h4: auto('h4'), h5: auto('h5'), h6: auto('h6'),
+  ul: byText('ul'), ol: byText('ol'), blockquote: byText('blockquote'), table: byText('table'),
   a: function ProseLink({ href, children }) {
     const files = useFileLinks()
     const router = useRouter()

@@ -295,8 +295,8 @@ function PreviewView({ p }: { p: Preview }) {
         <dl className="grid grid-cols-[fit-content(40%)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-md border bg-muted/30 px-2.5 py-2 text-xs">
           {p.fields.map(([k, v], i) => (
             <div key={i} className="contents">
-              <dt className="text-muted-foreground">{k}</dt>
-              <dd className="min-w-0 font-mono break-words whitespace-pre-wrap">{v}</dd>
+              <dt dir="auto" className="text-start text-muted-foreground">{k}</dt>
+              <dd dir="auto" className="min-w-0 text-start font-mono break-words whitespace-pre-wrap">{v}</dd>
             </div>
           ))}
         </dl>
