@@ -14,18 +14,18 @@ type Row = {
   id: number; project_id: number | null; title: string; body: string; pinned: number; private: number; via_claude: number; via_role: string | null
   status: NoteStatus; superseded_by: number | null
   created_by: number; updated_by: number; created_at: number; updated_at: number
-  slug: string | null; project_name: string | null; author_name: string; editor_name: string
+  slug: string | null; project_name: string | null; project_deleted_at: number | null; author_name: string; editor_name: string
 }
-const SELECT = `select n.*, p.slug, p.name as project_name, a.name as author_name, e.name as editor_name
+const SELECT = `select n.*, p.slug, p.name as project_name, p.deleted_at as project_deleted_at, a.name as author_name, e.name as editor_name
   from notes n left join projects p on p.id = n.project_id join users a on a.id = n.created_by join users e on e.id = n.updated_by`
 
 /** Markdown notes: team-visible by default, optionally private, optionally pinned to a project. */
 export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; activity: ActivityService; search: SearchService }) {
   const q = {
-    list: db.prepare(`${SELECT} where (n.private = 0 or n.created_by = ?1) and (?2 is null or p.slug = ?2)
+    list: db.prepare(`${SELECT} where (n.private = 0 or n.created_by = ?1) and (?2 is null or p.slug = ?2) and p.deleted_at is null
       order by n.pinned desc, n.updated_at desc limit 500`),
     byId: db.prepare(`${SELECT} where n.id = ?`),
-    project: db.prepare('select id from projects where slug = ?'),
+    project: db.prepare('select id from projects where slug = ? and deleted_at is null'),
     insert: db.prepare(`insert into notes (project_id, title, body, pinned, private, created_by, updated_by, via_claude, via_role, status)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) returning id`),
     update: db.prepare('update notes set project_id = ?, title = ?, body = ?, pinned = ?, private = ?, updated_by = ?, via_claude = ?, status = ?, updated_at = unixepoch() where id = ?'),
@@ -34,7 +34,8 @@ export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; 
     priorWeekly: db.prepare(`select id from notes where project_id = ?1 and via_role = ?2 and id != ?3 and status != 'superseded' and lower(title) like '%weekly summary%'`),
     supersede: db.prepare(`update notes set status = 'superseded', superseded_by = ?, updated_at = unixepoch() where id = ?`),
   }
-  const visible = (n: Row, userId: number) => !n.private || n.created_by === userId
+  // A deleted project's notes are hidden with it (trash.ts), and go when it's purged.
+  const visible = (n: Row, userId: number) => n.project_deleted_at === null && (!n.private || n.created_by === userId)
   const dto = (n: Row) => ({
     id: n.id, title: n.title, body: n.body, pinned: n.pinned === 1, private: n.private === 1, viaClaude: n.via_claude === 1,
     status: n.status, supersededBy: n.superseded_by,

@@ -40,8 +40,10 @@ import { buildsService } from './modules/builds/service.ts'
 import { notesRoutes } from './modules/notes/routes.ts'
 import { notesService } from './modules/notes/service.ts'
 import { projectsRoutes } from './modules/projects/routes.ts'
+import { projectTrash } from './modules/projects/trash.ts'
 import { projectsService } from './modules/projects/service.ts'
 import { searchRoutes } from './modules/search/routes.ts'
+import { skillsRoutes } from './modules/skills/routes.ts'
 import { searchService } from './modules/search/service.ts'
 import { tasksRoutes, type GiveToClaude } from './modules/tasks/routes.ts'
 import { tasksService } from './modules/tasks/service.ts'
@@ -130,6 +132,12 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const services = servicesService({ db, agents, hub, notify: notifications.notify, previewUrl: previews.urlOf, basePath: previews.basePathOf })
   hub.authorize('services', () => true)
   // Members' agents clean up session worktrees (apps/agent/src/janitor.ts) only when nothing here still uses them.
+  // Deleting a project: soft, with seven days to restore it; its folders move through the root helper.
+  const trash = projectTrash({ db, projects, claude, services, agents, activity, search, root: config.projectsRoot, folders: {
+    trash: (id, slug) => provisioning.projectFolders('project-trash', id, slug),
+    restore: (id, slug) => provisioning.projectFolders('project-restore', id, slug),
+    purge: (id, slug) => provisioning.projectFolders('project-purge', id, slug),
+  } })
   agents.onRpc('worktrees.inUse', () => ({ paths: [...claude.foldersInUse(), ...services.foldersInUse()] }))
   const mw = authMiddleware(auth)
   const ip = (c: Context) => clientIp(c, config.trustCfIp)
@@ -198,10 +206,11 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     .route('/api/autopilot', autopilotRoutes(autopilot, mw))
     .route('/api/notifications', notificationsRoutes(notifications, apns, ntfy, mw))
     .route('/api/services', servicesRoutes(services, mw))
-    .route('/api/projects', projectsRoutes(projects, activity, mw))
+    .route('/api/projects', projectsRoutes(projects, trash, activity, mw))
     .route('/api/tasks', tasksRoutes(tasks, giveToClaude, mw))
     .route('/api/notes', notesRoutes(notes, mw))
     .route('/api/files', filesRoutes(agents, shares, mw))
+    .route('/api/skills', skillsRoutes(agents, projects, mw))
     .route('/api/builds', buildsRoutes(builds, mw))
     .route('/api/vault', vaultRoutes(vault, mw))
     .route('/api/tailnet', tailnetRoutes(tailnet, mw))
@@ -228,6 +237,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   deploys.registerMcp()
   deploys.resume()
   projects.start()
+  trash.start()
   autopilot.start()
   return { app, auth, provisioning, terms, agents, claude, services, projects, tasks, notes, hub, previews }
 }

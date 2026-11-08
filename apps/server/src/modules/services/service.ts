@@ -246,6 +246,20 @@ export function servicesService({ db, agents, hub, notify, previewUrl, basePath 
       return listeningPorts().map((p) => ({ ...p, service: byPort.get(p.port) ?? null }))
     },
 
+    /** Services that run from one of these folders or inside one (projects/trash.ts). */
+    inFolders: (folders: string[]) => (q.all.all() as Row[])
+      .filter((s) => folders.some((f) => s.cwd === f || s.cwd.startsWith(`${f}/`)))
+      .map((s) => ({ name: s.name, owner: s.owner_name, ownerUsername: s.owner_username, state: rt(s.name).state, desired: s.desired })),
+
+    /** Stops and removes a service whatever its owner: only for a project being deleted, after its owner was told. */
+    async removeForProject(name: string) {
+      const s = get(name)
+      await stop(s).catch(() => {})
+      q.remove.run(s.id)
+      runtime.delete(name)
+      changed()
+    },
+
     /** Folders services run from or name in their command (a mounted build, say): never cleaned up from under them. */
     foldersInUse: () => (q.all.all() as Row[]).flatMap((s) => [s.cwd, ...(s.command.match(/\/[^\s'":]+/g) ?? [])]),
 

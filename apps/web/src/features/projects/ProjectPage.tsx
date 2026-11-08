@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import { BadgeCheck, Bot, ChevronRight, Copy, GitBranch, GitCommitHorizontal, KeyRound, Lock, Plus, RefreshCw, Search, Share2, Sparkles, StickyNote, TriangleAlert } from 'lucide-react'
+import { BadgeCheck, Bot, ChevronRight, Copy, Ellipsis, GitBranch, GitCommitHorizontal, KeyRound, Lock, Plus, RefreshCw, Search, Share2, Sparkles, StickyNote, Trash2, TriangleAlert } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { authorName } from '@/components/app/author'
@@ -9,6 +9,7 @@ import { Orb } from '@/components/app/orb'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -28,10 +29,12 @@ import { cn } from '@/lib/utils'
 import { NoteList } from '../notes/NotesPage'
 import { count, repoLabel, segment, segmented } from './ProjectsPage'
 import { BuildsTab } from '../builds/BuildsTab'
-import { api, unwrap } from '@/lib/api'
+import { api, meQuery, unwrap } from '@/lib/api'
 import { PinButton } from '../pins/pins'
+import { ProjectSkills } from '../skills/ProjectSkills'
 import { TeamTab } from '../team/TeamTab' // Team (optional)
 import { deliveriesQuery, ReadyToReview, useLiveDeliveries } from './ReadyToReview'
+import { canDeleteProject, DeleteProjectDialog } from './DeleteProject'
 
 /** Keyed by the URL, so moving to another one starts from a clean slate. */
 export function ProjectPage() {
@@ -48,6 +51,8 @@ function ProjectPageView() {
   useLiveDeliveries(slug)
   const readyCount = useQuery(deliveriesQuery(slug)).data?.readyCount ?? 0
   const [session, setSession] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const me = useQuery(meQuery).data
   // Coming back to a project (from a task, a run or a role) opens the tab you left.
   const [tab, setTabState] = useState(() => { try { return sessionStorage.getItem(`project-tab:${slug}`) ?? 'overview' } catch { return 'overview' } })
   const setTab = (v: string) => { setTabState(v); try { sessionStorage.setItem(`project-tab:${slug}`, v) } catch { /* private mode */ } }
@@ -71,6 +76,15 @@ function ProjectPageView() {
           <GuestCapsDefault slug={p.slug} />
           <PinButton kind="project" id={p.slug} />
           <Button size="sm" variant="outline" onClick={() => setSession(true)}><Sparkles /><span className="hidden sm:inline">Session</span></Button>
+          {/* Deleting: only for whoever added it (or an admin once they're disabled); everyone else never sees it. */}
+          {canDeleteProject(me, p) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label="More"><Ellipsis /></Button></DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}><Trash2 />Delete project…</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </>} />
       <PageBody className="gap-5 md:pt-8">
         {p.fetchError && (
@@ -96,6 +110,7 @@ function ProjectPageView() {
               Sessions
               {p.live.working + p.live.waiting > 0 ? <StatusLight state={p.live.working ? 'live' : 'waiting'} /> : p.sessions > 0 && <TabCount>{p.sessions}</TabCount>}
             </TabsTrigger>
+            <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="team">Team</TabsTrigger>
             <TabsTrigger value="builds">Builds</TabsTrigger>
             <TabsTrigger value="commits">Commits</TabsTrigger>
@@ -110,6 +125,7 @@ function ProjectPageView() {
           </TabsContent>
           <TabsContent value="notes"><ProjectNotes slug={slug} /></TabsContent>
           <TabsContent value="sessions"><ProjectSessions slug={slug} sharing={p.sessionSharing} onNew={() => setSession(true)} /></TabsContent>
+          <TabsContent value="skills"><ProjectSkills slug={slug} /></TabsContent>
           <TabsContent value="builds"><BuildsTab slug={slug} isGithub={isGithub} /></TabsContent>
           <TabsContent value="commits"><Commits slug={slug} /></TabsContent>
           <TabsContent value="activity"><ProjectActivity slug={slug} /></TabsContent>
@@ -117,6 +133,7 @@ function ProjectPageView() {
         </Tabs>
       </PageBody>
       <NewSession open={session} onClose={() => setSession(false)} initialProject={slug} />
+      {canDeleteProject(me, p) && <DeleteProjectDialog project={p} open={deleting} onOpenChange={setDeleting} />}
     </>
   )
 }

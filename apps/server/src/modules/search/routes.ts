@@ -14,7 +14,7 @@ import type { SearchService } from './service.ts'
 export function searchRoutes(d: {
   db: Db; search: SearchService; notes: NotesService; projects: ProjectsService; claude: ClaudeService; services: ServicesService; activity: ActivityService
 }, mw: ReturnType<typeof authMiddleware>) {
-  const taskById = d.db.prepare(`select t.id, t.number, t.title, t.status, p.slug from tasks t join projects p on p.id = t.project_id where t.id = ?`)
+  const taskById = d.db.prepare(`select t.id, t.number, t.title, t.status, p.slug from tasks t join projects p on p.id = t.project_id where t.id = ? and p.deleted_at is null`)
   return new Hono<AuthEnv>()
     .use(mw.requireUser)
     .get('/search', query(z.object({ q: z.string().max(200).default('') })), (c) => {
@@ -32,7 +32,7 @@ export function searchRoutes(d: {
         .map((n) => ({ id: n.id, title: n.title, project: n.project, snippet: snippet.get(`note:${n.id}`) ?? '' }))
       return c.json({
         projects: d.projects.list(false, user.id).filter((p) => p.name.toLowerCase().includes(needle) || p.slug.includes(needle)).slice(0, 6),
-        tasks: direct ? [...d.db.prepare(`select t.number, t.title, t.status, p.slug from tasks t join projects p on p.id = t.project_id where t.number = ? and (? is null or p.slug = ?) limit 6`)
+        tasks: direct ? [...d.db.prepare(`select t.number, t.title, t.status, p.slug from tasks t join projects p on p.id = t.project_id where t.number = ? and (? is null or p.slug = ?) and p.deleted_at is null limit 6`)
           .all(Number(direct[2]), direct[1] ?? null, direct[1] ?? null).map((t) => {
             const r = t as { number: number; title: string; status: string; slug: string }
             return { key: `${r.slug}#${r.number}`, slug: r.slug, number: r.number, title: r.title, status: r.status, snippet: '' }

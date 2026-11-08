@@ -40,9 +40,9 @@ export function tasksService({ db, hub, activity, search, threadOf, onClosed }: 
     list: db.prepare(`${SELECT} where p.archived = 0 and (?1 is null or p.slug = ?1) and (?2 is null or t.assignee_id = ?2)
       and (?3 is null or t.status = ?3) and (?4 = 1 or t.status != 'done' or t.closed_at > unixepoch() - 14 * 86400)
       order by t.sort, t.id`),
-    one: db.prepare(`${SELECT} where p.slug = ? and t.number = ?`),
+    one: db.prepare(`${SELECT} where p.slug = ? and t.number = ? and p.deleted_at is null`),
     byId: db.prepare(`${SELECT} where t.id = ?`),
-    project: db.prepare('select id, slug, name, archived from projects where slug = ?'),
+    project: db.prepare('select id, slug, name, archived from projects where slug = ? and deleted_at is null'),
     next: db.prepare('update projects set next_task = next_task + 1 where id = ? returning next_task - 1 as n'),
     maxSort: db.prepare('select coalesce(max(sort), 0) as s from tasks where project_id = ? and status = ?'),
     insert: db.prepare(`insert into tasks (project_id, number, title, body, status, priority, due_date, assignee_id, sort, created_by, via_role)

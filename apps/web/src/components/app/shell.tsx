@@ -3,6 +3,7 @@ import { useLiveMembers, UserAvatar } from '@/components/app/user-avatar'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
+  BookOpenCheck,
   Activity, ArrowLeftRight, ChevronsUpDown, Cloud, Download, Ellipsis, FolderGit2, Globe, HardDrive, House, Inbox, KeyRound, ListTodo, LogOut, Monitor, Moon, Network, Plane, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Sun, Users,
 } from 'lucide-react'
 import {
@@ -40,6 +41,7 @@ const NAV: { label?: string; items: NavItem[] }[] = [
     { to: '/projects', label: 'Projects', icon: FolderGit2 },
     { to: '/tasks', label: 'Tasks', icon: ListTodo },
     { to: '/sessions', label: 'Sessions', icon: Sparkles },
+    { to: '/skills', label: 'Skills', icon: BookOpenCheck },
     { to: '/approvals', label: 'Approvals', icon: Inbox }, // Team
     { to: '/autopilot', label: 'Autopilot', icon: Plane },
     { to: '/notes', label: 'Notes', icon: StickyNote },

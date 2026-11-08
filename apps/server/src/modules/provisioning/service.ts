@@ -51,6 +51,15 @@ export function provisioningService({ db, runDir, onReady }: { db: Db; runDir: s
       const r = await requestLine<{ ok: boolean; error?: string }>(join(runDir, 'helper.sock'), { cmd: 'git-safe-dir', args: { path } }, 30_000)
       if (!r.ok) throw new Error(r.error ?? 'Could not register the project folder.')
     },
+    /**
+     * Moves a deleted project's folders into the trash, back, or removes them for good (the helper's project-trash,
+     * project-restore and project-purge; see projects/trash.ts). Without the helper (local development) nothing moves.
+     */
+    async projectFolders(cmd: 'project-trash' | 'project-restore' | 'project-purge', id: number, slug: string) {
+      if (!runDir) return
+      const r = await requestLine<{ ok: boolean; error?: string }>(join(runDir, 'helper.sock'), { cmd, args: { id, slug } }, 10 * 60_000)
+      if (!r.ok) throw new Error(r.error?.replace(/^refused: /, '') ?? 'Could not move the project folder.')
+    },
     usernames: () => (s.pending.all() as User[]).map((u) => u.username),
     /** Idempotent: re-applies every active member (role changes, missed sign-ups, a fresh host). */
     async reconcileAll() {

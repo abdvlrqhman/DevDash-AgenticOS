@@ -14,6 +14,7 @@ const FETCH_EVERY_MS = 5 * 60_000
 type Row = {
   id: number; slug: string; name: string; repo_url: string | null; default_branch: string; created_by: number; created_at: number
   fetched_at: number | null; fetch_error: string | null; archived: number; creator_username: string; creator_name: string
+  creator_disabled_at: number | null; deleted_at: number | null; deleted_by: number | null; deleted_archived: number
   session_sharing: SessionSharing; instructions: string
   open_tasks: number; sessions: number; working: number; waiting: number; active_people: string; last_session_at: number | null
 }
@@ -24,7 +25,7 @@ export type SessionSharing = (typeof SESSION_SHARING)[number]
 // `sessions` is what the member asking ($me) can open: their own, ones shared with everyone or with them, team roles' included.
 // Live Claude work counts every session in the project, private ones too, but only as numbers and owners' names:
 // people see that someone's Claude is in the shared checkout, never what it is doing.
-const SELECT = `select p.*, u.username as creator_username, u.name as creator_name,
+const SELECT = `select p.*, u.username as creator_username, u.name as creator_name, u.disabled_at as creator_disabled_at,
   (select count(*) from tasks t where t.project_id = p.id and t.status != 'done') as open_tasks,
   (select count(*) from claude_sessions s where s.project_id = p.id and s.archived = 0 and ${canSeeSql('$me')}) as sessions,
   (select count(*) from claude_sessions s where s.project_id = p.id and s.archived = 0 and s.status = 'working') as working,
@@ -48,7 +49,12 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
   onFetched?: (p: { id: number; slug: string; default_branch: string; creator_username: string }) => Promise<void> | void
 }) {
   const q = {
-    all: db.prepare(`${SELECT} where p.archived = ? order by p.name`),
+    // A deleted project (trash.ts) is hidden everywhere until it's restored; its row keeps the short name taken.
+    all: db.prepare(`${SELECT} where p.archived = ? and p.deleted_at is null order by p.name`),
+    deleted: db.prepare(`${SELECT} where p.deleted_at is not null order by p.deleted_at desc`),
+    markDeleted: db.prepare('update projects set deleted_at = unixepoch(), deleted_by = ?, deleted_archived = archived, archived = 1 where id = ? and deleted_at is null'),
+    markRestored: db.prepare('update projects set deleted_at = null, deleted_by = null, archived = deleted_archived where id = ?'),
+    purge: db.prepare('delete from projects where id = ? and deleted_at is not null'),
     bySlug: db.prepare(`${SELECT} where p.slug = ?`),
     byId: db.prepare(`${SELECT} where p.id = ?`),
     insert: db.prepare('insert into projects (slug, name, repo_url, default_branch, created_by, instructions) values (?, ?, ?, ?, ?, ?) returning id'),
@@ -66,7 +72,8 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     slug: p.slug, name: p.name, repoUrl: p.repo_url, defaultBranch: p.default_branch, path: path(p.slug), createdAt: p.created_at,
     fetchedAt: p.fetched_at, fetchError: p.fetch_error, archived: p.archived === 1, openTasks: p.open_tasks, sessions: p.sessions,
     live: { working: p.working, waiting: p.waiting, people: JSON.parse(p.active_people || '[]') as string[] }, lastSessionAt: p.last_session_at,
-    creator: { username: p.creator_username, name: p.creator_name }, sessionSharing: p.session_sharing, instructions: p.instructions,
+    creator: { id: p.created_by, username: p.creator_username, name: p.creator_name, disabled: p.creator_disabled_at !== null },
+    sessionSharing: p.session_sharing, instructions: p.instructions,
   })
   // Who is asking, for the session count (0: nobody's own, shared sessions only).
   const me = (userId = 0) => ({ me: userId })
@@ -79,14 +86,20 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     if (!name) throw new AppError(400, 'bad_name', 'Give the project a name.')
     const slug = input.slug?.trim() || slugify(name)
     if (!SLUG_RE.test(slug)) throw new AppError(400, 'bad_slug', 'The short name uses lowercase letters, digits and dashes (up to 40).')
-    if (q.bySlug.get(me(), slug)) throw new AppError(409, 'taken', `A project called ${slug} already exists.`)
+    taken(slug)
     return { name, slug }
   }
   const byId = (id: number, userId?: number) => q.byId.get(me(userId), id) as Row | undefined
   function find(slug: string, userId?: number) {
     const p = q.bySlug.get(me(userId), slug) as Row | undefined
-    if (!p) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
+    if (!p || p.deleted_at !== null) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
     return p
+  }
+  /** A short name stays taken while its project is in Recently deleted. */
+  function taken(slug: string) {
+    const p = q.bySlug.get(me(), slug) as Row | undefined
+    if (p?.deleted_at) throw new AppError(409, 'taken', `${slug} belongs to a deleted project that can still be restored. Pick another short name.`)
+    if (p) throw new AppError(409, 'taken', `A project called ${slug} already exists.`)
   }
 
   /** Git as the creator; if their agent can't, as an admin (e.g. the creator left). */
@@ -166,7 +179,8 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     /** The project a folder belongs to (a checkout or one of its worktrees), if any. */
     forPath(cwd: string) {
       const m = cwd.match(new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(?:projects|worktrees)/([a-z0-9][a-z0-9-]{0,39})(?:/|$)`))
-      return m ? ((q.bySlug.get(me(), m[1]!) as Row | undefined) ?? null) : null
+      const p = m ? (q.bySlug.get(me(), m[1]!) as Row | undefined) : undefined
+      return p && p.deleted_at === null ? p : null
     },
 
     async create(user: User, input: { name: string; slug?: string; repoUrl?: string; instructions?: string }) {
@@ -175,7 +189,7 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
       if (!name) throw new AppError(400, 'bad_name', 'Give the project a name.')
       const slug = input.slug?.trim() || slugify(name)
       if (!SLUG_RE.test(slug)) throw new AppError(400, 'bad_slug', 'The short name uses lowercase letters, digits and dashes (up to 40).')
-      if (q.bySlug.get(me(), slug)) throw new AppError(409, 'taken', `A project called ${slug} already exists.`)
+      taken(slug)
       const r = await agents.request<{ defaultBranch: string }>(user.username,
         repoUrl ? { op: 'git.clone', path: path(slug), url: repoUrl } : { op: 'git.init', path: path(slug) }, 16 * 60_000)
       await gitSafeDir(path(slug))
@@ -306,7 +320,28 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     },
 
     start: () => setTimeout(() => void fetchAll(), 20_000).unref(),
+
+    // Deleting (trash.ts does the work; these are the rules and the row).
+    /** Only whoever added the project deletes it; an admin only once that person's account is disabled. */
+    canDelete: (user: Pick<User, 'id' | 'role'>, p: Pick<Row, 'created_by' | 'creator_disabled_at'>) =>
+      user.id === p.created_by || (user.role === 'admin' && p.creator_disabled_at !== null),
+    /** A live project's row, for deleting it. */
+    live: (slug: string) => find(slug),
+    /** A deleted project's row, for restoring or purging it. */
+    trashed(slug: string) {
+      const p = q.bySlug.get(me(), slug) as Row | undefined
+      if (!p?.deleted_at) throw new AppError(404, 'not_found', `There is no deleted project ${slug}.`)
+      return p
+    },
+    /** Deleted projects, newest first, as rows (trash.ts decides who sees which). */
+    deletedRows: () => q.deleted.all(me()) as Row[],
+    dto,
+    markDeleted(p: Row, user: Pick<User, 'id'>) { q.markDeleted.run(user.id, p.id); changed() },
+    markRestored(p: Row) { q.markRestored.run(p.id); changed() },
+    /** The row goes for good, and with it (cascade) its tasks, builds, team and the rest; sessions keep running without it. */
+    purgeRow(p: Row) { q.purge.run(p.id); changed() },
   }
 }
 
 export type ProjectsService = ReturnType<typeof projectsService>
+export type ProjectRow = Row

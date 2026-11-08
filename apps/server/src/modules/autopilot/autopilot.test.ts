@@ -83,13 +83,14 @@ function setup(o: { team?: TeamPort } = {}) {
   add.run(1, 'y@x.io', 'yo', 'Yara Haddad')
   add.run(2, 'b@x.io', 'bob', 'Bob')
   const sent: Record<string, unknown>[] = []
-  const reply = { decision: '{"action":"continue","tier":"green","message":"Carry on with step 2.","why":"next step of the agreed plan"}', utilization: 10, pending: [] as unknown[] }
+  const reply = { decision: '{"action":"continue","tier":"green","message":"Carry on with step 2.","why":"next step of the agreed plan"}', utilization: 10, pending: [] as unknown[], error: null as string | null }
   const rpcs = new Map<string, (username: string, params: unknown) => unknown>()
   const agents = {
     onEvent: () => {},
     onRpc: (m: string, fn: (username: string, params: unknown) => unknown) => void rpcs.set(m, fn),
     request: async (_u: string, req: Record<string, unknown>) => {
       sent.push(req)
+      if (req.op === 'claude.complete' && reply.error) throw new Error(reply.error)
       if (req.op === 'claude.complete') return { text: reply.decision }
       if (req.op === 'claude.usage') return { usage: { plan: 'max', available: true, limits: { five_hour: { utilization: reply.utilization, resets_at: '2026-11-06T05:00:00Z' } } } }
       if (req.op === 'claude.history') return { messages: [{ type: 'user', message: { content: 'Build step 1 and 2' } }, { type: 'assistant', message: { content: [{ type: 'text', text: 'Step 1 done. Shall I do step 2?' }] } }] }
@@ -581,4 +582,79 @@ test("the AI team's asks: only in projects turned on, after 30 minutes, approved
   assert.equal(answered.at(-1)!.thread, 7)
   assert.match(answered.at(-1)!.body, /^Short: two lines\.\n\n\(Autopilot for Yara, by their rules: he likes short, calm copy\)$/)
   assert.throws(() => u.autopilot.setTeam(u.yo, 99, true), /No AI team/)
+})
+
+test('supervisor settings: saved, returned in state, and logged', () => {
+  const t = setup()
+  const s = t.autopilot.state(t.yo)
+  assert.deepEqual(s.supervisor, { harness: 'claude', profile: 'default', model: 'sonnet', dailyCap: 100, modelCallsToday: 0 })
+  t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svProfile: 'default', svModel: 'anthropic/claude-sonnet-4-5', svDailyCap: 50 })
+  const s2 = t.autopilot.state(t.yo)
+  assert.equal(s2.supervisor.harness, 'opencode')
+  assert.equal(s2.supervisor.model, 'anthropic/claude-sonnet-4-5')
+  assert.equal(s2.supervisor.dailyCap, 50)
+  assert.ok(t.autopilot.entries(t.yo, { limit: 100 }).entries.some((e) => /Supervisor: OpenCode/.test(e.what)))
+  assert.throws(() => t.autopilot.setSettings(t.yo, { svHarness: 'unknown' as string }), /Unknown agent/)
+  assert.throws(() => t.autopilot.setSettings(t.yo, { svProfile: '!!!bad' }), /Unknown profile/)
+})
+
+test('red checks run before any model call, regardless of supervisor settings', async () => {
+  const t = setup()
+  t.autopilot.setEnabled(t.yo, true)
+  t.autopilot.setSettings(t.yo, { approvals: true, svHarness: 'opencode', svModel: 'gpt-4o' })
+
+  // obviousRed: declined without a model call
+  t.session('red-rm', { status: 'waiting' })
+  t.reply.pending = [{ requestId: 'r1', toolName: 'Bash', input: { command: 'rm ~/real.txt' } }]
+  t.reply.decision = '{"action":"approve","tier":"green","why":"x"}'
+  const before = t.sent.filter((r) => r.op === 'claude.complete').length
+  await t.autopilot.sweep()
+  assert.equal(t.sent.filter((r) => r.op === 'claude.complete').length, before)
+  const deny = t.sent.find((r) => r.op === 'claude.answer' && (r as { requestId: string }).requestId === 'r1') as { result: { behavior: string } }
+  assert.equal(deny.result.behavior, 'deny')
+
+  // redQuestion: never answered, no model call
+  t.session('red-q', { status: 'waiting' })
+  t.reply.pending = [{ requestId: 'q1', toolName: 'AskUserQuestion', input: { questions: [{ question: 'Delete old backups?' }] } }]
+  const before2 = t.sent.filter((r) => r.op === 'claude.complete').length
+  await t.autopilot.sweep()
+  assert.equal(t.sent.filter((r) => r.op === 'claude.complete').length, before2)
+  assert.ok(t.autopilot.state(t.yo).inbox.some((i) => i.session?.id === 'red-q'))
+
+  // neverApprove: guest gate, no model call
+  t.session('guest', { status: 'waiting' })
+  t.reply.pending = [{ requestId: 'g1', toolName: 'Bash', input: { command: 'cat ~/.ssh/id_ed25519' }, ownerOnly: true, askedBy: { id: 2 } }]
+  const before3 = t.sent.filter((r) => r.op === 'claude.complete').length
+  await t.autopilot.sweep()
+  assert.equal(t.sent.filter((r) => r.op === 'claude.complete').length, before3)
+  assert.ok(t.autopilot.state(t.yo).inbox.some((i) => i.session?.id === 'guest'))
+})
+
+test('the OpenCode daily cap pauses the supervisor until the next morning', async () => {
+  const t = setup()
+  t.autopilot.setEnabled(t.yo, true)
+  t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svModel: 'gpt-4o', svDailyCap: 2 })
+  t.session('a')
+  t.session('b')
+  t.session('c')
+  const did = await t.autopilot.sweep()
+  assert.equal(did.filter((d) => d.what === 'continue').length, 2)
+  assert.ok(t.autopilot.state(t.yo).pausedUntil)
+  assert.ok(t.autopilot.entries(t.yo, { limit: 100 }).entries.some((e) => /daily cap reached/.test(e.why ?? '')))
+  assert.equal(t.autopilot.state(t.yo).supervisor.modelCallsToday, 2)
+})
+
+test('supervisor fallback: resets to defaults when the configured model or profile errors', async () => {
+  const t = setup()
+  t.autopilot.setEnabled(t.yo, true)
+  t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svProfile: 'gone', svModel: 'bad-model' })
+  t.session('s1')
+  t.reply.error = 'Unknown profile: gone'
+  await t.autopilot.sweep()
+  t.reply.error = null
+  const s = t.autopilot.state(t.yo)
+  assert.equal(s.supervisor.harness, 'claude')
+  assert.equal(s.supervisor.profile, 'default')
+  assert.equal(s.supervisor.model, 'sonnet')
+  assert.ok(t.autopilot.entries(t.yo, { limit: 100 }).entries.some((e) => /reset to the default/.test(e.what)))
 })

@@ -125,3 +125,27 @@ test('claude-update starts the update unit without waiting; its status is read-o
   assert.equal(s.state, 'inactive')
   assert.deepEqual(s.planned, [])
 })
+
+test('project-trash/restore/purge: only a project id and short name, fixed folders, argv only', () => {
+  const t = call({ cmd: 'project-trash', args: { id: 7, slug: 'dd-delete-test' } })
+  assert.equal(t.ok, true)
+  assert.deepEqual(t.planned.slice(-2), [
+    'mv -T -- /srv/devdash/projects/dd-delete-test /srv/devdash/trash/7-dd-delete-test/checkout',
+    'mv -T -- /srv/devdash/worktrees/dd-delete-test /srv/devdash/trash/7-dd-delete-test/worktrees',
+  ])
+  const r = call({ cmd: 'project-restore', args: { id: 7, slug: 'dd-delete-test' } })
+  assert.deepEqual(r.planned, [
+    'mv -T -- /srv/devdash/trash/7-dd-delete-test/checkout /srv/devdash/projects/dd-delete-test',
+    'mv -T -- /srv/devdash/trash/7-dd-delete-test/worktrees /srv/devdash/worktrees/dd-delete-test',
+    'rmdir -- /srv/devdash/trash/7-dd-delete-test',
+  ])
+  assert.deepEqual(call({ cmd: 'project-purge', args: { id: 7, slug: 'dd-delete-test' } }).planned, ['rm -rf --one-file-system -- /srv/devdash/trash/7-dd-delete-test'])
+  for (const slug of ['', '..', '../etc', 'a/b', 'A', '-x', 'a b', 'x'.repeat(41), 7]) {
+    for (const cmd of ['project-trash', 'project-restore', 'project-purge']) {
+      assert.match(call({ cmd, args: { id: 7, slug } }).error!, /refused: invalid project name/, `${cmd} ${slug}`)
+    }
+  }
+  for (const id of [0, -1, 1.5, '7', '7/../..', null]) {
+    assert.match(call({ cmd: 'project-purge', args: { id, slug: 'x' } }).error!, /refused: invalid project id/, String(id))
+  }
+})

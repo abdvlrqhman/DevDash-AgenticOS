@@ -7,6 +7,8 @@ import { openExternal } from '@/lib/shell'
 import { FileLinksContext, useFileLinks } from '../files/open-file'
 import { appPath, codeFile, folderOf, foldersIn, hrefFile, lookIn, type FileRef } from './file-links'
 import { panelCoversPage, setAssistantOpen } from '../assistant/store'
+import { toast } from '@/lib/toast'
+import { CopyButton, copyText } from './CopyButton'
 
 /**
  * Claude's markdown, with links opening outside DevDash; under a FileViewerProvider, file paths open in the viewer.
@@ -80,14 +82,31 @@ const COMPONENTS: Components = {
     if (f) return <FileAnchor f={f} said={href!}>{children}</FileAnchor>
     return <a href={href} onClick={(e) => { e.preventDefault(); if (href) openExternal(href) }}>{children}</a>
   },
-  pre: function ProsePre({ node: _, ...props }: ComponentProps<'pre'> & { node?: unknown }) {
-    return <InBlock.Provider value><pre {...props} /></InBlock.Provider>
+  // A code block reads left to right even in an Arabic reply, with a copy button in its top right corner: shown on hover
+  // or focus with a mouse, always on touch screens. It copies the code as written, without the trailing newline.
+  pre: function ProsePre({ node, ...props }: ComponentProps<'pre'> & { node?: unknown }) {
+    const code = textOf(node as Hast).replace(/\n$/, '')
+    return (
+      <InBlock.Provider value>
+        <div dir="ltr" className="code-block group/code relative">
+          <pre {...props} />
+          {code && <CopyButton text={code} label="Copy code"
+            className="absolute top-1.5 right-1.5 bg-term-bg text-term-fg/60 opacity-0 hover:bg-term-fg/15 hover:text-term-fg group-hover/code:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 dark:hover:bg-term-fg/15" />}
+        </div>
+      </InBlock.Provider>
+    )
   },
   code: function ProseCode({ node: _, children, ...props }) {
     const files = useFileLinks()
     const block = useContext(InBlock)
     const f = files && !block && typeof children === 'string' ? codeFile(children, files) : null
     if (f) return <FileAnchor f={f} said={children as string} className="file-code"><code {...props}>{children}</code></FileAnchor>
-    return <code {...props}>{children}</code>
+    if (block) return <code {...props}>{children}</code>
+    // Inline code copies on a tap, like monospace in Telegram; not inside a link, and not when you dragged to select.
+    return <code {...props} dir="ltr" className="copy-code" title="Tap to copy" onClick={(e) => {
+      if ((e.target as HTMLElement).closest('a') || window.getSelection()?.toString()) return
+      const text = e.currentTarget.textContent ?? ''
+      if (text) void copyText(text).then((ok) => { if (ok) toast.success('Copied') })
+    }}>{children}</code>
   },
 }

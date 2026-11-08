@@ -21,6 +21,7 @@ import * as memory from './memory.ts'
 import * as mentions from './mentions.ts'
 import { busy as projectBusy, ops as project } from './project.ts'
 import * as sqlite from './sqlite.ts'
+import * as skills from './skills.ts'
 import * as gh from './gh.ts'
 import { attachPty, hasSession, listSessions, send, tmux, TMUX_CONF } from './tmux.ts'
 
@@ -132,7 +133,26 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'claude.memory.restart': async () => (await memory.restart(claude.profileNames()), { ok: true }),
   'claude.usage': async (r) => ({ usage: await claude.usage(str(r.profile, 'profile')) }),
   'agent.signin.finish': (r) => harness.finishSignIn(str(r.url, 'url')),
-  'claude.profile.create': (r) => ((harness.isAcp(r.harness) ? harness.createProfile(r.harness, str(r.name, 'name')) : claude.createProfile(str(r.name, 'name'))), { ok: true }),
+  'claude.profile.create': async (r) => {
+    if (harness.isAcp(r.harness)) harness.createProfile(r.harness, str(r.name, 'name'))
+    else {
+      claude.createProfile(str(r.name, 'name'))
+      await skills.syncProfiles().catch(() => {}) // a new profile gets the member's skills too
+    }
+    return { ok: true }
+  },
+  // Skills for the member's agents (skills.ts): theirs in ~/.claude/skills, or a project's .claude/skills.
+  'skills.list': (r) => skills.ops.list(r),
+  'skills.get': (r) => skills.ops.get(r),
+  'skills.write': (r) => skills.ops.write(r),
+  'skills.review.github': (r) => skills.ops.reviewGithub(r),
+  'skills.review.upload': (r) => skills.ops.reviewUpload(r),
+  'skills.review.get': (r) => skills.ops.reviewGet(r),
+  'skills.review.discard': (r) => skills.ops.reviewDiscard(r),
+  'skills.install': (r) => skills.ops.install(r),
+  'skills.remove': (r) => skills.ops.remove(r),
+  'skills.enable': (r) => skills.ops.enable(r),
+  'skills.push': (r) => skills.ops.push(r),
   'fs.dir': async (r) => ({ path: await services.dir(r.path) }),
   'fs.roots': () => files.ops.roots(),
   'fs.first': (r) => files.ops.first(r),
@@ -164,6 +184,7 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'git.worktree.add': (r) => git.worktreeAdd(r),
   'git.worktree.remove': (r) => git.worktreeRemove(r),
   'git.branchStat': (r) => git.branchStat(r),
+  'git.risks': (r) => git.risks(r),
   'git.branchDiff': (r) => git.branchDiff(r),
   'git.mergeBranch': (r) => git.mergeBranch(r),
   'gh.pr': (r) => gh.ops.pr(r),
@@ -290,3 +311,5 @@ server.on('listening', () => console.log(`devdash agent for ${process.env.USER} 
 startJanitor(async () => ((await rpc('worktrees.inUse', {})) as { paths?: string[] }).paths ?? [])
 // The member's files in the shared projects stay readable and writable by the team (team-files.ts).
 startTeamFiles()
+// My skills reach every Claude profile (skills.ts): links made or fixed at start, and on every change.
+void skills.syncProfiles().catch((err: Error) => console.error('skills:', err.message))

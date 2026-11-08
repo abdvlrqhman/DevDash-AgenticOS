@@ -23,6 +23,10 @@ const Settings = z.object({
   maxNudges: z.number().int().optional(),
   approvals: z.boolean().optional(),
   promptWaitMin: z.number().int().optional(),
+  svHarness: z.string().max(20).optional(),
+  svProfile: z.string().max(30).optional(),
+  svModel: z.string().max(100).optional(),
+  svDailyCap: z.number().int().optional(),
 })
 
 /** The member's own autopilot: every route acts on the signed-in member only. */

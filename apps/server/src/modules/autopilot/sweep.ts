@@ -2,8 +2,14 @@
 // answer. Pure functions, tested (autopilot.test.ts).
 import { localParts } from '../../core/schedule.ts'
 
-export type Settings = { quietMin: number; nightCap: number; maxNudges: number; tz: string; pingAt: string; approvals: boolean; promptWaitMin: number }
-export const DEFAULTS: Settings = { quietMin: 20, nightCap: 20, maxNudges: 3, tz: 'Europe/Berlin', pingAt: '09:00', approvals: false, promptWaitMin: 2 }
+export type Settings = {
+  quietMin: number; nightCap: number; maxNudges: number; tz: string; pingAt: string; approvals: boolean; promptWaitMin: number
+  svHarness: string; svProfile: string; svModel: string; svDailyCap: number
+}
+export const DEFAULTS: Settings = {
+  quietMin: 20, nightCap: 20, maxNudges: 3, tz: 'Europe/Berlin', pingAt: '09:00', approvals: false, promptWaitMin: 2,
+  svHarness: 'claude', svProfile: 'default', svModel: 'sonnet', svDailyCap: 100,
+}
 
 /** One of the member's sessions as the sweep sees it. */
 export type Candidate = {

@@ -26,6 +26,8 @@ getent group devdash-users >/dev/null || groupadd devdash-users
 # Shared git checkouts: every member can work in every project (setgid keeps the group, members' umask is 0002).
 install -d -m 755 /srv/devdash
 install -d -m 2775 -o root -g devdash-users /srv/devdash/projects /srv/devdash/worktrees /srv/devdash/files
+# Deleted projects wait here for seven days (the root helper moves them in and out; members never read it).
+install -d -m 700 -o root -g root /srv/devdash/trash
 # The team's shared SDKs and package caches (apps/agent/src/shared-tools.ts): one copy for everyone, logins excluded.
 install -d -m 2775 -o root -g devdash-users /srv/devdash/shared
 command -v gh >/dev/null || apt-get install -yq gh >/dev/null

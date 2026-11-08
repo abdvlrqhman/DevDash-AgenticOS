@@ -127,13 +127,20 @@ agents ask people: proposals on *Approvals* and questions in team threads. Each 
 Green and yellow ones are approved or answered as you, marked as autopilot's; it never declines, and the rest lands in
 *Needs you*. When a role replies in a thread one of your sessions started, the session gets the reply.
 
-**Limits.** Autopilot runs on your own Claude plan and leaves room for you: it backs off at 80% of a 5-hour window and
-90% of a weekly one, and resumes when the window resets. A nightly cap (20 messages by default) bounds it further.
+**Supervisor settings.** The *Supervisor* block on `/autopilot` lets you pick which agent (Claude Code or OpenCode),
+account (profile) and model the supervisor runs on. Default: Claude Code, your default profile, Sonnet. Stronger models
+judge better but use more of your plan. When a configured model or profile stops existing, it falls back to the default
+and says so.
+
+**Limits.** Autopilot runs on your own plan and leaves room for you: for Claude, it backs off at 80% of a 5-hour
+window and 90% of a weekly one, and resumes when the window resets. For OpenCode (whose plan usage can't be read), a
+daily model-call cap (100 by default) pauses the supervisor until the next morning. A nightly message cap (20 by
+default) bounds it further.
 
 **One page for all of it.** `/autopilot` has the switch, *Needs you* (red questions, declined requests, stuck
-sessions, with links), what autopilot did lately, your settings and your rules. The full activity log, with search,
-filters and sorting, is one tap away. A morning ping (09:00 by default) arrives only when something needs you or a
-yellow decision is new.
+sessions, with links), what autopilot did lately, supervisor settings, your settings and your rules. The full activity
+log, with search, filters and sorting, is one tap away. A morning ping (09:00 by default) arrives only when something
+needs you or a yellow decision is new.
 
 <details>
 <summary>How a decision flows</summary>

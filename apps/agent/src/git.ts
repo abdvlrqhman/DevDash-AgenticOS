@@ -180,6 +180,38 @@ export const ops = {
     return { removed: true }
   },
 
+  /**
+   * What deleting a project would lose (projects/trash.ts): uncommitted changes in the checkout and each of its
+   * worktrees, and commits on local branches that aren't on the remote. Each count is null when git can't say.
+   */
+  async risks(r: Record<string, unknown>) {
+    const path = checked(r.path)
+    const dirty = async (dir: string) => (await git(['-C', dir, 'status', '--porcelain'], 30_000).then((o) => o.split('\n').filter(Boolean).length, () => null))
+    const listed = await git(['-C', path, 'worktree', 'list', '--porcelain']).catch(() => '')
+    const worktrees: { path: string; branch: string | null; changes: number | null }[] = []
+    let cur: { path: string; branch: string | null } | null = null
+    for (const line of [...listed.split('\n'), '']) {
+      if (line.startsWith('worktree ')) cur = { path: line.slice(9), branch: null }
+      else if (cur && line.startsWith('branch ')) cur.branch = line.slice(7).replace(/^refs\/heads\//, '')
+      else if (cur && line === '') {
+        if (cur.path !== path && existsSync(cur.path)) worktrees.push({ ...cur, changes: await dirty(cur.path) })
+        cur = null
+      }
+    }
+    const remote = (await git(['-C', path, 'remote']).catch(() => '')).split('\n').includes('origin')
+    let unpushed: { branch: string; commits: number }[] | null = null
+    if (remote) {
+      unpushed = []
+      const heads = (await git(['-C', path, 'for-each-ref', '--format=%(refname:short)', 'refs/heads']).catch(() => '')).split('\n').filter(Boolean)
+      for (const branch of heads.slice(0, 200)) {
+        const n = await git(['-C', path, 'rev-list', '--count', `refs/heads/${branch}`, '--not', '--remotes=origin']).then((o) => Number(o.trim()) || 0, () => null)
+        if (n === null) { unpushed = null; break }
+        if (n) unpushed.push({ branch, commits: n })
+      }
+    }
+    return { changes: await dirty(path), worktrees, remote, unpushed }
+  },
+
   /** How far a delivery's branch is ahead of the base: commits, and the diffstat (files, +adds/−dels). */
   async branchStat(r: Record<string, unknown>) {
     const path = checked(r.path)

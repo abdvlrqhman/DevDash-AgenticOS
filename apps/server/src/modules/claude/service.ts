@@ -687,6 +687,29 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
      * Every session in a project the member may open, unlisted ones included, each saying whose it is: theirs, a
      * teammate's shared one, or a team role's. Other people's private sessions are only counted, with their names.
      */
+    /**
+     * Sessions that aren't archived in a project or working in one of its folders (projects/trash.ts), with their status
+     * and owner. Private ones included: deleting the project stops and archives them all.
+     */
+    inProjectFolders(projectId: number, folders: string[]) {
+      const rows = db.prepare(`select s.id, s.title, s.status, s.mode, s.cwd, s.worktree, s.project_id, u.username as owner_username, u.name as owner_name
+        from claude_sessions s join users u on u.id = s.owner_id where s.archived = 0`).all() as {
+        id: string; title: string; status: string; mode: string; cwd: string; worktree: string | null; project_id: number | null; owner_username: string; owner_name: string
+      }[]
+      const within = (p: string | null) => !!p && folders.some((f) => p === f || p.startsWith(`${f}/`))
+      return rows.filter((r) => r.project_id === projectId || within(r.cwd) || within(r.worktree))
+    },
+
+    /** Stops each of these sessions (Chat or CLI) and archives it: the conversation stays readable under Archived. */
+    async stopAndArchive(sessions: { id: string; mode: string; owner_username: string }[]) {
+      for (const s of sessions) {
+        await agents.request(s.owner_username, { op: 'claude.stop', id: s.id }).catch(() => {})
+        if (s.mode === 'cli') await agents.request(s.owner_username, { op: 'claude.cli.close', id: s.id }).catch(() => {})
+        repo.patch(s.id, { archived: 1 })
+        publish(s.id)
+      }
+    },
+
     /** Folders sessions still work in (any that isn't archived, however quiet): never cleaned up from under them. */
     foldersInUse: () =>
       (db.prepare('select cwd, worktree from claude_sessions where archived = 0').all() as { cwd: string; worktree: string | null }[])

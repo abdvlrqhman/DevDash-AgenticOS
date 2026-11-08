@@ -67,6 +67,13 @@ const autopilotActivity = createRoute({
 })
 const autopilot = createRoute({ getParentRoute: () => app, path: '/autopilot', component: lazy(() => import('./features/autopilot/AutopilotPage'), 'AutopilotPage') })
 const more = createRoute({ getParentRoute: () => app, path: '/more', component: lazy(() => import('./features/more/MorePage'), 'MorePage') })
+const skills = createRoute({ getParentRoute: () => app, path: '/skills', component: lazy(() => import('./features/skills/SkillsPage'), 'SkillsPage') })
+const skillReview = createRoute({
+  getParentRoute: () => app, path: '/skills/review/$id', component: lazy(() => import('./features/skills/ReviewPage'), 'ReviewPage'),
+  validateSearch: (s: Record<string, unknown>): { project?: string } => (typeof s.project === 'string' ? { project: s.project } : {}),
+})
+const skill = createRoute({ getParentRoute: () => app, path: '/skills/$name', component: lazy(() => import('./features/skills/SkillPage'), 'MySkillPage') })
+const projectSkill = createRoute({ getParentRoute: () => app, path: '/projects/$slug/skills/$name', component: lazy(() => import('./features/skills/SkillPage'), 'ProjectSkillPage') })
 const projects = createRoute({ getParentRoute: () => app, path: '/projects', component: lazy(() => import('./features/projects/ProjectsPage'), 'ProjectsPage') })
 const project = createRoute({ getParentRoute: () => app, path: '/projects/$slug', component: lazy(() => import('./features/projects/ProjectPage'), 'ProjectPage') })
 // Team (optional)
@@ -125,7 +132,7 @@ const legacyClaude = createRoute({
 })
 
 const router = createRouter({
-  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity])]),
+  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, skillReview, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity])]),
   context: { queryClient },
   defaultPreload: 'intent',
 })

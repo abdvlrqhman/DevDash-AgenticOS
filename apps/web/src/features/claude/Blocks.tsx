@@ -1,12 +1,11 @@
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import {
-  BookOpen, Brain, CalendarClock, Check, ChevronRight, Circle, CircleAlert, Copy, FileText, Info, ListChecks, LoaderCircle, MessagesSquare, SquareSlash,
+  BookOpen, Brain, CalendarClock, Check, ChevronRight, Circle, CircleAlert, FileText, Info, ListChecks, LoaderCircle, MessagesSquare, SquareSlash,
   type LucideIcon,
 } from 'lucide-react'
-import { toast } from '@/lib/toast'
-import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
+import { CopyButton } from './CopyButton'
 import { Prose } from './Prose'
 import { ToolSteps, type StepBlock } from './ToolSteps'
 import type { Block, EventTone } from './transcript'
@@ -41,20 +40,6 @@ function replies(blocks: Block[]) {
     }
   }
   return out
-}
-
-/** Copies `text`; the icon turns into a tick for a moment. */
-function CopyButton({ text, label, className }: { text: string; label: string; className?: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = () => void navigator.clipboard.writeText(text).then(() => {
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }, () => toast.error("Couldn't copy"))
-  return (
-    <Button size="icon-xs" variant="ghost" aria-label={copied ? 'Copied' : label} title={label} className={cn('text-muted-foreground', className)} onClick={copy}>
-      {copied ? <Check /> : <Copy />}
-    </Button>
-  )
 }
 
 /** `live`: the session is working, so tools without a result are still running (otherwise they were interrupted). */

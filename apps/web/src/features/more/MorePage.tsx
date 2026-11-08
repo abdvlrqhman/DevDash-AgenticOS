@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { Link } from '@tanstack/react-router'
-import { Activity, ArrowLeftRight, ChevronRight, Cloud, Download, Globe, HardDrive, Inbox, KeyRound, LogOut, Network, Plane, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Users } from 'lucide-react'
+import { Activity, ArrowLeftRight, BookOpenCheck, ChevronRight, Cloud, Download, Globe, HardDrive, Inbox, KeyRound, LogOut, Network, Plane, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Users } from 'lucide-react'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { useSignOut } from '@/components/app/shell'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -36,6 +36,7 @@ const GROUPS: { title: string; links: Destination[] }[] = [
   { title: 'Team and settings', links: [
     { to: '/members', label: 'Members', description: 'Invite people and see who has access', icon: Users },
     { to: '/sessions/setup', label: 'Agent setup', description: 'Profiles, sign-in and defaults', icon: Sparkles },
+    { to: '/skills', label: 'Skills', description: 'What your agents know how to do, and where it came from', icon: BookOpenCheck },
     { to: '/account', label: 'Account', description: 'Password, email and appearance', icon: Settings },
   ] },
 ]

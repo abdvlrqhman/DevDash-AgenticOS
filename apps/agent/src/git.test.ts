@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -41,4 +41,29 @@ test('isAncestor sees a --no-ff merge and a fast-forward as merged, and an open 
 
   // A branch that no longer exists can't be told to be merged.
   assert.equal((await ops.isAncestor({ path: dir, branch: 'dd/gone', base: 'main' })).ancestor, false)
+})
+
+test('risks: uncommitted changes in the checkout and its worktrees, and commits not on the remote', async () => {
+  const { ops } = await import('./git.ts')
+  const repo = join(root, 'projects', 'risky')
+  const rg = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', env })
+  execFileSync('git', ['init', '-q', '-b', 'main', repo], { env })
+  rg('commit', '-q', '--allow-empty', '-m', 'base')
+  // No remote: nothing to compare with, so no unpushed count.
+  assert.deepEqual(await ops.risks({ path: repo }), { changes: 0, worktrees: [], remote: false, unpushed: null })
+
+  const origin = join(root, 'origin.git')
+  execFileSync('git', ['init', '-q', '--bare', origin], { env })
+  rg('remote', 'add', 'origin', origin); rg('push', '-q', 'origin', 'main')
+  const wt = join(root, 'worktrees', 'risky', 'abc')
+  rg('worktree', 'add', '-q', '-b', 'dd/abc', wt, 'main')
+  execFileSync('git', ['-C', wt, 'commit', '-q', '--allow-empty', '-m', 'local only'], { env })
+  writeFileSync(join(wt, 'new.txt'), 'x')
+  writeFileSync(join(repo, 'a.txt'), 'x'); writeFileSync(join(repo, 'b.txt'), 'y')
+  const r = await ops.risks({ path: repo })
+  assert.equal(r.changes, 2)
+  assert.equal(r.remote, true)
+  assert.deepEqual(r.worktrees, [{ path: wt, branch: 'dd/abc', changes: 1 }])
+  assert.deepEqual(r.unpushed, [{ branch: 'dd/abc', commits: 1 }])
+  await assert.rejects(ops.risks({ path: '/etc' }), /not a DevDash project folder/)
 })

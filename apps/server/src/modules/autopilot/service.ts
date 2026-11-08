@@ -10,7 +10,7 @@ import { AppError } from '../../core/http.ts'
 import { validTz } from '../../core/schedule.ts'
 import type { User } from '../auth/repo.ts'
 import { condense } from '../assistant/mcp.ts'
-import type { ClaudeService } from '../claude/service.ts'
+import { harnessOf, type ClaudeService, type Harness } from '../claude/service.ts'
 import type { SessionRow } from '../claude/repo.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { convertPrototypeRules, isDuplicate, parsePrototypeLog } from './migrate.ts'
@@ -20,6 +20,7 @@ import { DEFAULTS, describePrompt, judge, limitedUntil, neverApprove, obviousRed
 type Row = {
   user_id: number; enabled: number; rules: string | null; tz: string; ping_at: string; quiet_min: number; night_cap: number; max_nudges: number
   seen_at: number; pinged_on: string | null; paused_until: number | null; updated_at: number; approvals: number; prompt_wait_min: number
+  sv_harness: string; sv_profile: string; sv_model: string; sv_daily_cap: number; sv_model_calls: number; sv_model_calls_since: number
 }
 type Memory = { session_id: string; goal: string | null; nudges: number; last_error: string | null; checked_activity: number | null; rules_sent: string | null; relayed_message: number | null }
 type LogRow = {
@@ -111,7 +112,10 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     q.ensure.run(userId)
     return q.get.get(userId) as Row
   }
-  const settingsOf = (r: Row): Settings => ({ quietMin: r.quiet_min, nightCap: r.night_cap, maxNudges: r.max_nudges, tz: r.tz, pingAt: r.ping_at, approvals: !!r.approvals, promptWaitMin: r.prompt_wait_min })
+  const settingsOf = (r: Row): Settings => ({
+    quietMin: r.quiet_min, nightCap: r.night_cap, maxNudges: r.max_nudges, tz: r.tz, pingAt: r.ping_at, approvals: !!r.approvals, promptWaitMin: r.prompt_wait_min,
+    svHarness: r.sv_harness, svProfile: r.sv_profile, svModel: r.sv_model, svDailyCap: r.sv_daily_cap,
+  })
   const changed = (userId: number) => hub.publish('autopilot', { type: 'changed' }, (u) => u.id === userId)
   hub.authorize('autopilot', () => true) // events go only to the member they're for
 
@@ -134,6 +138,32 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
   const tidyInbox = (userId: number) => db.prepare(`update autopilot_inbox set resolved_at = ? where user_id = ? and resolved_at is null
     and session_id is not null and not exists (select 1 from claude_sessions s where s.id = autopilot_inbox.session_id and s.archived = 0)`)
     .run(Math.floor(now() / 1000), userId)
+
+  /** How many supervisor model calls the member made since the last morning ping (resets at nightStart). */
+  function svModelCallsToday(userId: number, r: Row) {
+    const since = nightStart(now(), r.tz, r.ping_at)
+    const cur = q.get.get(userId) as Row
+    if (cur.sv_model_calls_since < since) {
+      db.prepare('update autopilot set sv_model_calls = 0, sv_model_calls_since = ? where user_id = ?').run(since, userId)
+      return 0
+    }
+    return cur.sv_model_calls
+  }
+
+  /** For non-Claude agents whose plan usage can't be read: is the daily model-call cap reached? Increments the counter if there's room. */
+  function svDailyCapCheck(userId: number, r: Row): boolean {
+    const s = settingsOf(r)
+    if (s.svHarness === 'claude') return true
+    const since = nightStart(now(), r.tz, r.ping_at)
+    const cur = q.get.get(userId) as Row
+    if (cur.sv_model_calls_since < since) {
+      db.prepare('update autopilot set sv_model_calls = 1, sv_model_calls_since = ? where user_id = ?').run(since, userId)
+      return true
+    }
+    if (cur.sv_model_calls >= s.svDailyCap) return false
+    db.prepare('update autopilot set sv_model_calls = sv_model_calls + 1 where user_id = ?').run(userId)
+    return true
+  }
 
   function teamProjects(userId: number) {
     const t = team()
@@ -159,6 +189,10 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       sentTonight: (q.sentSince.get(user.id, nightStart(now(), r.tz, r.ping_at)) as { n: number }).n,
       // Projects with an AI team, and whether autopilot answers their role agents' asks for this member. null: no Team.
       team: teamProjects(user.id),
+      supervisor: {
+        harness: r.sv_harness, profile: r.sv_profile, model: r.sv_model, dailyCap: r.sv_daily_cap,
+        modelCallsToday: svModelCallsToday(user.id, r),
+      },
     }
   }
 
@@ -281,7 +315,11 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       extra,
       `Conversation, oldest first:\n\n${clip(convo, 30_000)}`,
     ].filter(Boolean).join('\n\n')
-    const text = await claude.complete(user.username, prompt, { system: supervisorSystem(user.name) + renderRules(r.rules, user.name), model: 'sonnet' })
+    const sv = settingsOf(r)
+    const text = await claude.complete(user.username, prompt, {
+      system: supervisorSystem(user.name) + renderRules(r.rules, user.name),
+      model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness) as Harness,
+    })
     return parseDecision(text)
   }
 
@@ -349,22 +387,48 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     return true
   }
 
-  /** Before any model call: has the member's Claude plan room left? A hit limit pauses the supervisor until it resets. */
-  async function hasRoom(user: User, r: Row, profile: string) {
+  /** Before the first model call of a sweep: has the member's Claude plan room left? Only for Claude. */
+  async function hasRoom(user: User, r: Row) {
+    const sv = settingsOf(r)
+    if (sv.svHarness !== 'claude') return true
     const nowS = Math.floor(now() / 1000)
     try {
-      const u = await claude.usage(user, profile)
+      const u = await claude.usage(user, sv.svProfile)
       const until = limitedUntil(u.limits as Record<string, unknown> | null, nowS)
       if (until == null) return true
       pause(user, until, 'Your Claude usage is above 80% (5-hour) or 90% (weekly): autopilot leaves the rest for you')
       return false
     } catch {
-      return true // usage can't be read (an older Claude Code, OpenCode): the error check below still stops it
+      return true
     }
+  }
+
+  /** Before each model call: for non-Claude agents, checks and increments the daily cap. Returns 'stop' to halt the sweep. */
+  function checkSvCap(user: User, r: Row): 'stop' | null {
+    const sv = settingsOf(r)
+    if (sv.svHarness === 'claude') return null
+    if (!svDailyCapCheck(user.id, r)) {
+      const morning = nightStart(now(), r.tz, r.ping_at) + 86_400
+      pause(user, morning, `Supervisor daily cap reached (${sv.svDailyCap} model calls): the rest waits for the morning`)
+      return 'stop'
+    }
+    return null
   }
   function pause(user: User, until: number, why: string) {
     db.prepare('update autopilot set paused_until = ? where user_id = ?').run(until, user.id)
     log(user.id, { tier: 'system', source: 'system', what: `Supervisor paused until ${new Date(until * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`, why })
+  }
+
+  /** When a model call fails and the supervisor is on non-default settings, reset to defaults and log. */
+  function svFallbackOnError(user: User, r: Row, msg: string) {
+    if (r.sv_harness === DEFAULTS.svHarness && r.sv_profile === DEFAULTS.svProfile && r.sv_model === DEFAULTS.svModel) return
+    if (/profile|model|not.found|unknown|provider|harness|agent/i.test(msg)) {
+      db.prepare('update autopilot set sv_harness = ?, sv_profile = ?, sv_model = ?, updated_at = unixepoch() where user_id = ?')
+        .run(DEFAULTS.svHarness, DEFAULTS.svProfile, DEFAULTS.svModel, user.id)
+      r.sv_harness = DEFAULTS.svHarness; r.sv_profile = DEFAULTS.svProfile; r.sv_model = DEFAULTS.svModel
+      log(user.id, { tier: 'system', source: 'system', what: 'Supervisor settings reset to the default (the configured model or profile no longer exists)' })
+      changed(user.id)
+    }
   }
 
   /** Sessions autopilot is acting on right now: the sweep and a prompt's timer never act on one twice at once. */
@@ -414,7 +478,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       }
       if (!room.checked) {
         room.checked = true
-        if (!(await hasRoom(user, r, s.profile))) return 'stop'
+        if (!(await hasRoom(user, r))) return 'stop'
       }
       // A question about something red: never answered, not even "No". Straight to Needs you, no model call.
       const asked = prompt ? null : pending.find((p) => p.toolName === 'AskUserQuestion')
@@ -424,6 +488,8 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
         done.push({ user: user.id, session: s.id, what: 'needs_you' })
         return
       }
+      const cap = checkSvCap(user, r)
+      if (cap) return cap
       // One prompt at a time: the question or permission it's blocked on now.
       const d = await decide(user, r, s, prompt ? [prompt] : pending)
       if (!d) {
@@ -434,12 +500,12 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       done.push({ user: user.id, session: s.id, what: d.action })
     } catch (err) {
       console.error(`autopilot: ${s.id.slice(0, 8)}:`, (err as Error).message)
-      // Not again until something happens in it: a failing model call mustn't repeat every sweep.
       q.remember.run(s.id, c.goal, c.memory.goal === c.goal ? c.memory.nudges : 0, c.memory.lastError, c.lastActivity)
       if (USAGE_LIMIT_RE.test((err as Error).message)) {
         pause(user, nowS + 3600, 'The Claude usage limit is hit')
         return 'stop'
       }
+      svFallbackOnError(user, r, (err as Error).message)
     } finally {
       busy.delete(s.id)
     }
@@ -542,13 +608,18 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
         }
         if (!room.checked) {
           room.checked = true
-          if (!(await hasRoom(user, r, 'default'))) return
+          if (!(await hasRoom(user, r))) return
         }
+        if (checkSvCap(user, r)) return
         try {
+          const sv = settingsOf(r)
           const prompt = it.of === 'proposal'
             ? `Proposal from the ${x.role} role in ${x.project} (${(x as { kind: string }).kind}): ${x.title}\n\nWhy: ${clip((x as { why: string }).why, 4000)}`
             : `Question from the ${x.role} role in ${x.project}, thread "${x.title}":\n${(x as { ask: string }).ask}\n\nThe thread so far:\n${(x as { recent: string[] }).recent.join('\n\n')}`
-          const d = parseTeamDecision(await claude.complete(user.username, prompt, { system: teamSystem(user.name) + renderRules(r.rules, user.name), model: 'sonnet' }), it.of)
+          const d = parseTeamDecision(await claude.complete(user.username, prompt, {
+            system: teamSystem(user.name) + renderRules(r.rules, user.name),
+            model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness) as Harness,
+          }), it.of)
           if (!d || d.action === 'needs_you') {
             leave(d?.why || "autopilot couldn't tell what you'd want", d?.message)
             continue
@@ -661,11 +732,23 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       const int = (v: number | undefined, old: number, min: number, max: number) => (v === undefined ? old : Math.max(min, Math.min(max, Math.round(v))))
       if (p.tz !== undefined && !validTz(p.tz)) throw new AppError(400, 'bad_tz', 'Unknown time zone.')
       if (p.pingAt !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(p.pingAt)) throw new AppError(400, 'bad_time', 'The ping time is HH:MM, 24-hour.')
-      db.prepare('update autopilot set tz = ?, ping_at = ?, quiet_min = ?, night_cap = ?, max_nudges = ?, approvals = ?, prompt_wait_min = ?, updated_at = unixepoch() where user_id = ?').run(
+      if (p.svHarness !== undefined && !['claude', 'opencode'].includes(p.svHarness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+      if (p.svProfile !== undefined && !/^[a-z0-9][a-z0-9-]{0,20}$/.test(p.svProfile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
+      db.prepare(`update autopilot set tz = ?, ping_at = ?, quiet_min = ?, night_cap = ?, max_nudges = ?, approvals = ?, prompt_wait_min = ?,
+        sv_harness = ?, sv_profile = ?, sv_model = ?, sv_daily_cap = ?, updated_at = unixepoch() where user_id = ?`).run(
         p.tz ?? r.tz, p.pingAt ?? r.ping_at, int(p.quietMin, r.quiet_min, 5, 24 * 60), int(p.nightCap, r.night_cap, 0, 200), int(p.maxNudges, r.max_nudges, 1, 10),
-        p.approvals === undefined ? r.approvals : p.approvals ? 1 : 0, int(p.promptWaitMin, r.prompt_wait_min, 1, 5), user.id)
+        p.approvals === undefined ? r.approvals : p.approvals ? 1 : 0, int(p.promptWaitMin, r.prompt_wait_min, 1, 5),
+        p.svHarness ?? r.sv_harness, p.svProfile ?? r.sv_profile,
+        p.svModel !== undefined ? p.svModel.trim().slice(0, 100) : r.sv_model,
+        int(p.svDailyCap, r.sv_daily_cap, 1, 10_000), user.id)
       if (p.approvals !== undefined && p.approvals !== !!r.approvals) {
         log(user.id, { tier: 'system', source: 'system', what: `Autopilot handles approvals: ${p.approvals ? 'on' : 'off'}` })
+      }
+      const svChanged = (p.svHarness !== undefined && p.svHarness !== r.sv_harness) || (p.svProfile !== undefined && p.svProfile !== r.sv_profile) || (p.svModel !== undefined && p.svModel !== r.sv_model)
+      if (svChanged) {
+        const h = p.svHarness ?? r.sv_harness
+        const m = p.svModel ?? r.sv_model
+        log(user.id, { tier: 'system', source: 'system', what: `Supervisor: ${h === 'opencode' ? 'OpenCode' : 'Claude Code'}, ${m}` })
       }
       changed(user.id)
       return state(user)

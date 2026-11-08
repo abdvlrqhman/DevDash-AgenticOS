@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ChevronDown, X } from 'lucide-react'
+import { NativeSelect } from '@/components/app/native-select'
 import { PageBody, PageHeader, SettingsSection } from '@/components/app/page'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -14,6 +15,9 @@ import { useTopic } from '@/lib/live'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
+import { commandsQuery, FALLBACK_MODELS, profilesQuery } from '../claude/data'
+import { HARNESS, harnessOf, type Harness } from '../claude/harness'
+import { modelLabel, type ModelInfo } from '../claude/models'
 
 type State = Awaited<ReturnType<typeof fetchState>>
 export type Entry = Awaited<ReturnType<typeof fetchRecent>>['entries'][number]
@@ -111,6 +115,7 @@ export function AutopilotPage() {
         </section>
 
         {s?.team && s.team.length > 0 && <TeamForm projects={s.team} onSaved={set} />}
+        {s && <SupervisorForm supervisor={s.supervisor} onSaved={set} />}
         {s && <SettingsForm settings={s.settings} onSaved={set} />}
         {s && <RulesForm rules={s.rules} custom={s.customRules} onSaved={set} />}
       </PageBody>
@@ -206,6 +211,78 @@ export function LogEntry({ e, withDay }: { e: Entry; withDay?: boolean }) {
         </div>
       </div>
     </li>
+  )
+}
+
+type Supervisor = State['supervisor']
+
+function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSaved: (s: State) => void }) {
+  const [v, setV] = useState(supervisor)
+  useEffect(() => setV(supervisor), [supervisor])
+  const save = useMutation({
+    mutationFn: (p: Partial<Settings>) => unwrap(api.api.autopilot.settings.$patch({ json: p })),
+    onSuccess: (s) => {
+      onSaved(s)
+      toast.success('Saved.')
+    },
+  })
+  const dirty = JSON.stringify({ harness: v.harness, profile: v.profile, model: v.model, dailyCap: v.dailyCap })
+    !== JSON.stringify({ harness: supervisor.harness, profile: supervisor.profile, model: supervisor.model, dailyCap: supervisor.dailyCap })
+
+  const profiles = useQuery(profilesQuery)
+  const agents = (profiles.data?.agents as { harness: string; installed: boolean; profiles: { name: string }[] }[] | undefined) ?? []
+  const claudeProfiles = (profiles.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? []
+  const installed = agents.filter((a) => a.installed).map((a) => a.harness)
+  const availableAgents: Harness[] = (['claude' as const, ...installed.filter((h) => h !== 'claude')]).filter(
+    (h, i, arr) => arr.indexOf(h) === i,
+  ) as Harness[]
+
+  const agentProfiles = v.harness === 'claude'
+    ? claudeProfiles.map((p) => p.name)
+    : (agents.find((a) => a.harness === v.harness)?.profiles ?? []).map((p) => p.name)
+
+  const models = useQuery({ ...commandsQuery(v.profile, harnessOf({ harness: v.harness })), enabled: agentProfiles.includes(v.profile) })
+  const offered = models.data?.models as ModelInfo[] | undefined
+  const modelList: ModelInfo[] = offered?.length ? offered : v.harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
+
+  const changeAgent = (h: string) => setV({ ...v, harness: h, profile: 'default', model: h === 'claude' ? 'sonnet' : '' })
+
+  return (
+    <SettingsSection title="Supervisor" description="Which agent, account and model the supervisor runs on. Stronger models judge better but use more of your plan; it runs every 10 minutes.">
+      <FieldGroup>
+        <ErrorAlert error={save.error} />
+        <Row id="sv-agent" label="Agent" description="Only agents installed on this server.">
+          <NativeSelect id="sv-agent" className="w-44" value={v.harness} onChange={(e) => changeAgent(e.target.value)}>
+            {availableAgents.map((h) => <option key={h} value={h}>{HARNESS[h].label}</option>)}
+          </NativeSelect>
+        </Row>
+        {agentProfiles.length > 1 && (
+          <Row id="sv-profile" label="Account" description="Which of your profiles pays for supervisor calls.">
+            <NativeSelect id="sv-profile" className="w-44" value={v.profile} onChange={(e) => setV({ ...v, profile: e.target.value, model: v.harness === 'claude' ? 'sonnet' : '' })}>
+              {agentProfiles.map((p) => <option key={p} value={p}>{p}</option>)}
+            </NativeSelect>
+          </Row>
+        )}
+        <Row id="sv-model" label="Model" description="The model the supervisor uses to read sessions and decide.">
+          <NativeSelect id="sv-model" className="w-44" value={v.model} onChange={(e) => setV({ ...v, model: e.target.value })}>
+            {modelList.map((m) => <option key={m.value} value={m.value}>{m.displayName}</option>)}
+          </NativeSelect>
+        </Row>
+        {v.harness !== 'claude' && (
+          <Row id="sv-cap" label="Daily model-call cap" description="OpenCode plan usage can't be read, so the supervisor stops after this many model calls per day.">
+            <Input id="sv-cap" type="number" inputMode="numeric" min={1} max={10000} className="w-24" value={v.dailyCap}
+              onChange={(e) => setV({ ...v, dailyCap: Number(e.target.value) })} />
+          </Row>
+        )}
+        <p className="text-xs text-muted-foreground">
+          {supervisor.modelCallsToday} model call{supervisor.modelCallsToday === 1 ? '' : 's'} today
+          {v.harness !== 'claude' && ` of ${supervisor.dailyCap}`}.
+        </p>
+        <div><Button disabled={!dirty || save.isPending} onClick={() => save.mutate({
+          svHarness: v.harness, svProfile: v.profile, svModel: v.model, svDailyCap: v.dailyCap,
+        })}>Save supervisor</Button></div>
+      </FieldGroup>
+    </SettingsSection>
   )
 }
 

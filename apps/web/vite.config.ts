@@ -3,7 +3,8 @@ import react from '@vitejs/plugin-react'
 import tailwind from '@tailwindcss/vite'
 import { fileURLToPath } from 'node:url'
 
-const api = 'http://127.0.0.1:8787'
+// DEVDASH_API: a dev server on another port (e.g. a second instance beside the usual one).
+const api = process.env.DEVDASH_API || 'http://127.0.0.1:8787'
 
 export default defineConfig({
   plugins: [react(), tailwind()],

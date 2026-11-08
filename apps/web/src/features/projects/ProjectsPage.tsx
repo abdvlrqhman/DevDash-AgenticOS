@@ -21,6 +21,7 @@ import { relativeTime } from '../claude/data'
 import { Progress } from '../files/Progress'
 import { projectsQuery, useLiveWork, type Project } from '../work/data'
 import { GitHubConnection } from '../work/GitHub'
+import { RecentlyDeleted } from './DeleteProject'
 
 /** A choice of two or three, as one tone-stepped pill: the chosen one lifts onto the page's ground. */
 export const segmented = 'gap-0.5 rounded-full bg-surface p-0.5'
@@ -105,6 +106,7 @@ export function ProjectsPage() {
             </ul>
           </>
         )}
+        <RecentlyDeleted />
       </PageBody>
       <NewProject open={adding} onClose={() => setAdding(false)} />
     </>
