@@ -231,7 +231,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
 
   // Items a team role creates through its session are attributed to the role, not the account the team runs as.
   registerMcp({ db, agents, projects, tasks, notes, services, authorRole: (u, s) => team?.service?.roleOf(u, s)?.r.name ?? null })
-  registerAssistantMcp({ agents, claude, assistant, notify: notifications.notify })
+  registerAssistantMcp({ agents, claude, assistant, projects, notify: notifications.notify })
   registerAutopilotMcp({ agents, autopilot })
   reviews.registerMcp()
   deploys.registerMcp()

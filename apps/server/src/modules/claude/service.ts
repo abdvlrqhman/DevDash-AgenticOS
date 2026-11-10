@@ -305,6 +305,10 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   const preambles = new Set<Preamble>()
   // Features told the moment a session asks something (a question, a permission, a plan): autopilot.
   const prompts = new Set<(s: SessionRow, request: { requestId: string; toolName: string; ownerOnly: boolean }) => void>()
+  // Per session, from its first message until it goes quiet again: whether every message in that stretch was typed by
+  // its owner (true), or one came from a schedule, autopilot, another agent or a teammate (false). Not kept over a
+  // restart: unknown counts as not typed. Some tools only run on the owner's own word (directly).
+  const typedTurn = new Map<string, boolean>()
   function labels(projectId: number) {
     const all = new Map<string, SessionLabel>()
     for (const fn of labellers) {
@@ -419,6 +423,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         // CLI exited: back to Chat mode, ready to resume.
         const mode = st === 'stopped' ? 'chat' : ev.mode === 'cli' || ev.mode === 'chat' ? ev.mode : s.mode
         repo.setStatus(s.id, st === 'stopped' ? 'idle' : st, typeof ev.detail === 'string' ? ev.detail : null, mode)
+        if (st !== 'working' && st !== 'waiting') typedTurn.delete(s.id)
         // Project pages show who is working there right now.
         if (s.project_id && (st === 'stopped' ? 'idle' : st) !== s.status) hub.publish('projects', { type: 'changed' })
         // Claude may have committed: look for "fixes #N" now rather than at the next fetch.
@@ -590,6 +595,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       }
       const mode = l?.mode === 'cli' ? 'cli' : 'chat'
       const status = l?.status && STATUSES.has(l.status) ? l.status : s.status === 'working' || s.status === 'waiting' ? 'idle' : s.status
+      if (!l || (status !== 'working' && status !== 'waiting')) typedTurn.delete(s.id)
       if (mode !== s.mode || status !== s.status) {
         repo.setStatus(s.id, status, s.status_detail, mode)
         if (s.project_id && status !== s.status) hub.publish('projects', { type: 'changed' })
@@ -650,7 +656,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     return { docs, note }
   }
 
-  async function sendTo(user: User, s: SessionRow, text: string, images: Image[], files: Attachment[] = [], uploads: Upload[] = []) {
+  async function sendTo(user: User, s: SessionRow, text: string, images: Image[], files: Attachment[] = [], uploads: Upload[] = [], typed = false) {
     const inline = [...images, ...files].reduce((n, a) => n + (a.data.length * 3) / 4, 0)
     if (inline + uploads.reduce((n, u) => n + u.size, 0) > MAX_ATTACHMENTS_BYTES) {
       throw new AppError(400, 'too_big', 'Attachments can add up to 250 MB per message.')
@@ -658,6 +664,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     const uuid = randomUUID()
     const { docs, note } = await attach(s, uuid, files, uploads)
     repo.addSender(s.id, uuid, user.id)
+    typedTurn.set(s.id, (typedTurn.get(s.id) ?? true) && typed && user.id === s.owner_id)
     const message = { role: 'user', content: content(`${text}${note}`.trim(), images, docs) }
     const guest = guestOf(user, s)
     const before = user.id === s.owner_id ? [...preambles].flatMap((fn) => {
@@ -837,12 +844,42 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       return toDto(repo.byId(id)!)
     },
 
-    async send(user: User, id: string, text: string, images: Image[], files: Attachment[] = [], uploads: Upload[] = []) {
+    /**
+     * Claude Code runs /model and /effort only in its terminal: typed in Chat they'd reach Claude as words, and Claude can
+     * only say it can't. DevDash runs them itself, as its model menu does, from the web, the apps or another agent. Returns
+     * what to tell the person, or null when the text isn't one of them (then it's an ordinary message).
+     */
+    async command(user: User, id: string, text: string): Promise<string | null> {
+      const m = /^\/(model|effort)(?:\s+(\S+))?\s*$/i.exec(text.trim())
+      if (!m) return null
+      const s = find(user, id)
+      const [, name, arg] = m as unknown as [string, string, string | undefined]
+      if (name.toLowerCase() === 'model') {
+        if (!arg) return `The model is ${s.model ?? 'the default'}. Type /model with a name (opus, sonnet, haiku or a model id), or /model default.`
+        if (!/^[\w.:[\]-]{1,120}$/.test(arg)) throw new AppError(400, 'bad_model', "That isn't a model name.")
+        const model = arg.toLowerCase() === 'default' ? null : arg
+        await this.update(user, id, { model })
+        return model ? `Model switched to ${model}.` : 'Model switched to the default.'
+      }
+      if (!arg) return `The effort is ${s.effort ?? 'the default'}. Type /effort with ${EFFORTS.join(', ')}, or /effort default.`
+      const effort = arg.toLowerCase() === 'default' ? null : arg.toLowerCase()
+      await this.update(user, id, { effort })
+      return effort ? `Effort set to ${effort}.` : 'Effort set to the default.'
+    },
+
+    /**
+     * `typed`: the person wrote it themself (the message box), rather than a schedule, autopilot or an agent sending it
+     * for them. Only the messages route says so.
+     */
+    async send(user: User, id: string, text: string, images: Image[], files: Attachment[] = [], uploads: Upload[] = [], { typed = false } = {}) {
       const s = find(user, id)
       requireSend(user, s)
       if (s.mode === 'cli') throw new AppError(409, 'cli_mode', 'This session is open in the CLI. Switch to Chat to send from here.')
-      return sendTo(user, s, text, images, files, uploads)
+      return sendTo(user, s, text, images, files, uploads, typed)
     },
+
+    /** Whether the session's current turn answers only messages its owner typed themself (see typedTurn). */
+    typedByOwner: (id: string) => typedTurn.get(id) === true,
 
     /**
      * One piece of a big attachment, written straight into the session owner's account (Claude runs as them), so a

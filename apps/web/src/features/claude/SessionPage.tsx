@@ -222,9 +222,15 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
 
   const send = async (said: string, images: Img[], files: Doc[] = [], uploads: Upload[] = []) => {
     const text = embedded?.prefix && !said.startsWith('/') ? `${embedded.prefix()}\n\n${said}` : said
-    const { uuid } = await unwrap(api.api.claude.sessions[':id'].messages.$post({
+    const { uuid, command } = await unwrap(api.api.claude.sessions[':id'].messages.$post({
       param: { id }, json: { text, images, files: files.map(({ name, mediaType, data }) => ({ name, mediaType, data })), uploads },
     }))
+    // /model and /effort: DevDash ran them (nothing went to Claude); the header shows the change, this says it.
+    if (command || !uuid) {
+      if (command) toast.success(command)
+      void info.refetch()
+      return
+    }
     stick.current = true
     // The server also broadcasts it (for other devices) and may get here first: merge by uuid, never append twice.
     setRaw((r) => mergeRaw(r, [{

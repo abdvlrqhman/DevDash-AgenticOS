@@ -36,6 +36,23 @@ function setup({ tailnetConnected }: { tailnetConnected?: (userId: number) => bo
   return { claude, db, notified, sent, emit, ann: user(1, 'Ann'), bob: user(2, 'Bob'), cat: user(3, 'Cat') }
 }
 
+test('/model and /effort typed in Chat are run by DevDash, like its model menu; anything else is a message', async () => {
+  const { claude, db, ann, bob } = setup()
+  const row = () => db.prepare("select model, effort from claude_sessions where id = 's1'").get() as { model: string | null; effort: string | null }
+  assert.equal(await claude.command(ann, 's1', 'please use opus'), null, 'an ordinary message')
+  assert.equal(await claude.command(ann, 's1', '/compact'), null, "Claude Code's own command: it goes to Claude")
+  assert.match((await claude.command(ann, 's1', '/model'))!, /The model is the default\. Type \/model/)
+  assert.equal(await claude.command(ann, 's1', '/model claude-opus-5-5'), 'Model switched to claude-opus-5-5.')
+  assert.equal(row().model, 'claude-opus-5-5')
+  assert.equal(await claude.command(ann, 's1', '  /model default '), 'Model switched to the default.')
+  assert.equal(row().model, null)
+  assert.equal(await claude.command(ann, 's1', '/effort XHigh'), 'Effort set to xhigh.')
+  assert.equal(row().effort, 'xhigh')
+  await assert.rejects(() => claude.command(ann, 's1', '/effort turbo'), /Unknown effort/)
+  await assert.rejects(() => claude.command(ann, 's1', '/model $(whoami)'), /isn't a model name/)
+  await assert.rejects(() => claude.command(bob, 's1', '/model haiku'), /Only the owner can send/, 'watching only')
+})
+
 test('watching a shared session: ask to join, the owner lets one person in, only they can send', async () => {
   const { claude, notified, ann, bob, cat } = setup()
   assert.equal((await claude.get(bob, 's1')).canSend, false)

@@ -2,10 +2,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { openDb } from '../../core/db.ts'
 import { createHub } from '../../core/hub.ts'
+import { activityService } from '../activity/service.ts'
 import type { AgentsService } from '../agents/service.ts'
 import type { User } from '../auth/repo.ts'
 import { claudeService } from '../claude/service.ts'
-import type { ProjectsService } from '../projects/service.ts'
+import { projectsService } from '../projects/service.ts'
+import { searchService } from '../search/service.ts'
+import { tasksService } from '../tasks/service.ts'
 import { condense, registerAssistantMcp } from './mcp.ts'
 import { describeWhen, parseWhen, assistantService } from './service.ts'
 
@@ -24,20 +27,23 @@ function setup() {
     onRpc: (m: string, fn: (username: string, params: unknown) => unknown) => void rpcs.set(m, fn),
     request: async (_u: string, req: Record<string, unknown>) => {
       sent.push(req)
-      return req.op === 'claude.pending' ? { pending: [] } : { ok: true }
+      return req.op === 'claude.pending' ? { pending: [] } : req.op === 'git.init' ? { defaultBranch: 'main' } : { ok: true }
     },
   } as unknown as AgentsService
   const hub = createHub()
   const notify = async (userId: number, kind: string, n: { title: string }) => void notified.push({ userId, kind, title: n.title })
   const connected = { tailnet: false, drive: true }
-  const claude = claudeService({ db, agents, hub, notify, projects: { forPath: () => null } as unknown as ProjectsService, tailnetConnected: () => connected.tailnet })
+  const activity = activityService({ db, hub })
+  const tasks = tasksService({ db, hub, activity, search: searchService({ db }) })
+  const projects = projectsService({ db, hub, agents, activity, tasks, gitSafeDir: async () => {}, root: '/srv/devdash' })
+  const claude = claudeService({ db, agents, hub, notify, projects, tailnetConnected: () => connected.tailnet })
   const assistant = assistantService({ db, hub, claude, notify, tailnetConnected: () => connected.tailnet, driveConnected: () => connected.drive })
-  registerAssistantMcp({ agents, claude, assistant, notify })
+  registerAssistantMcp({ agents, claude, assistant, projects, notify })
   const user = (id: number, name: string, username: string): User => ({ id, name, username, email: '', role: 'member' })
   const rpc = (username: string, method: string, sessionId: string | null, args: Record<string, unknown> = {}) =>
     Promise.resolve().then(() => rpcs.get(`mcp.${method}`)!(username, { sessionId, args }))
   const session = (id: string) => db.prepare('select * from claude_sessions where id = ?').get(id) as Record<string, unknown>
-  return { db, connected, sent, notified, assistant, rpc, session, emit: (ev: Record<string, unknown>) => onEvent?.('ann', ev), ann: user(1, 'Ann Lee', 'ann'), bob: user(2, 'Bob', 'bob') }
+  return { db, connected, sent, notified, assistant, claude, projects, rpc, session, emit: (ev: Record<string, unknown>) => onEvent?.('ann', ev), ann: user(1, 'Ann Lee', 'ann'), bob: user(2, 'Bob', 'bob') }
 }
 
 test('schedule times: weekly slots and one-offs, read the way people and agents write them', () => {
@@ -101,6 +107,64 @@ test("the agent's tools work only in the member's own agent, and act as them", a
   assert.deepEqual((msg.content as { text: string }[]).at(-1)!.text, "(From Hamasa, Ann's personal agent) run the tests")
   await assert.rejects(rpc('ann', 'session_send', sessionId, { id: sessionId, text: 'loop' }), /your own conversations/)
   await assert.rejects(rpc('ann', 'open_page', sessionId, { path: '//evil.example' }), /one slash/)
+})
+
+test('a new project only on the member\'s own word: made like the Projects page makes it, then a session can start there', async () => {
+  const { assistant, claude, projects, rpc, sent, db, emit, ann, bob } = setup()
+  const { sessionId } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'Europe/Berlin' })
+  const id = sessionId!
+  const create = (args: Record<string, unknown> = { name: 'Shop app', instructions: 'An online shop. Use TypeScript.' }) =>
+    rpc('ann', 'project_create', id, args)
+  const typed = (text: string) => claude.send(ann, id, text, [], [], [], { typed: true })
+  const quiet = () => emit({ ev: 'claude.status', id, status: 'idle' })
+
+  // Nothing asked yet (or DevDash restarted since): refused, and nothing is made.
+  await assert.rejects(create(), /Only Ann can start a project/)
+  assert.equal(projects.list(false, 1).length, 0)
+  // Someone else's agent, or a coding session that isn't her agent: not even offered.
+  await assert.rejects(rpc('bob', 'project_create', id, { name: 'X' }), /only in your personal agent/)
+  await assert.rejects(rpc('ann', 'project_create', 'plain', { name: 'X' }), /only in your personal agent/)
+
+  // A schedule, or autopilot, writing to her agent: refused.
+  await assistant.tick(Date.now()) // no schedules: nothing sent
+  await claude.send(ann, id, '⏰ Scheduled: Weekly\n\nStart a project for the newsletter.', [])
+  await assert.rejects(create(), /didn't come from that/)
+  // She writes too while that turn is still going: still refused, the turn isn't hers alone.
+  await typed('and make it quick')
+  await assert.rejects(create(), /Only Ann/)
+  quiet()
+
+  // Her own message: made through projects.create, with her as the creator, in the projects folder.
+  await typed('Make a new project "Shop app" for the online shop')
+  const made = await create() as { slug: string; folder: string; url: string; next: string }
+  assert.deepEqual([made.slug, made.folder, made.url], ['shop-app', '/srv/devdash/projects/shop-app', '/projects/shop-app'])
+  assert.match(made.next, /session_create/)
+  assert.ok(sent.some((r) => r.op === 'git.init' && r.path === '/srv/devdash/projects/shop-app'))
+  const row = db.prepare("select created_by, instructions from projects where slug = 'shop-app'").get() as { created_by: number; instructions: string }
+  assert.deepEqual([row.created_by, row.instructions], [1, 'An online shop. Use TypeScript.'])
+  assert.equal(projects.list(false, 1).find((p) => p.slug === 'shop-app')!.creator.username, 'ann')
+  // The page's rules hold: a taken short name or a bad one is refused.
+  await assert.rejects(create({ name: 'Shop app' }), /taken|exists|already/i)
+  await assert.rejects(create({ name: 'Bad', slug: 'Not OK!' }), /short name/)
+
+  // Straight on: a session in the new project.
+  const s = await rpc('ann', 'session_create', id, { prompt: 'Set up the repo with a README.', project: 'shop-app', worktree: false }) as { project: string; folder: string }
+  assert.deepEqual([s.project, s.folder], ['shop-app', '/srv/devdash/projects/shop-app'])
+
+  // Once her turn is over, the next one isn't hers until she writes again.
+  quiet()
+  await assert.rejects(create({ name: 'Another' }), /Only Ann/)
+
+  // A teammate's message, even typed, never counts as hers; nor does her agent writing to a session for her.
+  db.prepare("update claude_sessions set shared = 1, shared_can_send = 1 where id = 'plain'").run()
+  await claude.send(bob, 'plain', 'make a project', [], [], [], { typed: true })
+  assert.equal(claude.typedByOwner('plain'), false)
+  emit({ ev: 'claude.status', id: 'plain', status: 'idle' })
+  await rpc('ann', 'session_send', id, { id: 'plain', text: 'make a project' })
+  assert.equal(claude.typedByOwner('plain'), false)
+  emit({ ev: 'claude.status', id: 'plain', status: 'idle' })
+  await claude.send(ann, 'plain', 'make a project', [], [], [], { typed: true })
+  assert.equal(claude.typedByOwner('plain'), true)
 })
 
 test('schedules run once per slot in the member\'s time zone; one-offs switch off after running', async () => {

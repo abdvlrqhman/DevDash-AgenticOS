@@ -105,7 +105,12 @@ export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMi
     })
     .post('/sessions/:id/messages', json(SendInput), async (c) => {
       const { text, images, files, uploads } = c.req.valid('json')
-      return c.json({ uuid: await claude.send(c.get('user'), c.req.param('id'), text, images, files, uploads) })
+      // /model and /effort are run here (claude.command), not sent to Claude.
+      const done = !images.length && !files.length && !uploads.length ? await claude.command(c.get('user'), c.req.param('id'), text) : null
+      const sent: { uuid: string | null; command: string | null } = done
+        ? { uuid: null, command: done }
+        : { uuid: await claude.send(c.get('user'), c.req.param('id'), text, images, files, uploads, { typed: true }), command: null }
+      return c.json(sent)
     })
     .post('/sessions/:id/uploads', query(z.object({ upload: UploadId, name: z.string().min(1).max(255), offset: z.coerce.number().int().min(0), total: z.coerce.number().int().min(1) })), async (c) => {
       const data = Buffer.from(await c.req.arrayBuffer())

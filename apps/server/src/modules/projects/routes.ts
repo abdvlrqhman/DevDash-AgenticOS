@@ -9,7 +9,8 @@ import type { ProjectTrash } from './trash.ts'
 const CHUNK = 32 * 1024 * 1024 // Cloudflare caps a request at 100 MB, so a big zip (up to 20 GB) arrives in pieces.
 const UploadId = z.string().regex(/^[a-f0-9]{8,64}$/)
 const Instructions = z.string().max(20_000)
-const Create = z.object({ name: z.string().max(80).default(''), slug: z.string().max(40).optional(), repoUrl: z.string().max(500).optional(), instructions: Instructions.optional() })
+/** A new project, from the page or the personal agent (assistant/mcp.ts project_create): one way to make one. */
+export const Create = z.object({ name: z.string().max(80).default(''), slug: z.string().max(40).optional(), repoUrl: z.string().max(500).optional(), instructions: Instructions.optional() })
 const FromZip = z.object({ name: z.string().max(80).default(''), slug: z.string().max(40).optional(), uploadId: UploadId, instructions: Instructions.optional() })
 const Patch = z.object({ name: z.string().min(1).max(80).optional(), archived: z.boolean().optional(), sessionSharing: z.enum(SESSION_SHARING).optional(), instructions: Instructions.optional() })
 const Connect = z.object({ repoUrl: z.string().min(1).max(500) })

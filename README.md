@@ -76,6 +76,9 @@ Every member has their own agent, one shortcut away (⌘I or Ctrl+I) on every pa
   your devices. It knows which page you're on, so "this" and "here" mean what you're looking at.
 - **Acts for you.** It creates and updates tasks and notes, starts a coding session in the right project with a full
   brief, sends follow-ups to your running sessions or stops them, opens pages for you and notifies your phone.
+- **Starts projects on your word.** Ask it for a new project and it creates one the same way the Projects page does
+  (empty, or cloned from a repository), then starts work there. DevDash refuses it unless you asked in a message you
+  wrote yourself: never from a schedule, autopilot or a teammate's request.
 - **Works on a schedule.** Ask for a morning brief on weekdays, or a one-off check after tonight's deploy. Scheduled runs
   report in a few lines and notify you only when something needs you.
 - **Your agent, your access.** It runs as your own Linux user, on Claude Code or OpenCode, with the model, effort and
@@ -171,7 +174,8 @@ Every session is a real coding agent, run as the member who started it.
   so more ACP agents can follow.
 - **Two ways to work.** A chat view with tool steps, diffs, subagents, to-do lists, permission prompts, questions and
   file links that open in a viewer, or the agent's own terminal app (the Claude Code CLI, OpenCode's TUI). Switch a
-  session between them any time.
+  session between them any time. In the chat, typing `/model` or `/effort` switches the session like its menu does, and
+  code blocks have copy buttons.
 - **Your own accounts.** Each member signs in to their own Claude plan, and to OpenCode with its own account, an OpenCode
   Go subscription or any provider (ChatGPT, GitHub Copilot, API keys), with optional extra profiles for each. Sign-ins
   run in a terminal tab with a code to enter on any device. Cost, tokens and context are shown per session, and Claude
@@ -181,6 +185,10 @@ Every session is a real coding agent, run as the member who started it.
 - **A worktree per session.** A session can get a fresh worktree on its own branch. When it's done, *Ready to review*
   shows the diff and opens a GitHub pull request or merges it on the server.
 - **Project instructions** apply to every new session in a project, like a Claude Project.
+- **Skills.** Add skills for all your agents under *More → Skills*, or for one project in its *Skills* tab, where each
+  change is a commit of its own in `.claude/skills`. Write them in DevDash, upload a `.zip` or `.skill`, or fetch them
+  from a GitHub link. Uploads and links are reviewed first, with scripts and binaries marked, and nothing from a skill
+  runs while it installs.
 - **Team roles (optional).** AI team members per project (CEO, CTO, marketing and so on), on Claude Code or OpenCode, with goals, schedules,
   triggers, threads, approvals and a shared notebook. Switch them off server-wide with `DEVDASH_TEAM=0`.
 
@@ -195,6 +203,8 @@ Everything the team and its agents work on, in one place.
 
 - **Home** shows what needs you, what's running and what changed.
 - **Projects** are git checkouts shared by the team, cloned from GitHub or imported from a zip (up to 20 GB, resumable).
+  Whoever added a project can delete it: the dialog shows what's at risk first (uncommitted work, commits not on
+  GitHub, running sessions and services), and *Recently deleted* restores it for seven days.
 - **Tasks and notes:** a board per project and Markdown notes. Agents use them too, through MCP tools.
 - **Files:** browse, upload (chunked and resumable), preview, and share links with an expiry date, a password and a
   download limit.

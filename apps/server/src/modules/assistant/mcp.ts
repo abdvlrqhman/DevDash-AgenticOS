@@ -3,6 +3,8 @@ import type { AgentsService } from '../agents/service.ts'
 import type { User } from '../auth/repo.ts'
 import { HARNESSES, PERMISSION_MODES, type ClaudeService, type Harness } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
+import { Create as ProjectCreate } from '../projects/routes.ts'
+import type { ProjectsService } from '../projects/service.ts'
 import { AGENT_NAME, PAGE_TAG } from './prompt.ts'
 import type { AssistantService } from './service.ts'
 
@@ -41,8 +43,8 @@ export function condense(messages: Msg[], max = 40) {
  * The tools only a member's personal agent gets (packages/claude-plugin/mcp/assistant.mjs), on top of the DevDash tools
  * every session has. They act as that member, with exactly their access: the session's owner is who they act for.
  */
-export function registerAssistantMcp({ agents, claude, assistant, notify }: {
-  agents: AgentsService; claude: ClaudeService; assistant: AssistantService
+export function registerAssistantMcp({ agents, claude, assistant, projects, notify }: {
+  agents: AgentsService; claude: ClaudeService; assistant: AssistantService; projects: ProjectsService
   notify: (userId: number, kind: NotificationKind, n: { title: string; body?: string; url?: string; tag?: string }) => Promise<void>
 }) {
   const ctx = (username: string, params: unknown) => {
@@ -108,12 +110,40 @@ export function registerAssistantMcp({ agents, claude, assistant, notify }: {
     const id = need(c.args.id, 'the session id')
     if (assistant.ofSession(c.user.username, id)) throw new AppError(400, 'bad_args', 'That is one of your own conversations; answer here instead.')
     const first = c.user.name.split(' ')[0]
-    await claude.send(c.user, id, `(From ${AGENT_NAME}, ${first}'s personal agent) ${need(c.args.text, 'the message')}`, [])
+    const text = need(c.args.text, 'the message').trim()
+    // A slash command goes as it is: Claude Code only runs it when it starts the message, and DevDash runs /model and
+    // /effort itself (claude.command).
+    if (text.startsWith('/')) {
+      const done = await claude.command(c.user, id, text)
+      if (done) return done
+      await claude.send(c.user, id, text, [])
+      return `Sent the command ${text.split(/\s/)[0]}. Check on it with session_read; it's at /sessions/${id}.`
+    }
+    await claude.send(c.user, id, `(From ${AGENT_NAME}, ${first}'s personal agent) ${text}`, [])
     return `Sent. Check on it with session_read; it's at /sessions/${id}.`
   })
   on('session_stop', async (c) => {
     await claude.interrupt(c.user, need(c.args.id, 'the session id'))
     return 'Stopped its current turn.'
+  })
+
+  // A new project, made exactly like the Projects page makes one (projects.create: the git repo in /srv/devdash/projects,
+  // the person as its creator). Starting a project is theirs to decide: it only runs while the agent answers a message
+  // they typed themself, never a schedule, autopilot, another agent or a teammate.
+  on('project_create', async (c) => {
+    const first = c.user.name.split(' ')[0]
+    if (!claude.typedByOwner(c.sessionId)) {
+      throw new AppError(403, 'not_asked', `Only ${first} can start a project, by asking for it in a message they write to you here. This turn didn't come from that (a schedule, autopilot or another agent), so it wasn't created; ask ${first} to confirm.`)
+    }
+    const input = ProjectCreate.safeParse({
+      name: str(c.args.name) ?? '', slug: str(c.args.slug), repoUrl: str(c.args.repo_url), instructions: str(c.args.instructions),
+    })
+    if (!input.success) throw new AppError(400, 'bad_args', `Check the arguments: ${input.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}.`)
+    const p = await projects.create(c.user, input.data)
+    return {
+      slug: p.slug, name: p.name, folder: p.path, repoUrl: p.repoUrl, defaultBranch: p.defaultBranch, url: `/projects/${p.slug}`,
+      next: `Start work there with session_create and project "${p.slug}".`,
+    }
   })
 
   on('schedules_list', (c) => assistant.schedules(c.user))
