@@ -13,6 +13,8 @@ export const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 /** The coding agents a session can run (the member's agent has a driver for each: apps/agent/src/harness.ts). */
 export const HARNESSES = ['claude', 'opencode'] as const
+/** Models Claude Code's advisor tool can consult (it refuses one less capable than the session's own model). */
+export const ADVISORS = ['sonnet', 'opus', 'fable'] as const
 export type Harness = (typeof HARNESSES)[number]
 /** How notifications and messages name the agent of a session. */
 export const agentName = (harness: string) => (harness === 'opencode' ? 'OpenCode' : 'Claude')
@@ -126,7 +128,7 @@ export function toDto(s: SessionRow) {
     owner: { id: s.owner_id, username: s.owner_username, name: s.owner_name },
     createdAt: s.created_at, lastActivityAt: s.last_activity_at,
     project: s.project_slug ? { slug: s.project_slug, name: s.project_name! } : null, worktree: s.worktree,
-    fastMode: !!s.fast_mode, fast: live.get(s.id)?.fast ?? null, context: context(s),
+    fastMode: !!s.fast_mode, fast: live.get(s.id)?.fast ?? null, advisorModel: s.advisor_model, context: context(s),
     remoteControl: !!s.remote_control, remoteUrl: live.get(s.id)?.remoteUrl ?? null, remoteError: live.get(s.id)?.remoteError ?? null,
     reachTailnet: !!s.reach_tailnet, tailnetMcps: parseTailnetMcps(s),
     guestCaps: capsOf(s), guestCapsFromProject: s.project_id != null && !s.guest_caps_custom,
@@ -167,7 +169,7 @@ export const memoryHealth = (agents: AgentsService, username: string, timeoutMs 
 
 const baseLaunch = (s: SessionRow) => ({
   id: s.id, harness: s.harness, nativeId: s.native_id, cwd: s.cwd, profile: s.profile, model: s.model, effort: s.effort, permissionMode: s.permission_mode, started: !!s.started,
-  fast: !!s.fast_mode, remote: !!s.remote_control, title: s.title,
+  fast: !!s.fast_mode, advisor: s.advisor_model, remote: !!s.remote_control, title: s.title,
   instructions: s.instructions, toolPolicy: s.tool_policy ? (JSON.parse(s.tool_policy) as { tools?: string[]; allow?: string[] }) : null,
   // The agent fills in the actual proxy ports locally (it is the member); here we only say whether to route and where.
   reachTailnet: !!s.reach_tailnet, tailnetMcps: parseTailnetMcps(s), guestCaps: capsOf(s),
@@ -1001,13 +1003,14 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
     async update(user: User, id: string, p: {
       title?: string; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
-      model?: string | null; effort?: string | null; permissionMode?: string; fastMode?: boolean; remoteControl?: boolean
+      model?: string | null; effort?: string | null; permissionMode?: string; fastMode?: boolean; remoteControl?: boolean; advisorModel?: string | null
       reachTailnet?: boolean; tailnetMcp?: string | null; tailnetMcps?: TailnetMcp[] | null
       /** Whether it gets the owner's Google Drive set up (server features only, like the personal agent's settings). */
       drive?: boolean
     }) {
       const s = find(user, id)
       if (p.effort && s.harness === 'claude' && !(EFFORTS as readonly string[]).includes(p.effort)) throw new AppError(400, 'bad_effort', 'Unknown effort level.')
+      if (p.advisorModel && s.harness !== 'claude') throw new AppError(400, 'no_advisor', 'Only Claude Code sessions have an advisor.')
       const ownerOnly = p.title !== undefined || p.shared !== undefined || p.sharedCanSend !== undefined || p.archived !== undefined
         || p.remoteControl !== undefined || p.reachTailnet !== undefined || p.tailnetMcp !== undefined || p.tailnetMcps !== undefined
         || p.drive !== undefined
@@ -1031,6 +1034,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         archived: p.archived === undefined ? undefined : p.archived ? 1 : 0,
         model: p.model, effort: p.effort, permission_mode: p.permissionMode,
         fast_mode: p.fastMode === undefined ? undefined : p.fastMode ? 1 : 0,
+        advisor_model: p.advisorModel,
         reach_tailnet: p.reachTailnet === undefined ? undefined : p.reachTailnet ? 1 : 0,
         tailnet_mcps: tailnetMcps,
         drive: p.drive === undefined ? undefined : p.drive ? 1 : 0,
@@ -1042,7 +1046,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       if (p.shared === false) Object.assign(patch, { guest_caps: '', guest_caps_custom: 0 }) // only the owner now
       repo.patch(id, patch)
       if (p.shared !== undefined) repo.clearPeople(id) // the plain switch means the whole team, or only the owner
-      for (const [key, value] of [['model', p.model], ['effort', p.effort], ['permissionMode', p.permissionMode], ['fast', p.fastMode]] as const) {
+      for (const [key, value] of [['model', p.model], ['effort', p.effort], ['permissionMode', p.permissionMode], ['fast', p.fastMode], ['advisor', p.advisorModel]] as const) {
         if (value !== undefined && s.mode === 'chat') await agents.request(s.owner_username, { op: 'claude.set', id, key, value })
       }
       // Turning it on again while it has no link (it failed, or the process went away) tries again.

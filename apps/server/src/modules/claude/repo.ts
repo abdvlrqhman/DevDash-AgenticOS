@@ -29,6 +29,7 @@ export type SessionRow = {
   project_id: number | null
   worktree: string | null
   fast_mode: number
+  advisor_model: string | null
   remote_control: number
   context_json: string | null
   instructions: string | null
@@ -67,7 +68,7 @@ export const canSeeSql = (who: string) =>
   `(s.owner_id = ${who} or s.shared = 1 or s.id in (select session_id from claude_session_viewers where user_id = ${who}))`
 
 // Columns a PATCH may touch; anything else is ignored.
-const PATCHABLE = ['title', 'title_custom', 'shared', 'shared_can_send', 'archived', 'model', 'effort', 'permission_mode', 'mode', 'started', 'fast_mode', 'remote_control', 'context_json', 'instructions', 'tool_policy', 'listed', 'reach_tailnet', 'tailnet_mcp', 'tailnet_mcps', 'guest_caps', 'guest_caps_custom', 'origin_kind', 'origin_role', 'native_id', 'drive'] as const
+const PATCHABLE = ['title', 'title_custom', 'shared', 'shared_can_send', 'archived', 'model', 'effort', 'permission_mode', 'mode', 'started', 'fast_mode', 'remote_control', 'context_json', 'instructions', 'tool_policy', 'listed', 'reach_tailnet', 'tailnet_mcp', 'tailnet_mcps', 'guest_caps', 'guest_caps_custom', 'origin_kind', 'origin_role', 'native_id', 'drive', 'advisor_model'] as const
 export type Patch = Partial<Pick<SessionRow, (typeof PATCHABLE)[number]>>
 
 const toComment = (r: { id: number; body: string; created_at: number; user_id: number; name: string }): Comment => ({ id: r.id, body: r.body, createdAt: r.created_at, user: { id: r.user_id, name: r.name } })

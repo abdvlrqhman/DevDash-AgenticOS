@@ -20,6 +20,8 @@ export type Settings = { model?: string | null; effort?: string | null; permissi
 type ScheduleRow = {
   id: number; user_id: number; title: string; prompt: string; slots: string; run_at: number | null; tz: string; ran: string
   enabled: number; last_run_at: number | null; created_at: number
+  /** The schedule's own conversation, where every run of it goes. */
+  session_id: string | null
 }
 type Notify = (userId: number, kind: NotificationKind, n: { title: string; body?: string; url?: string; tag?: string }) => Promise<void>
 
@@ -80,7 +82,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
       on conflict (user_id) do update set harness = ?2, profile = ?3, tz = ?4`),
     setSession: db.prepare('update assistants set session_id = ? where user_id = ?'),
     settings: db.prepare('update assistants set model = ?, effort = ?, permission_mode = ?, fast = ?, reach_tailnet = ?, drive = ? where user_id = ?'),
-    session: db.prepare('select id, archived, started from claude_sessions where id = ?'),
+    session: db.prepare('select id, archived, started, harness, profile from claude_sessions where id = ?'),
     conversations: db.prepare(`select id, title, last_activity_at as lastActivityAt, harness from claude_sessions
       where owner_id = ? and origin_kind = 'assistant' and started = 1 order by last_activity_at desc limit 30`),
     mine: db.prepare("select id from claude_sessions where id = ? and owner_id = ? and origin_kind = 'assistant'"),
@@ -95,6 +97,10 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     remove: db.prepare('delete from assistant_schedules where id = ? and user_id = ?'),
     enabled: db.prepare('select * from assistant_schedules where enabled = 1'),
     ran: db.prepare('update assistant_schedules set ran = ?, last_run_at = unixepoch(), enabled = ? where id = ?'),
+    setScheduleSession: db.prepare('update assistant_schedules set session_id = ? where id = ?'),
+    // The schedules' own conversations that are still open (not archived): settings changes reach them too.
+    scheduleSessions: db.prepare(`select s.id from assistant_schedules a join claude_sessions s on s.id = a.session_id
+      where a.user_id = ? and s.archived = 0`),
   }
   hub.authorize('assistant', () => true) // events are published only to the member they're for
 
@@ -107,6 +113,8 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
       id: s.id, title: s.title, prompt: s.prompt, enabled: !!s.enabled, tz: s.tz, days: slots[0]?.days ?? [], at: slots[0]?.at ?? null,
       runAt: s.run_at, when: describeWhen(when), lastRunAt: s.last_run_at,
       next: !s.enabled ? null : s.run_at ?? nextRun(slots, s.tz, now),
+      // Its own conversation, once it has run there (and it wasn't archived since).
+      conversation: s.session_id && (q.session.get(s.session_id) as { archived: number; started: number } | undefined)?.started ? s.session_id : null,
     }
   }
   const schedules = (userId: number) => (q.schedules.all(userId) as ScheduleRow[]).map((s) => scheduleDto(s))
@@ -126,18 +134,42 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     }
   }
 
-  /** A fresh conversation on the member's chosen agent, set up as they set it; the session starts on the first message. */
-  async function start(user: User, a: Row) {
+  /** A new conversation on the member's chosen agent, set up as they set it; the session starts on the first message. */
+  async function open(user: User, a: Row, title?: string) {
     const s = await claude.create(user, {
       prompt: '', images: [], cwd: '~', profile: a.profile, model: a.model, effort: a.effort, permissionMode: a.permission_mode, mode: 'chat', harness: a.harness,
-    }, { instructions: instructions({ name: user.name, username: user.username, tz: a.tz }), toolPolicy: { allow: READ_ONLY }, listed: false, origin: { kind: 'assistant' } })
+    }, {
+      instructions: instructions({ name: user.name, username: user.username, tz: a.tz }), toolPolicy: { allow: READ_ONLY }, listed: false, origin: { kind: 'assistant' },
+      ...(title ? { title } : {}),
+    })
     // A tailnet disconnected since doesn't stop the conversation from starting; it just doesn't reach it.
     if (a.fast || !a.drive) await claude.update(user, s.id, { fastMode: !!a.fast, drive: !!a.drive })
     if (a.reach_tailnet) await claude.update(user, s.id, { reachTailnet: true }).catch(() => {})
-    q.setSession.run(s.id, user.id)
-    changed(user.id)
     return s.id
   }
+  /** A fresh conversation to talk in: the panel switches to it. */
+  async function start(user: User, a: Row) {
+    const id = await open(user, a)
+    q.setSession.run(id, user.id)
+    changed(user.id)
+    return id
+  }
+  const scheduleTitle = (title: string) => `Scheduled: ${title}`
+  /**
+   * Where a schedule runs: its own conversation, never the one the member is talking in, so a run doesn't land in the
+   * middle of their chat. Each run follows the earlier ones there. A new one when it was archived or deleted, or the
+   * member picked another agent or account since.
+   */
+  async function conversationFor(user: User, s: ScheduleRow) {
+    const a = row(user.id)
+    if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
+    const c = s.session_id ? (q.session.get(s.session_id) as { id: string; archived: number; harness: string; profile: string } | undefined) : undefined
+    if (c && !c.archived && c.harness === a.harness && c.profile === a.profile) return c.id
+    const id = await open(user, a, scheduleTitle(s.title))
+    q.setScheduleSession.run(id, s.id)
+    return id
+  }
+  const scheduleSessions = (userId: number) => (q.scheduleSessions.all(userId) as { id: string }[]).map((r) => r.id)
   /** The conversation to talk in: the current one unless it was archived or deleted meanwhile. */
   async function current(user: User) {
     const a = row(user.id)
@@ -156,7 +188,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     const user = q.user.get(s.user_id) as User | undefined
     if (!user) return
     try {
-      await claude.send(user, await current(user), `⏰ Scheduled: ${s.title}\n\n${s.prompt}`, [])
+      await claude.send(user, await conversationFor(user, s), `⏰ Scheduled: ${s.title}\n\n${s.prompt}`, [])
     } catch (err) {
       void notify(user.id, 'errors', { title: `Your schedule "${s.title}" couldn't run`, body: (err as Error).message, url: '/', tag: `schedule:${s.id}` })
         .catch(() => {})
@@ -198,7 +230,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
         if (old?.session_id && q.session.get(old.session_id)) await claude.update(user, old.session_id, { archived: true }).catch(() => {})
         await start(user, a)
       } else {
-        claude.configure(old.session_id, { instructions: instructions({ name: user.name, username: user.username, tz }) })
+        for (const id of [old.session_id, ...scheduleSessions(user.id)]) claude.configure(id, { instructions: instructions({ name: user.name, username: user.username, tz }) })
       }
       return state(user)
     },
@@ -212,6 +244,8 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
       const id = state(user).sessionId
       // The session checks each value (a known effort, a permission mode); the settings keep what it accepted.
       if (id) await claude.update(user, id, p)
+      // The schedules' conversations work the same way; one that refuses a value doesn't stop the change.
+      for (const sid of scheduleSessions(user.id)) if (sid !== id) await claude.update(user, sid, p).catch(() => {})
       const pick = <T,>(v: T | undefined, old: T) => (v === undefined ? old : v)
       const bit = (v: boolean | undefined, old: number) => (v === undefined ? old : v ? 1 : 0)
       q.settings.run(pick(p.model, a.model), pick(p.effort, a.effort), pick(p.permissionMode, a.permission_mode),
@@ -273,6 +307,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
       const tz = typeof a.tz === 'string' && validTz(a.tz) ? a.tz : s.tz
       const enabled = typeof a.enabled === 'boolean' ? a.enabled : retimed ? true : !!s.enabled
       q.update.run(title, prompt, w ? JSON.stringify(w.slots) : s.slots, w ? w.runAt : s.run_at, tz, enabled ? 1 : 0, id)
+      if (title !== s.title && s.session_id && q.session.get(s.session_id)) void claude.update(user, s.session_id, { title: scheduleTitle(title) }).catch(() => {})
       changed(user.id)
       return scheduleDto(q.schedule.get(id, user.id) as ScheduleRow)
     },

@@ -57,11 +57,15 @@ export function groupModels(models: ModelInfo[]) {
   return { def, defName: defName || undefined, families }
 }
 
-/** What a picker shows: "Default · Opus 5.5", a model's name, or the raw ID for one typed in by hand. */
-export function modelLabel(models: ModelInfo[], value: string | null | undefined) {
+/**
+ * What a picker shows: "Claude Code's default · Opus 5.5" (whose default it is, given the agent), a model's name, or the
+ * raw ID for one typed in by hand.
+ */
+export function modelLabel(models: ModelInfo[], value: string | null | undefined, agent?: string) {
   if (isDefaultModel(value)) {
     const { defName } = groupModels(models)
-    return defName ? `Default · ${defName}` : 'Default'
+    const name = agent ? `${agent}'s default` : 'Default'
+    return defName ? `${name} · ${defName}` : name
   }
   return models.find((m) => m.value === value)?.displayName ?? value!
 }

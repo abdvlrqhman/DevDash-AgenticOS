@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mergeHistory, pageOf, settleOutbox, withAbsorbed, type HistoryMessage } from './claude.ts'
+import { flagSettings, mergeHistory, pageOf, settleOutbox, withAbsorbed, type HistoryMessage } from './claude.ts'
 
 const prompt = (uuid: string): HistoryMessage => ({ type: 'user', uuid, parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'do it' }] } })
 const reply = (uuid: string): HistoryMessage => ({ type: 'assistant', uuid, parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'ok' }] } })
@@ -75,4 +75,11 @@ test("sent messages stay listed until the transcript shows them, and are marked 
   assert.deepEqual(settleOutbox(box, [rawPrompt('m1'), absorbed('m2', 'x')]).map(([u]) => u), ['m3'])
   assert.deepEqual(settleOutbox(box, [], true), [['m3', { content: [], at: 3, lost: true }]])
   assert.deepEqual(settleOutbox(box, [rawPrompt('m3')]), [], 'a lost one that shows up after all is dropped')
+})
+
+test("a session's own flag settings: fast mode and the advisor only when it turns them on", () => {
+  assert.equal(flagSettings({}), null)
+  assert.deepEqual(flagSettings({ advisor: 'opus' }), { advisorModel: 'opus' })
+  assert.deepEqual(flagSettings({ fast: true, advisor: 'fable' }), { fastMode: true, advisorModel: 'fable' })
+  assert.deepEqual(flagSettings({ fast: true, advisor: null }), { fastMode: true })
 })

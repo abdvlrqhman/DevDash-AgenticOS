@@ -2,14 +2,13 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { UserAvatar } from '@/components/app/user-avatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Archive, ArrowLeft, ChevronRight, Plus, Settings2, ChevronDown } from 'lucide-react'
+import { Archive, ArrowLeft, ChevronRight, Plus, Settings2 } from 'lucide-react'
 import { StatusLight } from '@/components/app/brand'
 import { Orb } from '@/components/app/orb'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -24,8 +23,8 @@ import { NativeSelect } from '@/components/app/native-select'
 import { Switch } from '@/components/ui/switch'
 import { projectsQuery, type SessionSharing } from '../work/data'
 import { useArchiveSession } from './ArchiveSession'
-import { ModelChoices } from './ModelChoices'
-import { groupModels, isDefaultModel, modelLabel, type ModelInfo } from './models'
+import { ModelField } from './ModelChoices'
+import type { ModelInfo } from './models'
 import { byFolder, commandsQuery, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, relativeTime, sessionPlace, sessionsQuery, type PermissionMode, type Session } from './data'
 import { HARNESS, HARNESSES, harnessOf, type Harness } from './harness'
 
@@ -206,7 +205,6 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   const offered = listed.data?.models as ModelInfo[] | undefined
   const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
   const modes = PERMISSION_MODES.slice(0, 4).filter((p) => agent.modes.includes(p.value))
-  const pickedModel = customModel ? undefined : isDefaultModel(model) ? groupModels(models).def : models.find((m) => m.value === model)
   const create = useMutation({
     mutationFn: () => unwrap(api.api.claude.sessions.$post({
       json: {
@@ -284,27 +282,8 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
           )}
           <Field>
             <FieldLabel htmlFor="ns-model">Model</FieldLabel>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button id="ns-model" type="button" variant="outline" className="h-10 w-full justify-between font-normal">
-                  <span className="truncate">{customModel ? 'Another model' : modelLabel(models, model)}</span><ChevronDown className="text-muted-foreground" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] w-(--radix-dropdown-menu-trigger-width) max-w-none overflow-y-auto">
-                <ModelChoices models={models} value={customModel ? null : model || null} onChange={(v) => { setCustomModel(false); setModel(v ?? '') }} />
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => { setCustomModel(true); setModel('') }}>Another model (enter its ID)</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {customModel && (
-              <Input aria-label="Model ID" className="h-10 font-mono" placeholder={harness === 'claude' ? 'claude-opus-4-1' : 'anthropic/claude-sonnet-4-5'} value={model} onChange={(e) => setModel(e.target.value)}
-                spellCheck={false} autoCapitalize="none" autoFocus />
-            )}
-            <FieldDescription>
-              {customModel ? agent.modelHint
-                : pickedModel?.description ? `${pickedModel.description}${pickedModel.value && !pickedModel.value.startsWith('claude-') && !isDefaultModel(pickedModel.value) ? '. Always its newest version.' : ''}`
-                : 'Change it any time in the session.'}
-            </FieldDescription>
+            <ModelField id="ns-model" harness={harness} models={models} value={model} onChange={setModel} custom={customModel} onCustom={setCustomModel}
+              note="Change it any time in the session." />
           </Field>
           <Choice id="ns-perm" label="Permissions" value={perm} onChange={(v) => setPerm(v as PermissionMode)}
             options={modes.map((p) => ({ value: p.value, label: p.label }))}

@@ -24,6 +24,8 @@ test('models group by family, newest first, the default says what it is', () => 
   assert.deepEqual(families[3]!.rows[0]!.version, [4, 5], 'a release date is not a version')
 
   assert.equal(modelLabel(list, null), 'Default · Opus 5.5')
+  assert.equal(modelLabel(list, 'default', 'Claude Code'), "Claude Code's default · Opus 5.5", 'whose default it is')
+  assert.equal(modelLabel([{ value: '', displayName: 'Default' }], '', 'OpenCode'), "OpenCode's default")
   assert.equal(modelLabel(list, 'claude-opus-4-8'), 'Opus 4.8')
   assert.equal(modelLabel(list, 'claude-opus-9-9'), 'claude-opus-9-9', 'an ID typed in by hand shows as itself')
   assert.equal(modelLabel([{ value: '', displayName: 'Default' }], ''), 'Default', 'the offline list has no resolved default')

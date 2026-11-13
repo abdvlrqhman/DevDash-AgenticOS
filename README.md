@@ -79,8 +79,9 @@ Every member has their own agent, one shortcut away (⌘I or Ctrl+I) on every pa
 - **Starts projects on your word.** Ask it for a new project and it creates one the same way the Projects page does
   (empty, or cloned from a repository), then starts work there. DevDash refuses it unless you asked in a message you
   wrote yourself: never from a schedule, autopilot or a teammate's request.
-- **Works on a schedule.** Ask for a morning brief on weekdays, or a one-off check after tonight's deploy. Scheduled runs
-  report in a few lines and notify you only when something needs you.
+- **Works on a schedule.** Ask for a morning brief on weekdays, or a one-off check after tonight's deploy. Each schedule
+  runs in a conversation of its own, never the one you're chatting in, reports in a few lines and notifies you only when
+  something needs you.
 - **Your agent, your access.** It runs as your own Linux user, on Claude Code or OpenCode, with the model, effort and
   permission level you pick. Reading is free; anything that changes things asks first unless you choose otherwise. It
   can reach your tailnet and your Google Drive when you switch them on. It can't answer another session's questions

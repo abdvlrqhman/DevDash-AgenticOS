@@ -138,13 +138,13 @@ function useSettings(): Updater {
     onError: (e) => toast.error(e.message),
   })
   const sessionOnly = useMutation({
-    mutationFn: (v: { id: string; remoteControl: boolean }) => unwrap(api.api.claude.sessions[':id'].$patch({ param: { id: v.id }, json: { remoteControl: v.remoteControl } })),
+    mutationFn: ({ id, ...json }: { id: string; remoteControl?: boolean; advisorModel?: 'sonnet' | 'opus' | 'fable' | null }) => unwrap(api.api.claude.sessions[':id'].$patch({ param: { id }, json })),
     onError: (e) => toast.error(e.message),
   })
   const id = useQuery(assistantQuery).data?.sessionId
-  return ({ model, effort, permissionMode, fastMode, reachTailnet, remoteControl }) => {
-    // Remote Control belongs to this conversation only (a link to it), not to Hamasa's settings.
-    if (remoteControl !== undefined) return void (id && sessionOnly.mutate({ id, remoteControl }))
+  return ({ model, effort, permissionMode, fastMode, reachTailnet, remoteControl, advisorModel }) => {
+    // Remote Control and the advisor belong to this conversation only, not to Hamasa's settings.
+    if (remoteControl !== undefined || advisorModel !== undefined) return void (id && sessionOnly.mutate({ id, remoteControl, advisorModel }))
     m.mutate({ model, effort, permissionMode, fastMode, reachTailnet })
   }
 }
@@ -285,9 +285,23 @@ const SlidersIcon = () => <SlidersHorizontal className="inline size-3 align-[-1p
 
 const fmt = (unix: number) => new Date(unix * 1000).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 
-/** What runs by itself: each schedule's prompt and time, paused or on, and when it runs next. The agent makes them. */
+/** Goes on in an earlier conversation: the panel switches to it. */
+function useResume(onDone: () => void) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => unwrap(api.api.assistant.conversations[':id'].$post({ param: { id } })),
+    onSuccess: (r) => { qc.setQueryData(assistantQuery.queryKey, r); onDone() },
+    onError: (e) => toast.error(e.message),
+  })
+}
+
+/**
+ * What runs by itself: each schedule's prompt and time, paused or on, and when it runs next. The agent makes them. Each
+ * runs in a conversation of its own, never the one being chatted in.
+ */
 function Schedules({ list, onBack }: { list: Schedule[]; onBack: () => void }) {
   const qc = useQueryClient()
+  const resume = useResume(onBack)
   const refresh = () => void qc.invalidateQueries({ queryKey: ['assistant'] })
   const toggle = useMutation({
     mutationFn: (s: Schedule) => unwrap(api.api.assistant.schedules[':id'].$patch({ param: { id: String(s.id) }, json: { enabled: !s.enabled } })),
@@ -305,7 +319,7 @@ function Schedules({ list, onBack }: { list: Schedule[]; onBack: () => void }) {
         {!list.length && (
           <p className="p-1 text-sm text-pretty text-muted-foreground">
             Nothing scheduled. Ask {AGENT_NAME}, like “every weekday at 9, tell me what needs me” or “tomorrow at 3 pm, check the shop deploy”. It
-            runs the prompt at that time even when DevDash isn't open, and notifies you when something needs you.
+            runs the prompt at that time in a conversation of its own, even when DevDash isn't open, and notifies you when something needs you.
           </p>
         )}
         {list.map((s) => (
@@ -324,6 +338,11 @@ function Schedules({ list, onBack }: { list: Schedule[]; onBack: () => void }) {
               {' · '}{s.next ? `next ${fmt(s.next)}` : s.runAt != null && s.lastRunAt ? `ran ${relativeTime(s.lastRunAt)}` : 'paused'}
             </div>
             <p className="line-clamp-2 text-xs">{s.prompt}</p>
+            {s.conversation && (
+              <Button variant="link" size="sm" className="h-auto self-start p-0 text-xs" disabled={resume.isPending} onClick={() => resume.mutate(s.conversation!)}>
+                <History />Open its runs
+              </Button>
+            )}
           </div>
         ))}
       </div>
@@ -333,13 +352,8 @@ function Schedules({ list, onBack }: { list: Schedule[]; onBack: () => void }) {
 
 /** Earlier conversations with the agent: pick one to carry on in it. */
 function Conversations({ current, onBack }: { current: string | null; onBack: () => void }) {
-  const qc = useQueryClient()
   const q = useQuery({ queryKey: ['assistant', 'conversations'], queryFn: () => unwrap(api.api.assistant.conversations.$get()), staleTime: 0 })
-  const resume = useMutation({
-    mutationFn: (id: string) => unwrap(api.api.assistant.conversations[':id'].$post({ param: { id } })),
-    onSuccess: (r) => { qc.setQueryData(assistantQuery.queryKey, r); onBack() },
-    onError: (e) => toast.error(e.message),
-  })
+  const resume = useResume(onBack)
   return (
     <>
       <Bar title="Past conversations" onBack={onBack} />

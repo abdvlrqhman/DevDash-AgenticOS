@@ -520,3 +520,17 @@ test('an OpenCode session: its agent goes with every start, its own session id i
   // New sessions start with the agent the member chose as their default.
   assert.equal(claude.saveDefaults(ann, { harness: 'opencode', profile: 'default', model: null, effort: null, permission_mode: 'acceptEdits', open_in: 'chat' }).harness, 'opencode')
 })
+
+test('the advisor is off unless the owner picks one; a pick applies live and on the next start, and only in Claude Code', async () => {
+  const { claude, db, sent, ann } = setup()
+  assert.equal((await claude.get(ann, 's1')).session.advisorModel, null)
+  await claude.update(ann, 's1', { advisorModel: 'opus' })
+  assert.deepEqual(sent.at(-1), { op: 'claude.set', id: 's1', key: 'advisor', value: 'opus' })
+  assert.equal((await claude.get(ann, 's1')).session.advisorModel, 'opus')
+  await claude.send(ann, 's1', 'hi', [])
+  assert.equal((sent.findLast((r) => r.op === 'claude.send')!.launch as { advisor: string }).advisor, 'opus', 'the next start gets it too')
+  await claude.update(ann, 's1', { advisorModel: null })
+  assert.deepEqual(sent.at(-1), { op: 'claude.set', id: 's1', key: 'advisor', value: null })
+  db.prepare("update claude_sessions set harness = 'opencode' where id = 's1'").run()
+  await assert.rejects(claude.update(ann, 's1', { advisorModel: 'opus' }), /Only Claude Code/)
+})

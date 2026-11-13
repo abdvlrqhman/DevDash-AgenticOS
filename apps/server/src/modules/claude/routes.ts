@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
-import { EFFORTS, GUEST_CAPS, HARNESSES, PERMISSION_MODES, type ClaudeService } from './service.ts'
+import { ADVISORS, EFFORTS, GUEST_CAPS, HARNESSES, PERMISSION_MODES, type ClaudeService } from './service.ts'
 
 const MB = 1024 * 1024
 const ImageInput = z.object({
@@ -63,6 +63,7 @@ const PatchInput = z.object({
   effort: SessionEffort.optional(),
   permissionMode: Mode.optional(),
   fastMode: z.boolean().optional(),
+  advisorModel: z.enum(ADVISORS).nullable().optional(),
   remoteControl: z.boolean().optional(),
   reachTailnet: z.boolean().optional(),
   tailnetMcp: z.string().max(300).nullable().optional(),

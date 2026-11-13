@@ -189,9 +189,51 @@ test('schedules run once per slot in the member\'s time zone; one-offs switch of
   await assistant.tick(Date.now() + 61_000)
   assert.equal(sends().at(-1), '⏰ Scheduled: Deploy check\n\nCheck the deploy.')
   assert.equal(assistant.schedules(ann).find((s) => s.id === once.id)!.enabled, false)
-
+  assert.equal(sessionId, assistant.state(ann).sessionId)
   assert.equal(await rpc('ann', 'schedule_delete', sessionId, { id: brief.id }), 'Deleted.')
   await assert.rejects(rpc('ann', 'schedule_delete', sessionId, { id: brief.id }), /No schedule/)
+})
+
+test("a schedule runs in a conversation of its own, never in the one the member is chatting in", async () => {
+  const { assistant, rpc, sent, session, db, ann } = setup()
+  const { sessionId: chat } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'UTC' })
+  const runs = () => sent.filter((r) => r.op === 'claude.send').map((r) => ({ to: (r.launch as { id: string }).id, text: (r.content as { text: string }[]).at(-1)!.text }))
+  const brief = assistant.createSchedule(ann, { title: 'Morning brief', prompt: 'List my open tasks.', at: '09:00', days: 'daily' })
+  const check = assistant.createSchedule(ann, { title: 'Deploy check', prompt: 'Check the deploy.', at: '09:00', days: 'daily' })
+  assert.equal(brief.conversation, null, 'none before its first run')
+
+  await assistant.tick(Date.parse('2026-11-05T09:00:30Z'))
+  const [a, b] = runs()
+  assert.ok(a && b && a.to !== chat && b.to !== chat, 'not in the chat')
+  assert.notEqual(a.to, b.to, 'each schedule its own')
+  assert.equal(assistant.state(ann).sessionId, chat, "the panel stays on the member's conversation")
+  const own = session(a.to)
+  assert.deepEqual([own.title, own.origin_kind, own.listed], ['Scheduled: Morning brief', 'assistant', 0])
+  assert.equal(assistant.schedules(ann).find((s) => s.id === brief.id)!.conversation, a.to)
+  // It works like the agent everywhere: its tools act as the member.
+  assert.deepEqual(await rpc('ann', 'assistant_here', a.to), { name: 'Ann Lee' })
+
+  // The next run follows the earlier one, in the same conversation.
+  await assistant.tick(Date.parse('2026-11-06T09:00:30Z'))
+  assert.deepEqual(runs().slice(2).map((r) => r.to).sort(), [a.to, b.to].sort())
+
+  // Settings reach the schedules' conversations too; a renamed schedule renames its conversation.
+  await assistant.settings(ann, { model: 'opus' })
+  assert.equal(session(a.to).model, 'opus')
+  assistant.updateSchedule(ann, brief.id, { title: 'Daily brief' })
+  await new Promise((r) => setImmediate(r))
+  assert.equal(session(a.to).title, 'Scheduled: Daily brief')
+
+  // Archived from its page, or the member moved to another agent: the next run starts a new one.
+  db.prepare('update claude_sessions set archived = 1 where id = ?').run(a.to)
+  await assistant.tick(Date.parse('2026-11-07T09:00:30Z'))
+  const fresh = runs().slice(4).find((r) => r.text.includes('Daily brief'))!
+  assert.ok(fresh.to !== a.to && fresh.to !== chat)
+  await assistant.setup(ann, { harness: 'opencode', profile: 'default' })
+  await assistant.tick(Date.parse('2026-11-08T09:00:30Z'))
+  const moved = runs().slice(6).find((r) => r.text.includes('Deploy check'))!
+  assert.equal(session(moved.to).harness, 'opencode')
+  assert.notEqual(moved.to, b.to)
 })
 
 test("the agent's conversation is unlisted but still tells its owner when it needs them", async () => {

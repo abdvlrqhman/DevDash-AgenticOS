@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { commandsQuery, FALLBACK_MODELS, profilesQuery } from '../claude/data'
 import { HARNESS, harnessOf, type Harness } from '../claude/harness'
-import { modelLabel, type ModelInfo } from '../claude/models'
+import { isDefaultModel, modelLabel, type ModelInfo } from '../claude/models'
 
 type State = Awaited<ReturnType<typeof fetchState>>
 export type Entry = Awaited<ReturnType<typeof fetchRecent>>['entries'][number]
@@ -265,7 +265,7 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
         )}
         <Row id="sv-model" label="Model" description="The model the supervisor uses to read sessions and decide.">
           <NativeSelect id="sv-model" className="w-44" value={v.model} onChange={(e) => setV({ ...v, model: e.target.value })}>
-            {modelList.map((m) => <option key={m.value} value={m.value}>{m.displayName}</option>)}
+            {modelList.map((m) => <option key={m.value} value={m.value}>{isDefaultModel(m.value) ? modelLabel(modelList, m.value, HARNESS[harnessOf({ harness: v.harness })].label) : m.displayName}</option>)}
           </NativeSelect>
         </Row>
         {v.harness !== 'claude' && (

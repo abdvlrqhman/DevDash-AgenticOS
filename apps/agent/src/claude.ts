@@ -40,6 +40,8 @@ export type Launch = {
   started: boolean
   /** Fast mode (faster output on models that have it, billed as extra usage). */
   fast?: boolean
+  /** The model Claude Code's advisor tool consults (opus, sonnet, fable); none: no advisor. */
+  advisor?: string | null
   /** Remote Control: the session also shows in claude.ai/code and the Claude app, under this title. */
   remote?: boolean
   title?: string
@@ -178,6 +180,10 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** Settings a session turns on for itself (Claude Code's flag layer): fast mode, the advisor. Null when it turns on none. */
+export const flagSettings = (l: Pick<Launch, 'fast' | 'advisor'>) =>
+  l.fast || l.advisor ? { ...(l.fast && { fastMode: true }), ...(l.advisor && { advisorModel: l.advisor }) } : null
+
 export const profileDir = (p: string) => (p === 'default' ? join(homedir(), '.claude') : join(homedir(), '.claude-profiles', p))
 export const profileEnv = (p: string): Record<string, string> => (p === 'default' ? {} : { CLAUDE_CONFIG_DIR: profileDir(p) })
 
@@ -288,8 +294,8 @@ async function startChat(l: Launch): Promise<Chat> {
       ...(l.started ? { resume: l.id } : { sessionId: l.id }),
       ...(l.model ? { model: l.model } : {}),
       ...(l.effort ? { effort: l.effort } : {}),
-      // The SDK keeps fast mode off unless the session's flag settings ask for it.
-      ...(l.fast ? { settings: { fastMode: true } } : {}),
+      // The SDK keeps fast mode and the advisor off unless the session's flag settings ask for them.
+      ...(flagSettings(l) ? { settings: flagSettings(l) } : {}),
       permissionMode: l.permissionMode,
       allowDangerouslySkipPermissions: l.permissionMode === 'bypassPermissions',
       // A complete Claude Code session: same system prompt, settings, skills, agents, hooks and MCP as the CLI.
@@ -489,7 +495,7 @@ export async function interrupt(id: string) {
  * Model, permission mode, effort and fast mode all apply live to a running Chat session (and to the next start otherwise),
  * and so does what the owner shared with teammates (the guest gate reads it on every tool call).
  */
-export async function setOption(id: string, key: 'model' | 'permissionMode' | 'effort' | 'fast' | 'guestCaps', value: string | boolean | string[] | null) {
+export async function setOption(id: string, key: 'model' | 'permissionMode' | 'effort' | 'fast' | 'advisor' | 'guestCaps', value: string | boolean | string[] | null) {
   const c = chats.get(id)
   if (!c) return
   if (key === 'guestCaps') {
@@ -499,6 +505,8 @@ export async function setOption(id: string, key: 'model' | 'permissionMode' | 'e
   if (key === 'model') await c.q.setModel((value as string | null) ?? undefined)
   else if (key === 'permissionMode') await c.q.setPermissionMode(value as PermissionMode)
   else if (key === 'fast') await c.q.applyFlagSettings({ fastMode: value === true })
+  // null clears it (back to the person's own Claude Code settings). On or off applies at once; another model after /clear or /compact.
+  else if (key === 'advisor') await c.q.applyFlagSettings({ advisorModel: typeof value === 'string' && value ? value : null })
   else await c.q.applyFlagSettings({ effortLevel: value })
   c.launch = { ...c.launch, [key]: value }
 }
@@ -547,7 +555,7 @@ async function openCliNow(l: Launch, cols: number, rows: number) {
   if (l.toolPolicy?.allow?.length) args.push('--allowedTools', l.toolPolicy.allow.join(','))
   if (l.model) args.push('--model', l.model)
   if (l.effort) args.push('--effort', l.effort)
-  if (l.fast) args.push('--settings', JSON.stringify({ fastMode: true }))
+  if (flagSettings(l)) args.push('--settings', JSON.stringify(flagSettings(l)))
   if (l.remote) args.push('--remote-control')
   if (tn?.mcpServers) args.push('--mcp-config', JSON.stringify({ mcpServers: tn.mcpServers }))
   args.push(...(l.permissionMode === 'bypassPermissions' ? ['--dangerously-skip-permissions'] : ['--permission-mode', l.permissionMode]))

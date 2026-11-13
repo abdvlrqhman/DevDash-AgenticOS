@@ -476,7 +476,7 @@ function SessionAside({ s, blocks, isOwner }: { s: Session; blocks: ReturnType<t
           <dt className="text-muted-foreground">Folder</dt><dd className="truncate font-mono" title={s.cwd}>{shortPath(s.cwd, s.owner.username)}</dd>
           <dt className="text-muted-foreground">Agent</dt><dd>{HARNESS[harnessOf(s)].label}</dd>
           <dt className="text-muted-foreground">Profile</dt><dd>{s.profile}</dd>
-          <dt className="text-muted-foreground">Model</dt><dd>{s.model ?? 'Default'}</dd>
+          <dt className="text-muted-foreground">Model</dt><dd>{s.model ?? `${HARNESS[harnessOf(s)].label}'s default`}</dd>
           <dt className="text-muted-foreground">Permissions</dt><dd>{modeLabel(s.permissionMode)}</dd>
           <dt className="text-muted-foreground">Owner</dt><dd>{s.owner.name}</dd>
           <dt className="text-muted-foreground">Started</dt><dd>{new Date(s.createdAt * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</dd>
@@ -507,9 +507,13 @@ function CliView({ id, onEnded }: { id: string; onEnded: () => void }) {
   )
 }
 
+const ADVISOR_LABEL = { sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' } as const
+const ADVISOR_HINT = "A stronger model Claude consults on hard steps (Claude Code's advisor, experimental). It must be at least as capable as this session's model, and some advisors bill to usage credits. On or off applies right away; another advisor after /clear or /compact."
+
 export type Updater = (v: {
   model?: string | null; effort?: Effort | null; permissionMode?: PermissionMode; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
   fastMode?: boolean; remoteControl?: boolean; reachTailnet?: boolean; tailnetMcps?: { name: string; url: string }[] | null
+  advisorModel?: 'sonnet' | 'opus' | 'fable' | null
 }) => void
 
 /** Model, effort and permissions, changed in place from the chip row. `compact`: always just the icon (a small window). */
@@ -527,7 +531,7 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
         ) : (
         <Button variant="outline" size="sm" className="shrink-0 max-sm:size-9 max-sm:px-0" aria-label="Model, effort and permissions">
           <SlidersHorizontal className="xl:hidden" />
-          <span className="hidden xl:inline">{modelLabel(list, s.model)}</span>
+          <span className="hidden xl:inline">{/* Short beside the title; the menu says whose default it is. */}{modelLabel(list, s.model)}</span>
           <span className="hidden items-center gap-1 border-l pl-2 text-foreground/80 xl:flex">
             {s.permissionMode === 'bypassPermissions' ? <ShieldOff /> : <Shield />}{modeLabel(s.permissionMode)}{s.effort ? `, ${s.effort}` : ''}
             {s.fastMode && <Zap aria-label="Fast mode" />}
@@ -538,7 +542,7 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] w-72 overflow-y-auto">
         <DropdownMenuLabel>Model</DropdownMenuLabel>
-        <ModelChoices models={list} value={s.model} onChange={(v) => onUpdate({ model: v })} />
+        <ModelChoices models={list} harness={harnessOf(s)} value={s.model} onChange={(v) => onUpdate({ model: v })} />
         <DropdownMenuSeparator />
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>Permissions: {modeLabel(s.permissionMode)}</DropdownMenuSubTrigger>
@@ -561,6 +565,17 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <p className="px-2 py-1.5 text-xs text-muted-foreground">{s.mode === 'cli' ? 'In the CLI it applies when the CLI next opens; use /effort to change it right away.' : 'Applies right away, even mid-answer.'}</p>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>}
+        {agent.advisor && <DropdownMenuSub>
+          <DropdownMenuSubTrigger>Advisor: {s.advisorModel ? (ADVISOR_LABEL[s.advisorModel as keyof typeof ADVISOR_LABEL] ?? s.advisorModel) : 'off'}</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-72">
+            <DropdownMenuRadioGroup value={s.advisorModel ?? ''} onValueChange={(v) => onUpdate({ advisorModel: (v || null) as 'sonnet' | 'opus' | 'fable' | null })}>
+              <DropdownMenuRadioItem value="">Off</DropdownMenuRadioItem>
+              {(Object.keys(ADVISOR_LABEL) as (keyof typeof ADVISOR_LABEL)[]).map((m) => <DropdownMenuRadioItem key={m} value={m}>{ADVISOR_LABEL[m]}</DropdownMenuRadioItem>)}
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">{ADVISOR_HINT}</p>
           </DropdownMenuSubContent>
         </DropdownMenuSub>}
         {(agent.fast || (agent.remote && isOwner)) && <DropdownMenuSeparator />}
