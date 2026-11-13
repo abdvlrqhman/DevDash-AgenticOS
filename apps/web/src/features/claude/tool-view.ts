@@ -313,7 +313,11 @@ export function shellAction(command: string): Pick<ToolView, 'icon' | 'verb' | '
         if (/(^|\s)(test|t)(\s|$)|run test|\btest\b/.test(rest)) return a('test', 'Ran tests', 'Running tests')
         if (/^(analyze|lint|check|typecheck|vet|fmt|format|clippy)\b|run (lint|typecheck|check)/.test(rest)) return a('test', 'Checked the code', 'Checking the code')
         if (/\b(build|compile)\b/.test(rest)) return a('build', 'Built', 'Building')
-        if (/^run\b/.test(rest)) return a('run', `Ran ${w[2] ?? 'a script'}`, `Running ${w[2] ?? 'a script'}`)
+        if (/^run\b/.test(rest)) {
+          // The script, not a flag (dart run --packages=/a/long/path bin/main.dart), and only its name.
+          const script = w.slice(2).find((x) => !x.startsWith('-'))?.split('/').pop() || 'a script'
+          return a('run', `Ran ${script}`, `Running ${script}`)
+        }
         return a('package', `Used ${cmd}`, `Using ${cmd}`)
       }
       case 'python': case 'python3': return a('code', 'Ran Python', 'Running Python')

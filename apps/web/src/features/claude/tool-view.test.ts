@@ -22,6 +22,11 @@ test('each tool reads as what it did', () => {
 
   const bash = toolView(tool('Bash', { command: 'npm test', description: 'Run the tests' }, 'pass 3\nfail 0'))
   assert.deepEqual([bash.verb, bash.target, bash.where, bash.meta], ['Ran tests', 'Run the tests', 'npm test', '2 lines'])
+  const dart = (command: string) => toolView(tool('Bash', { command }, '')).verb
+  assert.equal(dart('dart run --packages=/home/ann/projects/app/.dart_tool/package_config.json bin/tour.dart'), 'Ran tour.dart', 'a flag is not the script')
+  assert.equal(dart('dart run --packages=/home/ann/x.json'), 'Ran a script')
+  assert.equal(dart('npm run build'), 'Built')
+  assert.equal(dart('npm run dev'), 'Ran dev')
   const failed = toolView(tool('Bash', { command: 'false' }, 'Exit code 1\nboom', { isError: true }))
   assert.equal(failed.meta, 'failed')
   assert.equal(failed.inline?.kind, 'output', 'errors show without a tap')

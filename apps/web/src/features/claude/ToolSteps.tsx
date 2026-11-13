@@ -79,8 +79,9 @@ const Step = memo(function Step({ tool: t, live, renderChildren }: { tool: ToolB
         </span>
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
           <button type="button" disabled={!expandable} onClick={() => setOpen((o) => !o)} aria-expanded={expandable ? open : undefined}
-            className={cn('shrink-0 text-left font-medium outline-none before:absolute before:inset-0 before:rounded-md focus-visible:before:ring-2 focus-visible:before:ring-ring/50',
+            className={cn('max-w-full shrink-0 truncate text-left font-medium outline-none before:absolute before:inset-0 before:rounded-md focus-visible:before:ring-2 focus-visible:before:ring-ring/50',
               !expandable && 'cursor-default')}>
+            {/* max-w-full + truncate: however long a verb comes out, it can't push the step (and the page) sideways. */}
             {running ? `${v.doing}…` : v.verb}
           </button>
           {v.target && (files && v.file
