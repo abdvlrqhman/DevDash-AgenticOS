@@ -107,7 +107,7 @@ function BuiltInRow({ b, multi }: { b: BuiltInSkill; multi: boolean }) {
           <span className={cn('truncate font-mono text-[13px] font-medium', !b.enabled && 'text-muted-foreground')}>{b.name}</span>
         </span>
         <span className="line-clamp-2 text-xs text-muted-foreground">{b.description ?? 'No description'}</span>
-        {!b.plugin && <span className="line-clamp-1 text-xs text-muted-foreground/80">{b.from}{multi && b.profiles.length ? ` · ${b.profiles.join(', ')}` : ''}</span>}
+        <span className="line-clamp-1 text-xs text-muted-foreground/80">{b.from}{multi && b.profiles.length ? ` · ${b.profiles.join(', ')}` : ''}</span>
       </span>
     </li>
   )
@@ -131,27 +131,51 @@ function PluginGroup({ id, rows, multi }: { id: string; rows: BuiltInSkill[]; mu
   const status = folders ? onlyIn(folders)
     : first.onlyIn ? `Only in ${placeName(first.onlyIn)}`
     : first.enabled ? null : 'Off'
+  const many = rows.length > 1
+  const head = (
+    <>
+      <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><Puzzle className="size-4" /></span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className={cn('max-w-[60%] shrink-0 truncate font-medium', status === 'Off' && 'text-muted-foreground')}>{name}</span>
+          {status && <span className="min-w-0 truncate rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted-foreground" title={folders ? folders.join('\n') : first.onlyIn ? `Claude Code keeps it to ${first.onlyIn}` : undefined}>{status}</span>}
+        </span>
+        <span className="line-clamp-1 text-xs text-muted-foreground">
+          {many ? `${rows.length} skills` : first.description ?? 'No description'}{multi && first.profiles.length ? ` · ${first.profiles.join(', ')}` : ''}
+        </span>
+      </span>
+    </>
+  )
+  const where = <Button variant="ghost" size="sm" onClick={() => setEditing(true)} aria-label={`Where ${name} is used`}><MapPin /><span className="max-sm:hidden">Where</span></Button>
   return (
     <li>
-      <Collapsible>
-        <div className="flex items-center gap-1 rounded-xl pe-1.5 hover:bg-surface-2">
-          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-start text-sm">
-            <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><Puzzle className="size-4" /></span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-2">
-                <span className={cn('max-w-[60%] shrink-0 truncate font-medium', status === 'Off' && 'text-muted-foreground')}>{name}</span>
-                {status && <span className="min-w-0 truncate rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted-foreground" title={folders ? folders.join('\n') : first.onlyIn ? `Claude Code keeps it to ${first.onlyIn}` : undefined}>{status}</span>}
-              </span>
-              <span className="line-clamp-1 text-xs text-muted-foreground">{rows.length === 1 ? '1 skill' : `${rows.length} skills`} · {first.from}{multi && first.profiles.length ? ` · ${first.profiles.join(', ')}` : ''}</span>
-            </span>
-            <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
-          </CollapsibleTrigger>
-          <Button variant="ghost" size="sm" onClick={() => setEditing(true)} aria-label={`Where ${name} is used`}><MapPin /><span className="max-sm:hidden">Where</span></Button>
+      {many ? (
+        <Collapsible>
+          <div className="flex items-center gap-1 rounded-xl pe-1.5 hover:bg-surface-2">
+            <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-start text-sm">
+              {head}
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+            </CollapsibleTrigger>
+            {where}
+          </div>
+          <CollapsibleContent>
+            {/* Its skills as a plain list, under the plugin: names without the plugin: prefix, one line each. */}
+            <ul className="ms-11 me-3 mb-2 flex flex-col border-s ps-3">
+              {rows.map((b) => (
+                <li key={b.name} className="min-w-0 py-1.5">
+                  <span className="block truncate font-mono text-[13px]">{b.name.slice(b.name.indexOf(':') + 1)}</span>
+                  <span className="line-clamp-1 text-xs text-muted-foreground" title={b.description ?? undefined}>{b.description ?? 'No description'}</span>
+                </li>
+              ))}
+            </ul>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : (
+        <div className="flex items-center gap-1 rounded-xl pe-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-sm">{head}</div>
+          {where}
         </div>
-        <CollapsibleContent>
-          <ul className="flex flex-col gap-0.5 ps-5">{rows.map((b) => <BuiltInRow key={b.name} b={b} multi={false} />)}</ul>
-        </CollapsibleContent>
-      </Collapsible>
+      )}
       <ResponsiveDialog open={editing} onOpenChange={setEditing} title={`Where ${name} is used`} description="The whole plugin, in Claude Code sessions. Plugins don't load in OpenCode.">
         <Where folders={folders} pending={save.isPending} onSave={(f) => save.mutate(f)} all="Wherever Claude Code has it on" note={first.onlyIn ? `Claude Code itself keeps it to ${first.onlyIn}. Picking folders here turns it on in those instead.` : 'A project includes its worktrees. New sessions follow it; running ones keep what they started with.'} />
       </ResponsiveDialog>
