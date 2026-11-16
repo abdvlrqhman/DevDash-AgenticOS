@@ -152,6 +152,7 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'skills.install': (r) => skills.ops.install(r),
   'skills.remove': (r) => skills.ops.remove(r),
   'skills.enable': (r) => skills.ops.enable(r),
+  'skills.scope': (r) => skills.ops.scope(r),
   'skills.push': (r) => skills.ops.push(r),
   'fs.dir': async (r) => ({ path: await services.dir(r.path) }),
   'fs.roots': () => files.ops.roots(),

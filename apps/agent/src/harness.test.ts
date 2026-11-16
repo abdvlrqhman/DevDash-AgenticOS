@@ -72,6 +72,9 @@ test("OpenCode's terminal app asks as the session's permission mode would; Chat 
   const chat = config({ rulesFile: '/r.md', mcp: { devdash: { type: 'local', command: ['node', 'x.mjs'], environment: {} } } })
   assert.deepEqual(chat.permissions, [{ action: '*', resource: '*', effect: 'ask' }])
   assert.deepEqual(chat.mcp.servers.devdash, { type: 'local', command: ['node', 'x.mjs'], environment: {}, codemode: false })
+  // Skills meant for other folders: denied last, so they win over any earlier allow (OpenCode takes the last match).
+  const hidden = config({ rulesFile: '/r.md', mcp: {}, cliMode: 'bypassPermissions', hideSkills: ['pdf'] })
+  assert.deepEqual(hidden.permissions, [{ action: '*', resource: '*', effect: 'allow' }, { action: 'skill', resource: 'pdf', effect: 'deny' }])
 })
 
 test('"Always allow" covers a command by program and subcommand, a fetch by site, anything else by its tool', async () => {

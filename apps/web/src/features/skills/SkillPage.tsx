@@ -9,8 +9,9 @@ import { Switch } from '@/components/ui/switch'
 import { toast } from '@/lib/toast'
 import { bytes } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
-import { removeSkill, runnable, setEnabled, skillQuery } from './data'
+import { removeSkill, runnable, setEnabled, setFolders, skillQuery } from './data'
 import { FileList, SkillMarkdown, SourceLine } from './parts'
+import { onlyIn, Where } from './Where'
 
 export function MySkillPage() {
   const { name } = useParams({ strict: false }) as { name: string }
@@ -33,6 +34,11 @@ function SkillView({ name, project }: { name: string; project?: string }) {
   const toggle = useMutation({
     mutationFn: (on: boolean) => setEnabled(name, on),
     onSuccess: (_r, on) => { done(); toast.success(on ? `${name} is on` : `${name} is off`, { description: on ? 'New sessions can use it again.' : 'Moved out of the folders your agents read.' }) },
+    onError: (err) => toast.error((err as Error).message),
+  })
+  const where = useMutation({
+    mutationFn: (folders: string[] | null) => setFolders(name, folders),
+    onSuccess: (_r, folders) => { done(); toast.success(folders ? `${name}: ${onlyIn(folders).toLowerCase()}` : `${name} is in every session`, { description: 'New sessions follow it.' }) },
     onError: (err) => toast.error((err as Error).message),
   })
   const remove = useMutation({
@@ -81,6 +87,8 @@ function SkillView({ name, project }: { name: string; project?: string }) {
                 <Switch checked={s.enabled} disabled={toggle.isPending} onCheckedChange={(v) => toggle.mutate(v)} />
               </label>
             )}
+            {!project && s.enabled && <Where folders={s.folders ?? null} pending={where.isPending} onSave={(f) => where.mutate(f)} />}
+            {project && <p className="text-sm text-pretty text-muted-foreground">Every session in this project gets it, for the whole team. To have a skill only in some of your own sessions, add it to My skills and pick where.</p>}
             <section className="flex flex-col gap-3">
               <h2 className="text-base font-semibold tracking-[-0.01em]">SKILL.md</h2>
               <div className="rounded-2xl bg-surface p-4 md:p-5"><SkillMarkdown markdown={s.markdown} /></div>

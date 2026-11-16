@@ -28,7 +28,7 @@ export function AddSkill({ open, onOpenChange, project }: { open: boolean; onOpe
       description={project ? 'Committed to the project, so every session in it gets the skill, for the whole team.' : 'For all your sessions and your personal agent.'}>
       <div className="flex flex-col gap-5">
         <ToggleGroup type="single" spacing={1} value={way} onValueChange={(v) => v && setWay(v as Way)} aria-label="How to add it" className="w-full rounded-full bg-surface p-1">
-          <ToggleGroupItem value="github" className={segment}><GitBranch />GitHub</ToggleGroupItem>
+          <ToggleGroupItem value="github" className={segment}><GitBranch />Link</ToggleGroupItem>
           <ToggleGroupItem value="upload" className={segment}><Upload />Upload</ToggleGroupItem>
           <ToggleGroupItem value="write" className={segment}><PenLine />Write</ToggleGroupItem>
         </ToggleGroup>
@@ -55,10 +55,13 @@ function FromGithub({ project, onDone }: { project?: string; onDone: () => void 
   return (
     <form className="flex flex-col gap-4" onSubmit={(e: FormEvent) => { e.preventDefault(); if (url.trim()) fetchIt.mutate() }}>
       <Field>
-        <FieldLabel htmlFor="skill-url">GitHub link</FieldLabel>
-        <Input id="skill-url" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="https://github.com/owner/repo/tree/main/skills/name"
+        <FieldLabel htmlFor="skill-url">GitHub link or install command</FieldLabel>
+        <Input id="skill-url" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="owner/repo, npx skills add …, /plugin install …"
           value={url} onChange={(e) => setUrl(e.target.value)} />
-        <FieldDescription>A repository, or one folder in it. DevDash downloads it with your GitHub access into an empty folder and shows you every file before anything is installed.</FieldDescription>
+        <FieldDescription>
+          A repository or a folder in it, <code className="font-mono">npx skills add owner/repo --skill name</code>, or <code className="font-mono">/plugin install name@marketplace</code>.
+          Nothing you paste is run: DevDash downloads it with your GitHub access into an empty folder and shows you every file first. A plugin gives just its skills, so they work in OpenCode too.
+        </FieldDescription>
       </Field>
       <ErrorAlert error={fetchIt.error} />
       <div className="flex justify-end">

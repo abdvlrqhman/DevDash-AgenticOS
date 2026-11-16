@@ -1,14 +1,18 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { BookOpenCheck, ChevronRight, FileCode2, Plus } from 'lucide-react'
+import { BookOpenCheck, ChevronDown, ChevronRight, FileCode2, MapPin, Plus, Puzzle } from 'lucide-react'
 import { PageBody, PageHeader } from '@/components/app/page'
+import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { AddSkill } from './AddSkill'
-import { skillsQuery, sourceLabel, type BuiltInSkill, type SkillSummary } from './data'
+import { setPluginFolders, skillsQuery, sourceLabel, type BuiltInSkill, type SkillSummary } from './data'
+import { onlyIn, placeName, Where } from './Where'
 
 const rowClass = 'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.99]'
 
@@ -60,10 +64,11 @@ export function SkillsPage() {
           <section className="flex flex-col gap-3">
             <div>
               <h2 className="text-base font-semibold tracking-[-0.01em]">Built in</h2>
-              <p className="mt-0.5 text-sm text-pretty text-muted-foreground">From DevDash and the plugins installed in your profiles. Managed there, shown here so you know they're in play.</p>
+              <p className="mt-0.5 text-sm text-pretty text-muted-foreground">From DevDash and the Claude Code plugins installed in your profiles. Plugins load in Claude Code only; to use one's skills in OpenCode too, add it with its <code className="font-mono text-foreground">/plugin install</code> command.</p>
             </div>
             <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
-              {builtIn.map((b) => <BuiltInRow key={`${b.kind}:${b.name}`} b={b} multi={profiles.length > 1} />)}
+              {builtIn.filter((b) => !b.plugin).map((b) => <BuiltInRow key={`${b.kind}:${b.name}`} b={b} multi={profiles.length > 1} />)}
+              {plugins(builtIn).map(([id, rows]) => <PluginGroup key={id} id={id} rows={rows} multi={profiles.length > 1} />)}
             </ul>
           </section>
         )}
@@ -80,8 +85,9 @@ export function SkillRow({ s, to, params }: { s: SkillSummary; to: string; param
       <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><BookOpenCheck className="size-4" /></span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
-          <span className={cn('truncate font-medium', off && 'text-muted-foreground')}>{s.name}</span>
+          <span className={cn('max-w-[60%] shrink-0 truncate font-medium', off && 'text-muted-foreground')}>{s.name}</span>
           {off && <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted-foreground">Off</span>}
+          {!off && s.folders && <span className="min-w-0 truncate rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted-foreground" title={s.folders.join('\n')}>{onlyIn(s.folders)}</span>}
           {s.runs && <FileCode2 className="size-3.5 shrink-0 text-attention" aria-label="Has scripts" />}
         </span>
         <span className="line-clamp-1 text-xs text-muted-foreground">{s.description ?? 'No description'}</span>
@@ -99,11 +105,56 @@ function BuiltInRow({ b, multi }: { b: BuiltInSkill; multi: boolean }) {
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
           <span className={cn('truncate font-mono text-[13px] font-medium', !b.enabled && 'text-muted-foreground')}>{b.name}</span>
-          {!b.enabled && <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted-foreground">Plugin off</span>}
         </span>
         <span className="line-clamp-2 text-xs text-muted-foreground">{b.description ?? 'No description'}</span>
-        <span className="line-clamp-1 text-xs text-muted-foreground/80">{b.from}{multi && b.profiles.length ? ` · ${b.profiles.join(', ')}` : ''}</span>
+        {!b.plugin && <span className="line-clamp-1 text-xs text-muted-foreground/80">{b.from}{multi && b.profiles.length ? ` · ${b.profiles.join(', ')}` : ''}</span>}
       </span>
+    </li>
+  )
+}
+
+/** Plugins' skills, by plugin, in the order they came. */
+const plugins = (rows: BuiltInSkill[]) => [...rows.reduce((m, b) => (b.plugin ? m.set(b.plugin, [...(m.get(b.plugin) ?? []), b]) : m), new Map<string, BuiltInSkill[]>())]
+
+/** One plugin: folded to a line (some have hundreds of skills), with where it's used. */
+function PluginGroup({ id, rows, multi }: { id: string; rows: BuiltInSkill[]; multi: boolean }) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const first = rows[0]!
+  const name = id.split('@')[0]
+  const folders = first.folders ?? null
+  const save = useMutation({
+    mutationFn: (f: string[] | null) => setPluginFolders(id, f),
+    onSuccess: (_r, f) => { void qc.invalidateQueries({ queryKey: ['skills'] }); setEditing(false); toast.success(f ? `${name}: ${onlyIn(f).toLowerCase()}` : `${name} is back to your Claude Code setting`) },
+    onError: (err) => toast.error((err as Error).message),
+  })
+  const status = folders ? onlyIn(folders)
+    : first.onlyIn ? `Only in ${placeName(first.onlyIn)}`
+    : first.enabled ? null : 'Off'
+  return (
+    <li>
+      <Collapsible>
+        <div className="flex items-center gap-1 rounded-xl pe-1.5 hover:bg-surface-2">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-start text-sm">
+            <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><Puzzle className="size-4" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2">
+                <span className={cn('max-w-[60%] shrink-0 truncate font-medium', status === 'Off' && 'text-muted-foreground')}>{name}</span>
+                {status && <span className="min-w-0 truncate rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted-foreground" title={folders ? folders.join('\n') : first.onlyIn ? `Claude Code keeps it to ${first.onlyIn}` : undefined}>{status}</span>}
+              </span>
+              <span className="line-clamp-1 text-xs text-muted-foreground">{rows.length === 1 ? '1 skill' : `${rows.length} skills`} · {first.from}{multi && first.profiles.length ? ` · ${first.profiles.join(', ')}` : ''}</span>
+            </span>
+            <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+          </CollapsibleTrigger>
+          <Button variant="ghost" size="sm" onClick={() => setEditing(true)} aria-label={`Where ${name} is used`}><MapPin /><span className="max-sm:hidden">Where</span></Button>
+        </div>
+        <CollapsibleContent>
+          <ul className="flex flex-col gap-0.5 ps-5">{rows.map((b) => <BuiltInRow key={b.name} b={b} multi={false} />)}</ul>
+        </CollapsibleContent>
+      </Collapsible>
+      <ResponsiveDialog open={editing} onOpenChange={setEditing} title={`Where ${name} is used`} description="The whole plugin, in Claude Code sessions. Plugins don't load in OpenCode.">
+        <Where folders={folders} pending={save.isPending} onSave={(f) => save.mutate(f)} all="Wherever Claude Code has it on" note={first.onlyIn ? `Claude Code itself keeps it to ${first.onlyIn}. Picking folders here turns it on in those instead.` : 'A project includes its worktrees. New sessions follow it; running ones keep what they started with.'} />
+      </ResponsiveDialog>
     </li>
   )
 }

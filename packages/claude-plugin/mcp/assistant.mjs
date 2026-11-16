@@ -54,6 +54,31 @@ export const ASSISTANT_TOOLS = [
     }, ['name']),
   },
   {
+    name: 'skills_list',
+    description: "The person's skills: their own (every session, or only_in some folders; Claude Code and OpenCode), plugins' (Claude Code only), DevDash's. With project: that project's committed skills, for the whole team.",
+    inputSchema: obj({ project: { type: 'string', description: 'Project short name.' } }),
+  },
+  {
+    name: 'skill_find',
+    description: 'Fetch a skill for the person to install: from a GitHub link, owner/repo, or an install command they found (`npx skills add owner/repo --skill x`, `/plugin install name@marketplace`, `/plugin marketplace add owner/repo`). Nothing is run. It opens the review page, where they read it and press Install; you cannot install it yourself. A plugin gives only its skills (its hooks and MCP servers are left out), so it works in OpenCode too.',
+    inputSchema: obj({ source: { type: 'string' }, project: { type: 'string', description: 'Install into this project (committed, for the whole team) instead of their own skills.' } }, ['source']),
+  },
+  {
+    name: 'skill_update',
+    description: "Turn one of the person's skills on or off, or keep it (or a plugin) to some projects or folders: only_in takes project short names or folder paths (~/projects/x), or \"everywhere\". New sessions follow it.",
+    inputSchema: obj({
+      name: { type: 'string', description: 'One of their own skills (skills_list "mine").' },
+      plugin: { type: 'string', description: 'A plugin id, name@marketplace (skills_list "plugins"): only_in only.' },
+      enabled: { type: 'boolean' },
+      only_in: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string', enum: ['everywhere'] }] },
+    }),
+  },
+  {
+    name: 'skill_remove',
+    description: "Remove one of the person's skills, or a project's (committed on its own). Only when they ask for it in a message they write to you now.",
+    inputSchema: obj({ name: { type: 'string' }, project: { type: 'string' } }, ['name']),
+  },
+  {
     name: 'schedules_list',
     description: "The person's schedules: prompts you get at set times, with when they run next.",
     inputSchema: obj({}),

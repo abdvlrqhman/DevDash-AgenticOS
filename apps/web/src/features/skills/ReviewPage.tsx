@@ -56,6 +56,11 @@ export function ReviewPage() {
               <dt className="text-muted-foreground">From</dt><dd className="min-w-0"><SourceLine source={r.source} /></dd>
               {r.source.kind === 'github' && <><dt className="text-muted-foreground">Commit</dt><dd className="font-mono text-[13px] break-all">{r.source.sha}</dd></>}
             </dl>
+            {!!r.extras?.length && (
+              <p className="-mt-4 text-sm text-pretty text-muted-foreground">
+                This is a Claude Code plugin. DevDash installs only its skills, so they work in Claude Code and OpenCode; its {r.extras.join(', ')} {r.extras.length === 1 ? 'is' : 'are'} left out.
+              </p>
+            )}
             {many && <p className="-mt-4 text-sm text-pretty text-muted-foreground">Open each one you want, read it, and install it on its own.</p>}
             {many
               ? <div className="flex flex-col gap-2">{r.skills.map((s) => <Collapsed key={s.path} review={r} s={s} project={project} />)}</div>

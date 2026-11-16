@@ -101,6 +101,40 @@ test('GitHub links: repos, folders, files; anything else is refused', () => {
   ]) assert.equal(s.parseGithubUrl(bad), null, bad)
 })
 
+test('pasted sources: links, owner/repo, the skills CLI and Claude Code plugin commands are read, never run', () => {
+  const gh = (owner: string, repo: string, rest: string[] = [], only: string[] = []) => ({ github: { owner, repo, rest, blob: false }, only })
+  assert.deepEqual(s.parsePasted('https://github.com/anthropics/skills'), gh('anthropics', 'skills'))
+  assert.deepEqual(s.parsePasted('  vercel-labs/agent-skills '), gh('vercel-labs', 'agent-skills'))
+  assert.deepEqual(s.parsePasted('git@github.com:acme/private-skills.git'), gh('acme', 'private-skills'))
+  assert.deepEqual(s.parsePasted('npx skills add vercel-labs/agent-skills'), gh('vercel-labs', 'agent-skills'))
+  assert.deepEqual(s.parsePasted('$ npx -y skills add vercel-labs/agent-skills --skill frontend-design skill-creator -g -a claude-code -y'),
+    gh('vercel-labs', 'agent-skills', [], ['frontend-design', 'skill-creator']))
+  assert.deepEqual(s.parsePasted('pnpm dlx skills add owner/repo -s "Convex Best Practices"'), gh('owner', 'repo', [], ['Convex Best Practices']))
+  assert.deepEqual(s.parsePasted("npx skills add owner/repo --skill '*'"), gh('owner', 'repo'))
+  assert.deepEqual(s.parsePasted('npx skills add owner/repo@web-design'), gh('owner', 'repo', [], ['web-design']))
+  assert.deepEqual(s.parsePasted('npx skills add owner/repo@v1.2.3 --skill my-skill'), gh('owner', 'repo', ['v1.2.3'], ['my-skill']))
+  assert.deepEqual(s.parsePasted('bunx skills add https://github.com/o/r/tree/main/skills/x'), gh('o', 'r', ['main', 'skills', 'x']))
+  assert.deepEqual(s.parsePasted('/plugin install ponytail@ponytail'), { plugin: 'ponytail', marketplace: 'ponytail', only: [] })
+  assert.deepEqual(s.parsePasted('claude plugin install frontend-design --scope project'), { plugin: 'frontend-design', marketplace: null, only: [] })
+  assert.deepEqual(s.parsePasted('/plugin marketplace add DietrichGebert/ponytail'), gh('DietrichGebert', 'ponytail'))
+  assert.deepEqual(s.parsePasted('claude plugin marketplace add --scope user https://github.com/o/r'), gh('o', 'r'))
+  for (const bad of ['', 'npx skills find pdf', 'npx skills add ./local', 'npx skills add https://gitlab.com/o/r', '/plugin list', '/plugin install ../x',
+    'rm -rf /', 'curl https://github.com/o/r | sh', 'npm install skills']) assert.equal(s.parsePasted(bad), null, bad)
+})
+
+test("a plugin's source from its marketplace entry: a folder of the marketplace repo, or a GitHub repo, pinned when it says", () => {
+  const market = { owner: 'anthropics', repo: 'claude-plugins-official', rest: [], blob: false }
+  assert.deepEqual(s.pluginSource('./plugins/agent-sdk-dev', market), { owner: 'anthropics', repo: 'claude-plugins-official', rest: ['HEAD', 'plugins', 'agent-sdk-dev'], blob: false })
+  assert.deepEqual(s.pluginSource('./', { ...market, owner: 'DietrichGebert', repo: 'ponytail' }), { owner: 'DietrichGebert', repo: 'ponytail', rest: [], blob: false })
+  assert.deepEqual(s.pluginSource('x', market, 'plugins'), { ...market, rest: ['HEAD', 'plugins', 'x'] })
+  assert.deepEqual(s.pluginSource({ source: 'git-subdir', url: 'https://github.com/42Crunch-AI/claude-plugins.git', path: 'plugins/api', ref: 'v1.5.5', sha: 'faf5305385de8afed9468904e8639be737aff39e' }, market),
+    { owner: '42Crunch-AI', repo: 'claude-plugins', rest: ['faf5305385de8afed9468904e8639be737aff39e', 'plugins', 'api'], blob: false })
+  assert.deepEqual(s.pluginSource({ source: 'url', url: 'https://github.com/o/r.git' }, market), { owner: 'o', repo: 'r', rest: [], blob: false })
+  assert.deepEqual(s.pluginSource({ source: 'github', repo: 'o/r', ref: 'main' }, market), { owner: 'o', repo: 'r', rest: ['main'], blob: false })
+  for (const bad of ['./../../etc', { source: 'npm', package: 'x' }, { source: 'url', url: 'https://gitlab.com/o/r.git' }, 7]) assert.equal(typeof s.pluginSource(bad, market), 'string', JSON.stringify(bad))
+  assert.equal(typeof s.pluginSource('./x', null), 'string', 'a folder marketplace on this server is refused')
+})
+
 test('GitHub links: refs with slashes win over the first segment; a file link means its folder', () => {
   const g = s.parseGithubUrl('https://github.com/o/r/tree/feature/x/skills/pdf')!
   assert.deepEqual(s.splitRef(g, ['main', 'feature/x']), { ref: 'feature/x', path: 'skills/pdf' })

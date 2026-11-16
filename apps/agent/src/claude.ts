@@ -16,6 +16,7 @@ import { startForwarder, writeSshHelper } from './tailnet-session.ts'
 import * as storage from './storage.ts'
 import { guestMay } from './guest.ts'
 import { sharedRoot } from './shared-tools.ts'
+import { sessionSkills, type SessionSkills } from './skill-scope.ts'
 
 export const PLUGIN_DIR = fileURLToPath(new URL('../../../packages/claude-plugin', import.meta.url))
 export const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,20}$/
@@ -180,9 +181,19 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-/** Settings a session turns on for itself (Claude Code's flag layer): fast mode, the advisor. Null when it turns on none. */
-export const flagSettings = (l: Pick<Launch, 'fast' | 'advisor'>) =>
-  l.fast || l.advisor ? { ...(l.fast && { fastMode: true }), ...(l.advisor && { advisorModel: l.advisor }) } : null
+/**
+ * Settings a session turns on for itself (Claude Code's flag layer): fast mode, the advisor, and which of My skills and
+ * plugins it gets in its folder (skill-scope.ts). Null when it sets none.
+ */
+export const flagSettings = (l: Pick<Launch, 'fast' | 'advisor'>, s?: SessionSkills | null) => {
+  const out = {
+    ...(l.fast ? { fastMode: true } : {}),
+    ...(l.advisor ? { advisorModel: l.advisor } : {}),
+    ...(s?.hide.length ? { skillOverrides: Object.fromEntries(s.hide.map((n) => [n, 'off'])) } : {}),
+    ...(s && Object.keys(s.plugins).length ? { enabledPlugins: s.plugins } : {}),
+  }
+  return Object.keys(out).length ? out : null
+}
 
 export const profileDir = (p: string) => (p === 'default' ? join(homedir(), '.claude') : join(homedir(), '.claude-profiles', p))
 export const profileEnv = (p: string): Record<string, string> => (p === 'default' ? {} : { CLAUDE_CONFIG_DIR: profileDir(p) })
@@ -267,6 +278,7 @@ async function startChat(l: Launch): Promise<Chat> {
   const sdk = await loadSdk()
   // Route this session through the owner's tailnet when asked (env + an optional MCP forwarder); off → null.
   const tn = await setupTailnet(l).catch((err: Error) => { console.error(`[${l.id.slice(0, 8)}] tailnet:`, err.message); return null })
+  const flags = flagSettings(l, await sessionSkills(l.cwd).catch(() => null))
   const inbox = new Inbox()
   const pending = new Map<string, Pending>()
   let chat: Chat | undefined
@@ -295,7 +307,7 @@ async function startChat(l: Launch): Promise<Chat> {
       ...(l.model ? { model: l.model } : {}),
       ...(l.effort ? { effort: l.effort } : {}),
       // The SDK keeps fast mode and the advisor off unless the session's flag settings ask for them.
-      ...(flagSettings(l) ? { settings: flagSettings(l) } : {}),
+      ...(flags ? { settings: flags } : {}),
       permissionMode: l.permissionMode,
       allowDangerouslySkipPermissions: l.permissionMode === 'bypassPermissions',
       // A complete Claude Code session: same system prompt, settings, skills, agents, hooks and MCP as the CLI.
@@ -555,7 +567,8 @@ async function openCliNow(l: Launch, cols: number, rows: number) {
   if (l.toolPolicy?.allow?.length) args.push('--allowedTools', l.toolPolicy.allow.join(','))
   if (l.model) args.push('--model', l.model)
   if (l.effort) args.push('--effort', l.effort)
-  if (flagSettings(l)) args.push('--settings', JSON.stringify(flagSettings(l)))
+  const flags = flagSettings(l, await sessionSkills(l.cwd).catch(() => null))
+  if (flags) args.push('--settings', JSON.stringify(flags))
   if (l.remote) args.push('--remote-control')
   if (tn?.mcpServers) args.push('--mcp-config', JSON.stringify({ mcpServers: tn.mcpServers }))
   args.push(...(l.permissionMode === 'bypassPermissions' ? ['--dangerously-skip-permissions'] : ['--permission-mode', l.permissionMode]))

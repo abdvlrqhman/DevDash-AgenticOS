@@ -14,6 +14,7 @@ import { homedir, userInfo } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { PLUGIN_DIR, profileDir, profileNames } from './claude.ts'
+import { cleanFolders, readScopes, setScope } from './skill-scope.ts'
 
 const run = promisify(execFile)
 
@@ -123,6 +124,102 @@ export function splitRef(g: GithubRef, refs: string[]): { ref: string | null; pa
   let path = g.rest.slice(n)
   if (g.blob) path = path.slice(0, -1)
   return { ref: g.rest.slice(0, n).join('/'), path: path.join('/') }
+}
+
+/** What a pasted source asks for: a GitHub repo or folder, or a Claude Code plugin; `only` = the skills it names. */
+export type Pasted = { github: GithubRef; only: string[] } | { plugin: string; marketplace: string | null; only: string[] }
+
+const words = (t: string) => (t.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((w) => w.replace(/^(["'])(.*)\1$/, '$2'))
+/** A GitHub link, owner/repo, or git@github.com:owner/repo.git. */
+function githubOf(src: string): GithubRef | null {
+  const ssh = /^git@github\.com:([^/\s]+\/[^/\s]+?)(?:\.git)?$/.exec(src)
+  if (ssh) return parseGithubUrl(`github.com/${ssh[1]}`)
+  if (/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(src)) return parseGithubUrl(`github.com/${src}`)
+  return parseGithubUrl(src)
+}
+/** owner/repo@x: x is a ref when it looks like a version or a commit, else the skill to take (as the skills CLI reads it). */
+const looksLikeRef = (x: string) => /^v?\d+(\.\d+)*([-.+][\w.]+)?$|^[0-9a-f]{7,40}$/i.test(x)
+
+/**
+ * Reads what the member pasted, without running any of it: a GitHub link, `owner/repo`, the skills CLI
+ * (`npx skills add <source> [--skill a b]`), or Claude Code's plugin commands (`/plugin install name@market`,
+ * `/plugin marketplace add owner/repo`, the same with `claude plugin`). Null if it's none of those. Pure.
+ */
+export function parsePasted(input: string): Pasted | null {
+  let w = words(input.trim().replace(/^\$\s+/, ''))
+  if (!w.length) return null
+  if (w[0] === 'npx' || w[0] === 'bunx') w = w.slice(1)
+  else if ((w[0] === 'pnpm' || w[0] === 'yarn') && w[1] === 'dlx') w = w.slice(2)
+  else if (w[0] === 'bun' && w[1] === 'x') w = w.slice(2)
+  while (w[0]?.startsWith('-')) w = w.slice(1)
+  const positional = (args: string[], valued: string[]) => {
+    const out: string[] = []
+    for (let i = 0; i < args.length; i++) {
+      if (valued.includes(args[i]!)) i++
+      else if (!args[i]!.startsWith('-')) out.push(args[i]!)
+    }
+    return out
+  }
+  if (/^(skills(@[\w.-]+)?|add-skill)$/.test(w[0] ?? '')) {
+    const args = w[0] === 'add-skill' ? w.slice(1) : w[1] === 'add' ? w.slice(2) : null
+    if (!args) return null
+    const only: string[] = []
+    let src: string | undefined
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!
+      if (a === '-s' || a === '--skill') { while (args[i + 1] && !args[i + 1]!.startsWith('-')) only.push(args[++i]!) }
+      else if (['-a', '--agent'].includes(a)) { while (args[i + 1] && !args[i + 1]!.startsWith('-')) i++ }
+      else if (a === '--rename') i++
+      else if (!a.startsWith('-') && !src) src = a
+    }
+    if (!src) return null
+    let ref: string | null = null
+    const at = /^([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)@([^@\s]+)$/.exec(src)
+    if (at) { src = at[1]!; if (looksLikeRef(at[2]!)) ref = at[2]!; else only.push(at[2]!) }
+    const g = githubOf(src)
+    if (!g) return null
+    return { github: ref && !g.rest.length ? { ...g, rest: [ref] } : g, only: only.includes('*') ? [] : only }
+  }
+  const plugin = w[0] === '/plugin' ? w.slice(1) : w[0] === 'claude' && (w[1] === 'plugin' || w[1] === 'plugins') ? w.slice(2) : null
+  if (plugin) {
+    if (plugin[0] === 'marketplace' && plugin[1] === 'add') {
+      const src = positional(plugin.slice(2), ['--scope', '--sparse'])[0]
+      const g = src ? githubOf(src) : null
+      return g ? { github: g, only: [] } : null
+    }
+    if (plugin[0] === 'install' || plugin[0] === 'i') {
+      const id = positional(plugin.slice(1), ['--scope', '-s', '--config', '--accept-command'])[0]
+      const m = id && /^([A-Za-z0-9][\w.-]{0,99})(?:@([A-Za-z0-9][\w.-]{0,99}))?$/.exec(id)
+      return m ? { plugin: m[1]!, marketplace: m[2] ?? null, only: [] } : null
+    }
+    return null
+  }
+  if (w.length !== 1) return null
+  const g = githubOf(w[0]!)
+  return g ? { github: g, only: [] } : null
+}
+
+/**
+ * Where a marketplace's plugin lives, from its marketplace.json entry (untrusted): a folder of the marketplace's repo
+ * ("./plugins/x"), or another GitHub repo (github / url / git-subdir sources), pinned to its sha or ref when it names one.
+ * A message instead when it isn't on GitHub or its path leaves the repo. Pure.
+ */
+export function pluginSource(src: unknown, market: GithubRef | null, pluginRoot?: unknown): GithubRef | string {
+  const at = (g: GithubRef | null, pin: unknown, ...paths: unknown[]): GithubRef | string => {
+    if (!g) return "That plugin isn't on GitHub. DevDash installs plugins' skills from GitHub only; paste its link if it has one."
+    const segs = paths.filter((p): p is string => typeof p === 'string').join('/').split('/').filter((x) => x && x !== '.')
+    if (segs.some((x) => x === '..' || /[\\\0\n\r]/.test(x) || x.startsWith('-'))) return "That plugin's folder is outside its repository."
+    const ref = typeof pin === 'string' && /^[\w.\/-]{1,200}$/.test(pin) && !pin.startsWith('-') ? pin : null
+    return { owner: g.owner, repo: g.repo, rest: ref || segs.length ? [ref ?? 'HEAD', ...segs] : [], blob: false }
+  }
+  if (typeof src === 'string') return at(market, market?.rest[0], pluginRoot, src)
+  if (src && typeof src === 'object') {
+    const o = src as Record<string, unknown>
+    const pin = o.sha ?? o.ref
+    if (o.source === 'github' && typeof o.repo === 'string') return at(parseGithubUrl(`github.com/${o.repo}`), pin, o.path)
+    if ((o.source === 'url' || o.source === 'git' || o.source === 'git-subdir') && typeof o.url === 'string') return at(parseGithubUrl(o.url), pin, o.path)
+  }
+  return "DevDash can't tell where that plugin comes from. Paste its GitHub link instead."
 }
 
 const SCRIPT_EXT = /\.(sh|bash|zsh|fish|ksh|py|pyw|js|mjs|cjs|ts|mts|cts|jsx|tsx|rb|pl|pm|php|ps1|psm1|bat|cmd|vbs|lua|r|swift|go|rs|java|kt|scala|groovy|tcl|awk|applescript|scpt|jar|exe|dll|so|dylib|bin|run|command|app|msi|deb|rpm|appimage|wasm)$/i
@@ -347,8 +444,15 @@ const readJson = async (p: string): Promise<Record<string, any>> => {
   }
 }
 
+type BuiltIn = {
+  name: string; description: string | null; from: string; kind: 'devdash' | 'plugin' | 'account'; enabled: boolean; profiles: string[]
+  /** A plugin's skill: the plugin's id (name@marketplace), where DevDash uses it (null: wherever it's on), and the folder
+   *  Claude Code itself keeps it to when it was installed for one project (`--scope local/project`). */
+  plugin?: string; folders?: string[] | null; onlyIn?: string | null
+}
 async function builtIn() {
-  const out: { name: string; description: string | null; from: string; kind: 'devdash' | 'plugin' | 'account'; enabled: boolean; profiles: string[] }[] = []
+  const out: BuiltIn[] = []
+  const scopes = await readScopes()
   for (const f of await skillFolders(join(PLUGIN_DIR, 'skills'))) {
     out.push({ name: `devdash:${f.name}`, description: parseSkillMd((await readMd(f.dir)) ?? '').description, from: 'DevDash, in every session', kind: 'devdash', enabled: true, profiles: [] })
   }
@@ -357,15 +461,26 @@ async function builtIn() {
     const dir = profileDir(p)
     const installed = (await readJson(join(dir, 'plugins', 'installed_plugins.json'))).plugins ?? {}
     const enabled = (await readJson(join(dir, 'settings.json'))).enabledPlugins ?? {}
-    for (const [id, versions] of Object.entries(installed as Record<string, { installPath?: string; version?: string }[]>)) {
-      const at = versions?.[0]?.installPath
+    for (const [id, versions] of Object.entries(installed as Record<string, { installPath?: string; version?: string; scope?: string; projectPath?: string }[]>)) {
+      // Installed for the member (scope user) and on in their settings, or kept by Claude Code to one folder (local or
+      // project scope). A session that turns a plugin on (skill-scope.ts) makes Claude Code record a user install too.
+      const list = Array.isArray(versions) ? versions : []
+      const user = list.find((x) => x?.scope === 'user' || !x?.scope)
+      const v = user ?? list[0]
+      const at = v?.installPath
       if (typeof at !== 'string') continue
+      const on = !!user && enabled[id] === true
+      const local = list.find((x) => x?.scope === 'local' || x?.scope === 'project')
+      const forOne = !on && typeof local?.projectPath === 'string' ? local.projectPath : null
       const [plugin, market] = id.split('@')
       for (const f of await skillFolders(join(at, 'skills'))) {
         const key = `${plugin}:${f.name}`
         const hit = seen.get(key)
-        if (hit) { hit.profiles.push(p); hit.enabled ||= enabled[id] === true; continue }
-        const row = { name: key, description: parseSkillMd((await readMd(f.dir)) ?? '').description, from: `Plugin ${plugin}${market ? ` from ${market}` : ''}${versions[0]?.version ? `, ${versions[0].version.slice(0, 12)}` : ''}`, kind: 'plugin' as const, enabled: enabled[id] === true, profiles: [p] }
+        if (hit) { hit.profiles.push(p); hit.enabled ||= on; continue }
+        const row: BuiltIn = {
+          name: key, description: parseSkillMd((await readMd(f.dir)) ?? '').description, from: `Plugin ${plugin}${market ? ` from ${market}` : ''}${v?.version ? `, ${v.version.slice(0, 12)}` : ''}`,
+          kind: 'plugin', enabled: on, profiles: [p], plugin: id, folders: scopes.plugins[id] ?? null, onlyIn: forOne,
+        }
         seen.set(key, row)
         out.push(row)
       }
@@ -377,7 +492,7 @@ async function builtIn() {
         const key = `account:${f.name}`
         const hit = seen.get(key)
         if (hit) { hit.profiles.push(p); continue }
-        const row = { name: f.name, description: parseSkillMd((await readMd(f.dir)) ?? '').description, from: 'Your Claude account, kept in sync by Claude Code', kind: 'account' as const, enabled: true, profiles: [p] }
+        const row: BuiltIn = { name: f.name, description: parseSkillMd((await readMd(f.dir)) ?? '').description, from: 'Your Claude account, kept in sync by Claude Code', kind: 'account' as const, enabled: true, profiles: [p] }
         seen.set(key, row)
         out.push(row)
       }
@@ -389,7 +504,7 @@ async function builtIn() {
 // ---------- Review (uploads and GitHub links) ----------
 
 const ID_RE = /^[a-f0-9]{24}$/
-type ReviewMeta = { id: string; createdAt: number; source: { kind: 'github'; url: string; repo: string; ref: string | null; path: string; sha: string } | { kind: 'upload'; file: string } }
+type ReviewMeta = { id: string; createdAt: number; only?: string[]; extras?: string[]; source: { kind: 'github'; url: string; repo: string; ref: string | null; path: string; sha: string } | { kind: 'upload'; file: string } }
 
 async function newReview() {
   await mkdir(reviewsDir(), { recursive: true, mode: 0o700 })
@@ -478,7 +593,9 @@ async function describeReview(dir: string, project?: string) {
       nameProblem: nameProblem(suggested), problems, collisions: await collisions(suggested, project),
     })
   }
-  return { id: meta.id, source: meta.source, skills }
+  const only = (meta.only ?? []).map((o) => o.toLowerCase())
+  const picked = only.length ? skills.filter((x) => only.includes(x.folder.toLowerCase()) || only.includes((x.title ?? '').toLowerCase())) : skills
+  return { id: meta.id, source: meta.source, skills: picked, extras: meta.extras ?? [] }
 }
 
 async function gitIn(dir: string, args: string[], timeout = 120_000) {
@@ -499,10 +616,63 @@ async function gitIn(dir: string, args: string[], timeout = 120_000) {
   }
 }
 
+// ---------- Plugins: their skills, from the marketplace that lists them ----------
+
+const OFFICIAL = 'claude-plugins-official'
+type Market = { source: Record<string, unknown>; at?: unknown }
+/** The marketplaces the member added to Claude Code, and Anthropic's official one even if they haven't. */
+async function marketplaces(): Promise<Record<string, Market>> {
+  const known = await readJson(join(profileDir('default'), 'plugins', 'known_marketplaces.json'))
+  const out: Record<string, Market> = {}
+  for (const [k, v] of Object.entries(known)) if (v && typeof v === 'object') out[k] = { source: v.source ?? {}, at: v.installLocation }
+  out[OFFICIAL] ??= { source: { source: 'github', repo: 'anthropics/claude-plugins-official' } }
+  return out
+}
+const marketRepo = (src: Record<string, unknown>): GithubRef | null => {
+  const g = src.source === 'github' && typeof src.repo === 'string' ? parseGithubUrl(`github.com/${src.repo}`) : typeof src.url === 'string' ? parseGithubUrl(src.url) : null
+  return g && typeof src.ref === 'string' && /^[\w.\/-]{1,200}$/.test(src.ref) ? { ...g, rest: [src.ref] } : g
+}
+/** Its marketplace.json: Claude Code's copy when the member added it, else GitHub's (public repositories). */
+async function marketplaceJson(name: string, m: Market): Promise<Record<string, any>> {
+  if (typeof m.at === 'string') {
+    const local = await readJson(join(m.at, '.claude-plugin', 'marketplace.json'))
+    if (Array.isArray(local.plugins)) return local
+  }
+  const g = marketRepo(m.source)
+  if (!g) throw new Error(`The ${name} marketplace is a folder on this server, not on GitHub. DevDash installs plugins' skills from GitHub only.`)
+  const res = await fetch(`https://raw.githubusercontent.com/${g.owner}/${g.repo}/${g.rest[0] ?? 'HEAD'}/.claude-plugin/marketplace.json`, { signal: AbortSignal.timeout(20_000) })
+  if (!res.ok) throw new Error(`Could not read the ${name} marketplace from GitHub (${res.status}).`)
+  const text = await res.text()
+  if (text.length > 5 * MB) throw new Error(`The ${name} marketplace list is too big.`)
+  const v = JSON.parse(text) as unknown
+  return v && typeof v === 'object' ? (v as Record<string, any>) : {}
+}
+/** Where `/plugin install name[@marketplace]` would get the plugin from, as a GitHub folder. */
+async function resolvePlugin(name: string, marketplace: string | null): Promise<GithubRef> {
+  const all = await marketplaces()
+  if (marketplace && !all[marketplace]) throw new Error(`DevDash doesn't know the ${marketplace} marketplace. Paste the plugin's GitHub link instead, or "/plugin marketplace add owner/repo" to see all its skills.`)
+  const hits: { market: string; entry: Record<string, unknown>; root: unknown }[] = []
+  for (const k of marketplace ? [marketplace] : Object.keys(all)) {
+    const json = await marketplaceJson(k, all[k]!).catch((err: Error) => { if (marketplace) throw err; return {} as Record<string, any> })
+    const entry = (Array.isArray(json.plugins) ? json.plugins : []).find((p: unknown) => !!p && typeof p === 'object' && (p as { name?: unknown }).name === name)
+    if (entry) hits.push({ market: k, entry, root: json.metadata?.pluginRoot })
+  }
+  if (!hits.length) throw new Error(marketplace ? `${marketplace} has no plugin called ${name}.` : `None of your marketplaces has a plugin called ${name}. Add @marketplace, or paste its GitHub link.`)
+  if (hits.length > 1) throw new Error(`${hits.map((h) => `${name}@${h.market}`).join(' and ')} both exist: paste the one you mean.`)
+  const g = pluginSource(hits[0]!.entry.source, marketRepo(all[hits[0]!.market]!.source), hits[0]!.root)
+  if (typeof g === 'string') throw new Error(g)
+  return g
+}
+/** What a plugin has besides skills: DevDash installs only the skills, so the review says what's left out. */
+const PLUGIN_EXTRAS: [string, string][] = [['hooks', 'hooks'], ['.mcp.json', 'MCP servers'], ['commands', 'commands'], ['agents', 'agents']]
+
+const PASTE_HELP = 'Paste a GitHub link (a repository or a folder in it), owner/repo, or an install command like "npx skills add owner/repo" or "/plugin install name@marketplace".'
+
 async function reviewGithub(r: Record<string, unknown>) {
-  const url = String(r.url ?? '')
-  const g = parseGithubUrl(url)
-  if (!g) throw new Error('Paste a GitHub link to a repository or a folder in it, like https://github.com/owner/repo/tree/main/skills/pdf.')
+  const url = String(r.url ?? '').trim()
+  const pasted = parsePasted(url)
+  if (!pasted) throw new Error(PASTE_HELP)
+  const g = 'plugin' in pasted ? await resolvePlugin(pasted.plugin, pasted.marketplace) : pasted.github
   const remote = `https://github.com/${g.owner}/${g.repo}.git`
   const { id, dir, src } = await newReview()
   try {
@@ -527,9 +697,13 @@ async function reviewGithub(r: Record<string, unknown>) {
     for (const l of links) await rm(join(src, l), { recursive: true, force: true })
     await vetTree(src)
     if (links.length) await writeFile(join(dir, 'links.json'), JSON.stringify(links))
-    const meta: ReviewMeta = { id, createdAt: Date.now(), source: { kind: 'github', url: url.trim(), repo: `${g.owner}/${g.repo}`, ref, path, sha } }
+    const base = path ? join(src, path) : src
+    const extras = 'plugin' in pasted || existsSync(join(base, '.claude-plugin')) ? PLUGIN_EXTRAS.filter(([f]) => existsSync(join(base, f))).map(([, what]) => what) : []
+    const link = /^https?:\/\//i.test(url) ? url : `https://github.com/${g.owner}/${g.repo}${path ? `/tree/${sha}/${path}` : ''}`
+    const meta: ReviewMeta = { id, createdAt: Date.now(), only: pasted.only, extras, source: { kind: 'github', url: link, repo: `${g.owner}/${g.repo}`, ref: ref === 'HEAD' ? null : ref, path, sha } }
     await writeFile(join(dir, 'meta.json'), JSON.stringify(meta))
     const review = await describeReview(dir, r.project ? checkedProject(r.project) : undefined)
+    if (!review.skills.length && pasted.only.length) throw new Error(`There is no skill called ${pasted.only.join(' or ')} there.`)
     if (!review.skills.length) throw new Error(links.length ? 'The skills there are links to other folders, which DevDash does not install.' : 'There is no SKILL.md in that folder or under it.')
     return withLinks(review, links)
   } catch (err) {
@@ -697,8 +871,9 @@ export const ops = {
       return { skills: await Promise.all((await skillFolders(projectSkillsDir(project))).map(async (f) => ({ ...(await summary(f)), enabled: true }))), push: await pushState(project) }
     }
     const shadowed = await syncProfiles().catch(() => [])
-    const on = await Promise.all((await skillFolders(mySkillsDir(), ['synced'])).map(async (f) => ({ ...(await summary(f)), enabled: true })))
-    const off = await Promise.all((await skillFolders(offDir())).map(async (f) => ({ ...(await summary(f)), enabled: false })))
+    const { skills: where } = await readScopes()
+    const on = await Promise.all((await skillFolders(mySkillsDir(), ['synced'])).map(async (f) => ({ ...(await summary(f)), enabled: true, folders: where[f.name] ?? null })))
+    const off = await Promise.all((await skillFolders(offDir())).map(async (f) => ({ ...(await summary(f)), enabled: false, folders: where[f.name] ?? null })))
     return { skills: [...on, ...off].sort((a, b) => a.name.localeCompare(b.name)), builtIn: await builtIn(), profiles: profileNames(), shadowed }
   },
 
@@ -707,8 +882,23 @@ export const ops = {
     const { project } = scopeOf(r)
     if (project) return { skill: await detail(destDir(project, name), name, { enabled: true }) }
     const on = destDir(null, name)
-    if (existsSync(on)) return { skill: await detail(on, name, { enabled: true }) }
-    return { skill: await detail(join(offDir(), name), name, { enabled: false }) }
+    const folders = (await readScopes()).skills[name] ?? null
+    if (existsSync(on)) return { skill: await detail(on, name, { enabled: true, folders }) }
+    return { skill: await detail(join(offDir(), name), name, { enabled: false, folders }) }
+  },
+
+  /** Where one of My skills, or a plugin, is used: `folders` (absolute or ~/…), or null for everywhere. */
+  async scope(r: Req) {
+    const folders = r.folders === null ? null : cleanFolders(r.folders)
+    if (typeof r.plugin === 'string') {
+      if (!(await builtIn()).some((b) => b.plugin === r.plugin)) throw new Error('That plugin is not installed.')
+      await setScope('plugins', r.plugin, folders)
+      return { ok: true }
+    }
+    const name = checkedFolder(r.name)
+    if (!existsSync(destDir(null, name)) && !existsSync(join(offDir(), name))) throw new Error('That skill is not there anymore.')
+    await setScope('skills', name, folders)
+    return { ok: true }
   },
 
   /** A skill written in DevDash: name, description and body. */
@@ -783,6 +973,7 @@ export const ops = {
       if (l.isSymbolicLink()) await unlink(dest) // a link the member made: only the link goes
       else await rm(dest, { recursive: true, force: true })
     }
+    await setScope('skills', name, null)
     return after(null, name, '')
   },
 

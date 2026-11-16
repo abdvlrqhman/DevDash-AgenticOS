@@ -16,6 +16,7 @@ import { guestMay } from './guest.ts'
 import type { PermissionResult } from './sdk.ts'
 import { hasSession, tmux } from './tmux.ts'
 import * as opencode from './opencode.ts'
+import { sessionSkills } from './skill-scope.ts'
 
 /** What DevDash needs to know about one ACP agent. */
 type Agent = {
@@ -173,7 +174,7 @@ export function notACommand(prompt: Record<string, unknown>[]): Record<string, u
  */
 const READS = new Set(['Read', 'Grep', 'Glob', 'LS', 'TodoWrite', 'WebSearch', 'Task', 'skill', 'Skill'])
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'patch', 'apply_patch'])
-const REACHES = /^mcp__plugin_devdash_devdash__(net_|session_(create|send|stop)$|schedule_(create|update|delete)$)/
+const REACHES = /^mcp__plugin_devdash_devdash__(net_|session_(create|send|stop)$|schedule_(create|update|delete)$|skill_(update|remove)$)/
 export function autoAllowed(mode: string, tool: string) {
   if (mode === 'bypassPermissions') return true
   if (READS.has(tool) || tool.startsWith('mcp__plugin_devdash_devdash__') && !REACHES.test(tool)) return true
@@ -225,9 +226,10 @@ async function startChat(l: Launch): Promise<Chat> {
     devdash: { type: 'local', command: [process.execPath, join(PLUGIN_DIR, 'mcp', 'devdash.mjs')], environment: { DEVDASH_AGENT_SOCKET: process.env.DEVDASH_AGENT_SOCKET ?? '', DEVDASH_SESSION_ID: l.id } },
   }
   for (const [name, s] of Object.entries(tn?.mcpServers ?? {})) mcp[name] = { type: 'remote', url: (s as { url: string }).url }
+  const hideSkills = (await sessionSkills(l.cwd).catch(() => null))?.hide
   const child = spawn(agent.bin, agent.acpArgs, {
     cwd: l.cwd,
-    env: { ...process.env, ...agent.profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}), ...agent.sessionEnv({ rulesFile, mcp }) },
+    env: { ...process.env, ...agent.profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}), ...agent.sessionEnv({ rulesFile, mcp, hideSkills }) },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   child.stderr!.on('data', (d: Buffer) => console.error(`[${l.id.slice(0, 8)}] ${d.toString().trimEnd().slice(0, 2000)}`))
@@ -671,7 +673,8 @@ export const openCli = (l: Launch, cols: number, rows: number) => serial(l.id, a
     devdash: { type: 'local', command: [process.execPath, join(PLUGIN_DIR, 'mcp', 'devdash.mjs')], environment: { DEVDASH_AGENT_SOCKET: process.env.DEVDASH_AGENT_SOCKET ?? '', DEVDASH_SESSION_ID: l.id } },
   }
   for (const [name, s] of Object.entries(tn?.mcpServers ?? {})) mcp[name] = { type: 'remote', url: (s as { url: string }).url }
-  const env = { ...agent.profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}), ...agent.sessionEnv({ rulesFile, mcp, cliMode: l.permissionMode, nativeId }) }
+  const hideSkills = (await sessionSkills(l.cwd).catch(() => null))?.hide
+  const env = { ...agent.profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}), ...agent.sessionEnv({ rulesFile, mcp, cliMode: l.permissionMode, nativeId, hideSkills }) }
   try {
     await tmux('new-session', '-d', '-s', cliSession(l.id), '-c', l.cwd, '-x', String(cols), '-y', String(rows),
       ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), agent.bin, ...agent.cliArgs(nativeId))

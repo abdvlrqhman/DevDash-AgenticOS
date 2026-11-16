@@ -14,12 +14,19 @@ export type SkillSource =
   | { kind: 'github'; url: string; repo: string; ref: string | null; path: string; sha: string; installedAt: number }
   | { kind: 'upload'; file: string; installedAt: number }
   | { kind: 'written'; installedAt: number }
+/** `folders`: where one of My skills (or a plugin) is used; null = in every session (apps/agent/src/skill-scope.ts). */
 export type SkillSummary = {
   name: string; title: string | null; description: string | null; linked: boolean; files: number; runs: boolean; source: SkillSource | null; enabled?: boolean
+  folders?: string[] | null
 }
-export type BuiltInSkill = { name: string; description: string | null; from: string; kind: 'devdash' | 'plugin' | 'account'; enabled: boolean; profiles: string[] }
+export type BuiltInSkill = {
+  name: string; description: string | null; from: string; kind: 'devdash' | 'plugin' | 'account'; enabled: boolean; profiles: string[]
+  /** A plugin's: its id, where DevDash uses it, and the one folder Claude Code itself keeps it to (installed --scope local). */
+  plugin?: string; folders?: string[] | null; onlyIn?: string | null
+}
 export type SkillDetail = {
   name: string; title: string | null; description: string | null; markdown: string; files: SkillFile[]; source: SkillSource | null; path: string; linked: boolean; enabled: boolean
+  folders?: string[] | null
 }
 export type PushState = { branch: string | null; upstream: string | null; ahead: number }
 export type ReviewSource = { kind: 'github'; url: string; repo: string; ref: string | null; path: string; sha: string } | { kind: 'upload'; file: string }
@@ -27,7 +34,8 @@ export type ReviewSkill = {
   path: string; folder: string; title: string | null; description: string | null; markdown: string; files: SkillFile[]; size: number
   suggested: string; nameProblem: string | null; problems: string[]; collisions: string[]
 }
-export type Review = { id: string; source: ReviewSource; skills: ReviewSkill[] }
+/** `extras`: what a plugin has besides skills (hooks, MCP servers…), which DevDash leaves out. */
+export type Review = { id: string; source: ReviewSource; skills: ReviewSkill[]; extras?: string[] }
 export type Changed = { name?: string; shadowed?: { profile: string; name: string }[]; commit?: { sha: string | null; branch: string | null }; push?: PushState }
 
 const ARCHIVE_MAX = 10 * 1024 * 1024
@@ -42,6 +50,8 @@ const param = <T>(schema: z.ZodType<T>, v: string, what: string) => {
   if (!r.success) throw new AppError(400, 'invalid_input', `Invalid ${what}.`)
   return r.data
 }
+const Folders = z.object({ folders: z.array(z.string().min(1).max(500)).min(1).max(50).nullable() })
+const PluginId = z.string().regex(/^[A-Za-z0-9][\w.-]{0,99}@[A-Za-z0-9][\w.-]{0,99}$/)
 const Install = z.object({ path: z.string().max(1000), name: Name, project: Slug.optional(), replace: z.boolean().default(false) })
 
 export function skillsRoutes(agents: AgentsService, projects: ProjectsService, mw: ReturnType<typeof authMiddleware>) {
@@ -67,6 +77,11 @@ export function skillsRoutes(agents: AgentsService, projects: ProjectsService, m
     .post('/mine', json(Write), async (c) => c.json(await ask<Changed>(as(c), { op: 'skills.write', ...c.req.valid('json') })))
     .put('/mine/:name/enabled', json(z.object({ enabled: z.boolean() })), async (c) =>
       c.json(await ask<Changed>(as(c), { op: 'skills.enable', name: param(Folder, c.req.param('name'), 'skill name'), enabled: c.req.valid('json').enabled })))
+    // Where it's used: only in these folders (projects, ~/projects/x), or everywhere (null). Claude Code and OpenCode alike.
+    .put('/mine/:name/folders', json(Folders), async (c) =>
+      c.json(await ask(as(c), { op: 'skills.scope', name: param(Folder, c.req.param('name'), 'skill name'), folders: c.req.valid('json').folders })))
+    .put('/plugins/:id/folders', json(Folders), async (c) =>
+      c.json(await ask(as(c), { op: 'skills.scope', plugin: param(PluginId, c.req.param('id'), 'plugin'), folders: c.req.valid('json').folders })))
     .delete('/mine/:name', async (c) => c.json(await ask<Changed>(as(c), { op: 'skills.remove', name: param(Folder, c.req.param('name'), 'skill name') })))
 
     // A project's skills (.claude/skills in its checkout), each change its own commit.

@@ -82,4 +82,8 @@ test("a session's own flag settings: fast mode and the advisor only when it turn
   assert.deepEqual(flagSettings({ advisor: 'opus' }), { advisorModel: 'opus' })
   assert.deepEqual(flagSettings({ fast: true, advisor: 'fable' }), { fastMode: true, advisorModel: 'fable' })
   assert.deepEqual(flagSettings({ fast: true, advisor: null }), { fastMode: true })
+  // My skills and plugins meant for other folders (skill-scope.ts): off by folder name; plugins on or off by id.
+  assert.equal(flagSettings({}, { hide: [], plugins: {} }), null)
+  assert.deepEqual(flagSettings({}, { hide: ['pdf', 'deck'], plugins: { 'x@m': false, 'y@m': true } }),
+    { skillOverrides: { pdf: 'off', deck: 'off' }, enabledPlugins: { 'x@m': false, 'y@m': true } })
 })

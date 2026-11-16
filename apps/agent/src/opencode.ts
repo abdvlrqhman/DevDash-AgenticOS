@@ -86,10 +86,14 @@ export function cliPermissions(mode: string): Rule[] {
  * passed over ACP, so the CLI gets them too, and their tools are called directly rather than through OpenCode's code
  * mode, where neither the step list nor the gate could see them.
  */
-export function config(o: { rulesFile: string; mcp: Record<string, { type: 'local'; command: string[]; environment: Record<string, string> } | { type: 'remote'; url: string }>; cliMode?: string; noTools?: boolean }) {
+export function config(o: { rulesFile: string; mcp: Record<string, { type: 'local'; command: string[]; environment: Record<string, string> } | { type: 'remote'; url: string }>; cliMode?: string; noTools?: boolean; hideSkills?: string[] }) {
   return {
-    // noTools: a one-off answer (harness.ts complete), which may use nothing.
-    permissions: o.noTools ? [rule('*', 'deny')] : o.cliMode ? cliPermissions(o.cliMode) : [rule('*', 'ask')],
+    // noTools: a one-off answer (harness.ts complete), which may use nothing. hideSkills: My skills meant for other
+    // folders (skill-scope.ts); a denied skill isn't even listed, and the last matching rule wins, so these go last.
+    permissions: [
+      ...(o.noTools ? [rule('*', 'deny')] : o.cliMode ? cliPermissions(o.cliMode) : [rule('*', 'ask')]),
+      ...(o.hideSkills ?? []).map((name): Rule => ({ action: 'skill', resource: name, effect: 'deny' })),
+    ],
     instructions: [o.rulesFile],
     update: 'disable', // the install is root's: deploy/opencode-update.sh updates it for everyone
     experimental: { todo: true }, // a to-do list, shown beside the conversation

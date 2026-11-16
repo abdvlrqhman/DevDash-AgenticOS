@@ -61,6 +61,9 @@ export const removeSkill = (name: string, project?: string) => project
   ? unwrap(api.api.skills.projects[':slug'].skill[':name'].$delete({ param: { slug: project, name } }))
   : unwrap(api.api.skills.mine[':name'].$delete({ param: { name } }))
 export const setEnabled = (name: string, enabled: boolean) => unwrap(api.api.skills.mine[':name'].enabled.$put({ param: { name }, json: { enabled } }))
+/** Where one of My skills (or a plugin, by its id) is used: these folders, or null for every session. */
+export const setFolders = (name: string, folders: string[] | null) => unwrap(api.api.skills.mine[':name'].folders.$put({ param: { name }, json: { folders } }))
+export const setPluginFolders = (id: string, folders: string[] | null) => unwrap(api.api.skills.plugins[':id'].folders.$put({ param: { id }, json: { folders } }))
 export const pushProject = (slug: string) => unwrap(api.api.skills.projects[':slug'].push.$post({ param: { slug } }))
 
 /** What in a skill could run: scripts, binaries, anything executable. */
