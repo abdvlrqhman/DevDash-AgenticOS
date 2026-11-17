@@ -232,6 +232,27 @@ const safeName = (n: string) => n.split(/[\\/]/).pop()!.replace(/[^\w.\- ()]/g, 
 type Notify = (userId: number, kind: NotificationKind, n: { title: string; body?: string; url?: string; tag?: string }) => Promise<void>
 
 const clip = (t: string, n = 160) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t)
+
+type Person = { id: number; username: string; name: string }
+/**
+ * Who an agent's notification goes to: `fallback` when it names no one, the whole team for "everyone", else each named
+ * member by username, full name or first name (any case). An unknown or ambiguous name throws, listing the team. Pure.
+ */
+export function recipients(to: unknown, team: Person[], fallback: Person): Person[] {
+  const list = (Array.isArray(to) ? to : to === undefined || to === null ? [] : [to]).map((x) => String(x).trim().replace(/^@/, '').toLowerCase()).filter(Boolean)
+  if (!list.length) return [fallback]
+  if (list.includes('everyone')) return team
+  const out = new Map<number, Person>()
+  for (const w of list) {
+    const exact = team.filter((m) => m.username.toLowerCase() === w || m.name.toLowerCase() === w)
+    const hits = exact.length ? exact : team.filter((m) => m.name.split(' ')[0]!.toLowerCase() === w)
+    if (hits.length !== 1) {
+      throw new AppError(400, 'unknown_person', `${hits.length ? `More than one member is called "${w}"` : `No member is called "${w}"`}. The team: ${team.map((m) => `${m.username} (${m.name})`).join(', ')}.`)
+    }
+    out.set(hits[0]!.id, hits[0]!)
+  }
+  return [...out.values()]
+}
 /**
  * The push/toast for a request Claude is blocked on: an actionable title and body so the person can decide at a
  * glance (and often knows the answer without opening it). Pure, so it is unit-tested. `sessionTitle` gives context
@@ -333,6 +354,41 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   }
   // How notifications name who's talking: the session's agent, or the owner's personal agent by its own name.
   const nameOf = (s: SessionRow) => (s.origin_kind === 'assistant' ? 'Hamasa' : agentName(s.harness))
+  // The agent's own notifications (DevDash's notify tool, packages/claude-plugin/mcp/devdash.mjs): it decides when and to
+  // whom. DevDash writes the title (whose agent, which session), so a message can't pass for DevDash itself.
+  const notifiedAt = new Map<string, number>()
+  const members = db.prepare('select id, username, name from users where disabled_at is null order by name')
+  const notifyFrom = (username: string, params: unknown) => {
+    const c = (params ?? {}) as { sessionId?: string | null; args?: Record<string, unknown> }
+    const s = c.sessionId ? repo.byId(c.sessionId) : undefined
+    if (!s || s.owner_username !== username) throw new AppError(400, 'no_session', 'Only a DevDash session can send notifications.')
+    // Like alert(): a session a feature started (a team role's, a review's) reports through that feature.
+    if (!s.listed && s.origin_kind !== 'assistant') return 'Not sent: this session reports through the feature that started it.'
+    const a = c.args ?? {}
+    const message = typeof a.message === 'string' ? a.message.replace(/\s+/g, ' ').trim() : ''
+    if (!message) throw new AppError(400, 'bad_args', 'Give the message: one line, leading with what they should know or do.')
+    const link = typeof a.link === 'string' && a.link.trim() ? a.link.trim() : null
+    if (link && !/^\/(?!\/)[^\s<>"]*$/.test(link)) throw new AppError(400, 'bad_args', 'link is a DevDash path, like /tasks/shop/12.')
+    const ago = Date.now() - (notifiedAt.get(s.id) ?? 0)
+    if (ago < 30_000) throw new AppError(429, 'too_soon', `This session sent one ${Math.round(ago / 1000)}s ago: put everything in one notification.`)
+    const team = members.all() as Person[]
+    // By default, whoever sent the message being answered (the owner, or the teammate who asked); DevDash's record, not a guess.
+    const asked = s.mode === 'cli' ? null : repo.lastSender(s.id) // only the owner (or full access) types in the terminal
+    const to = recipients(a.to, team, team.find((m) => m.id === (asked?.id ?? s.owner_id)) ?? { id: s.owner_id, username: s.owner_username, name: s.owner_name })
+    notifiedAt.set(s.id, Date.now())
+    const whose = `${s.owner_name.split(' ')[0]}'s ${nameOf(s)}`
+    for (const u of to) {
+      const sees = canView(u, s)
+      void notify(u.id, 'finished', {
+        title: sees ? `${u.id === s.owner_id ? nameOf(s) : whose} · ${s.title}` : `${whose}${s.project_name ? ` in ${s.project_name}` : ''}`,
+        body: clip(message, 200),
+        url: link ?? (sees ? `/sessions/${s.id}` : s.project_slug ? `/projects/${s.project_slug}` : '/'),
+        tag: `agent:${s.id}`,
+      }).catch((err) => console.error('notify:', err))
+    }
+    return `Sent to ${to.map((u) => u.name).join(', ')}.`
+  }
+
   const alert = (s: SessionRow, kind: NotificationKind, title: string, body?: string) => {
     if (!s.listed && s.origin_kind !== 'assistant') return // the feature that started an unlisted session tells people what matters
     if (kind === 'errors') {
@@ -433,7 +489,6 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         // Chat mode notifies from the richer permission/result events below; the CLI only reports status.
         if (st === 'error') alert(s, 'errors', `${nameOf(s)} stopped with an error: ${s.title}`, typeof ev.detail === 'string' ? clip(ev.detail) : undefined)
         else if (s.mode === 'cli' && st === 'waiting' && s.status !== 'waiting') alert(s, 'needs_you', `${nameOf(s)} needs you: ${s.title}`, 'Waiting for you in the CLI')
-        else if (s.mode === 'cli' && st === 'idle' && s.status === 'working') alert(s, 'finished', `${nameOf(s)} finished: ${s.title}`)
         if (s.mode === 'cli' && s.status === 'working' && (st === 'idle' || st === 'stopped')) turnEnded({ session: s, ok: true, aborted: false, result: null, costUsd: 0 })
         return publish(s.id)
       }
@@ -465,10 +520,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
             publish(s.id)
           }
         }
-        // Pressing Stop ends the turn with an "aborted" reason: nothing to tell anyone.
-        if (m.type === 'result' && !m.terminal_reason?.startsWith('aborted')) {
-          if (m.subtype === 'success' && !m.is_error) alert(s, 'finished', `${nameOf(s)} finished: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
-          else alert(s, 'errors', `${nameOf(s)} stopped with an error: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
+        // A finished turn tells no one: the agent decides with its notify tool. Stop ends a turn "aborted": nothing either.
+        if (m.type === 'result' && !m.terminal_reason?.startsWith('aborted') && (m.subtype !== 'success' || m.is_error)) {
+          alert(s, 'errors', `${nameOf(s)} stopped with an error: ${s.title}`, typeof m.result === 'string' ? clip(m.result) : undefined)
         }
         // The last message of the answer so far: where the answer's numbers go in the transcript.
         const top = ev.msg as { uuid?: string; parent_tool_use_id?: string | null; message?: { model?: string } }
@@ -882,6 +936,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
     /** Whether the session's current turn answers only messages its owner typed themself (see typedTurn). */
     typedByOwner: (id: string) => typedTurn.get(id) === true,
+    /** DevDash's notify tool (registered in app.ts as mcp.notify): the agent's own notification, from one of its sessions. */
+    notifyFrom,
 
     /**
      * One piece of a big attachment, written straight into the session owner's account (Claude runs as them), so a

@@ -69,6 +69,7 @@ test("OpenCode's terminal app asks as the session's permission mode would; Chat 
   assert.equal(effect(cliPermissions('bypassPermissions'), 'shell'), 'allow')
   assert.deepEqual(['edit', 'shell'].map((a) => effect(cliPermissions('acceptEdits'), a)), ['allow', 'ask'])
   assert.deepEqual(['read', 'edit', 'shell'].map((a) => effect(cliPermissions('default'), a)), ['allow', 'ask', 'ask'])
+  assert.equal(effect(cliPermissions('default'), 'devdash_notify'), 'allow', "DevDash's notify tool never asks: asking would ping the person")
   const chat = config({ rulesFile: '/r.md', mcp: { devdash: { type: 'local', command: ['node', 'x.mjs'], environment: {} } } })
   assert.deepEqual(chat.permissions, [{ action: '*', resource: '*', effect: 'ask' }])
   assert.deepEqual(chat.mcp.servers.devdash, { type: 'local', command: ['node', 'x.mjs'], environment: {}, codemode: false })

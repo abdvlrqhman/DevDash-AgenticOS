@@ -213,6 +213,8 @@ function setStatus(c: Chat | undefined, id: string, status: Status, detail?: str
 }
 
 // Added to Claude's system prompt in Chat and CLI: how to run things that must outlive a turn on a shared server.
+/** DevDash's notify tool runs without asking: a permission prompt would itself ping the person it's meant to spare. */
+const NOTIFY = 'mcp__plugin_devdash_devdash__notify'
 const RULES = `You are running on a DevDash server that a team shares and that stays on 24/7.
 New apps, sites and experiments each get their own folder under ~/projects/<short-name> (work in the current folder when it is already a project's own folder, which is the usual case). Never create a project directly in the home folder.
 Long-running processes (web servers, dev servers, APIs, workers, containers) go in the DevDash services center, never in a foreground or background Bash command:
@@ -228,6 +230,7 @@ Be light on the shared machine — its disk and CPU are limited and used by ever
 - Don't commit large binaries or build artifacts.
 - The CPU is shared by the whole team and other services: don't fan out many heavy parallel subagents or run several big builds/test suites at once — do heavy work in sequence.
 People read your replies in DevDash, where a file path you write opens that file. When you mention a file or folder, write its full path (from / or ~/), also when it's in a worktree or another checkout; never just its name.
+Notifications: DevDash doesn't ping anyone when you finish a reply; you decide, with DevDash's notify tool (not PushNotification). Send one when there's a real chance the person has stepped away and something is worth coming back for (a long task done, a build, deploy or PR ready or broken, a decision only they can make), or when someone asks to be told. Not for quick answers, routine progress, or a question you're asking right now (DevDash already tells them when you're waiting for an answer or a permission). One line under 200 characters, leading with what they'd act on. It goes to whoever sent the message you're answering; name others in "to" when the news is theirs (the teammate who asked, the person whose work it affects), or "everyone" for the whole team, rarely.
 When you delete something, name exactly what (rm -rf /tmp/build-1234), never a path worked out while the command runs (rm -rf "$(ls … | head -1)" or an unset variable): Claude Code can't check those and stops to ask a person, in every mode. Scripts that clean up after themselves need no rm at all.`
 
 /**
@@ -252,7 +255,7 @@ const TAILNET_NOTE = `This session can reach the owner's private Tailscale tailn
 Your own Anthropic API calls are NOT proxied; they go out directly as usual.`
 
 /** Once the team's shared tools exist (shared-tools.ts): use them, don't download private copies. */
-const SHARED_TOOLS_NOTE = `The team shares its downloaded tools in ${sharedRoot()}, already set in your environment: the Android SDK ($ANDROID_HOME), Flutter (on PATH; a project that needs another version pins it with FVM, whose versions are shared too), and package caches (pub, npm, pip, Hugging Face models, Playwright browsers). Use them: don't download SDKs, browsers or models into the home folder, and install packages into the project, not globally (no npm -g or pip --user). Add an Android platform or tool with sdkmanager into $ANDROID_HOME, for everyone. Logins (tokens, .npmrc, pip.conf) stay in each person's own config, never in ${sharedRoot()}.`
+const SHARED_TOOLS_NOTE = `The team shares its downloaded tools in ${sharedRoot()}, already set in your environment: the Android SDK ($ANDROID_HOME), Flutter (on PATH; a project that needs another version pins it with FVM, whose versions are shared too), and package caches (pub, npm, pip, Hugging Face models, Playwright browsers). Use them: don't download SDKs, browsers or models into the home folder or a project. A project that already keeps its own copy (like .tools/android-sdk, or its scripts setting ANDROID_HOME or GRADLE_USER_HOME to one) predates them: when you work on that part, point it at the shared one, check the build still works, and remove the copy. Install packages into the project, not globally (no npm -g or pip --user). Add an Android platform or tool with sdkmanager into $ANDROID_HOME, for everyone. Logins (tokens, .npmrc, pip.conf) stay in each person's own config, never in ${sharedRoot()}.`
 
 export const systemAppend = (l: Launch) => {
   const parts = [RULES, sharedNote(l.ownerName ?? 'the owner'), storage.note(l.storage, storage.driveFolder(l.cwd))]
@@ -313,7 +316,7 @@ async function startChat(l: Launch): Promise<Chat> {
       // A complete Claude Code session: same system prompt, settings, skills, agents, hooks and MCP as the CLI.
       systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend(l) },
       ...(l.toolPolicy?.tools ? { tools: l.toolPolicy.tools } : {}),
-      ...(l.toolPolicy?.allow ? { allowedTools: l.toolPolicy.allow } : {}),
+      allowedTools: [...(l.toolPolicy?.allow ?? []), NOTIFY],
       plugins: [{ type: 'local', path: PLUGIN_DIR }],
       includePartialMessages: true,
       canUseTool: async (toolName: string, input: Record<string, unknown>, o: AskOptions) =>
@@ -564,7 +567,7 @@ async function openCliNow(l: Launch, cols: number, rows: number) {
   const tn = await setupTailnet(l).catch((err: Error) => { console.error(`[${l.id.slice(0, 8)}] tailnet:`, err.message); return null })
   const args = [CLAUDE_BIN, ...(l.started ? ['--resume', l.id] : ['--session-id', l.id]), '--plugin-dir', PLUGIN_DIR, '--append-system-prompt', systemAppend(l)]
   if (l.toolPolicy?.tools?.length) args.push('--tools', l.toolPolicy.tools.join(','))
-  if (l.toolPolicy?.allow?.length) args.push('--allowedTools', l.toolPolicy.allow.join(','))
+  args.push('--allowedTools', [...(l.toolPolicy?.allow ?? []), NOTIFY].join(','))
   if (l.model) args.push('--model', l.model)
   if (l.effort) args.push('--effort', l.effort)
   const flags = flagSettings(l, await sessionSkills(l.cwd).catch(() => null))

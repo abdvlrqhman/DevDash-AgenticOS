@@ -38,6 +38,7 @@ test('guest turns: the shared project is fine, the owner\'s access waits for the
 
     // Connected tools wait unless shared: they act with the owner's accounts.
     assert.equal(guestMay('mcp__devdash__tasks_list', {}, o), false)
+    assert.equal(guestMay('mcp__plugin_devdash_devdash__notify', { to: ['omar'] }, o), true, "telling people something uses none of the owner's accounts")
     assert.equal(guestMay('SomethingNew', {}, o), false)
 
     // Planning, to-dos, web search and subagents use nothing of the owner's.

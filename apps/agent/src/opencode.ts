@@ -77,7 +77,8 @@ const rule = (action: string, effect: Rule['effect']): Rule => ({ action, resour
 export function cliPermissions(mode: string): Rule[] {
   if (mode === 'bypassPermissions' || mode === 'dontAsk' || mode === 'auto') return [rule('*', 'allow')]
   if (mode === 'acceptEdits') return [rule('*', 'allow'), rule('shell', 'ask')]
-  return [rule('*', 'ask'), ...['read', 'glob', 'grep', 'websearch', 'skill', 'question', 'subagent'].map((a) => rule(a, 'allow'))]
+  // devdash_notify: DevDash's notify tool (OpenCode names MCP tools <server>_<tool>); asking first would defeat it.
+  return [rule('*', 'ask'), ...['read', 'glob', 'grep', 'websearch', 'skill', 'question', 'subagent', 'devdash_notify'].map((a) => rule(a, 'allow'))]
 }
 
 /**

@@ -26,6 +26,18 @@ const TOOLS = [
   { name: 'notes_list', description: 'Team notes (decisions, setup steps, links), optionally only one project\'s.', inputSchema: obj({ project, all_projects: { type: 'boolean', description: 'Every note, not only this project\'s.' } }) },
   { name: 'note_get', description: 'Read one note.', inputSchema: obj({ id: { type: 'integer' } }, ['id']) },
   { name: 'note_upsert', description: 'Create a note (no id) or update one (with id). Notes are visible to the whole team.', inputSchema: obj({ id: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string', description: 'Markdown.' }, project, pinned: { type: 'boolean' } }) },
+  {
+    name: 'notify',
+    description: "Send a push notification (their phone and DevDash) about this session. DevDash doesn't ping anyone when you finish a reply: you decide. It pulls people away from whatever they're doing, so err toward not sending. Send one when there's a real chance they've stepped away and something is worth coming back for (a long task done, a build, deploy or PR ready or broken, a decision only they can make), or when someone asked to be told. Not for quick answers, routine progress, or a question you're asking in the chat right now (DevDash already tells them you're waiting). DevDash adds whose agent and which session it's from.",
+    inputSchema: obj({
+      message: { type: 'string', description: 'One line, under 200 characters, no markdown, leading with what they would act on: "Checkout PR ready: 2 tests still flaky", not "Task done".' },
+      to: {
+        description: 'Who gets it. Default: whoever sent the message you are answering (the owner, or the teammate who asked). Otherwise team members by username or name, e.g. ["omar"], or "everyone" for the whole team (rarely: news for all of them).',
+        anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
+      },
+      link: { type: 'string', description: 'A DevDash page to open instead of this session, like /tasks/shop/12.' },
+    }, ['message']),
+  },
   { name: 'services_list', description: 'Every long-running service on this server (everyone\'s), with ports and state. Start new ones with `devdash service add` in Bash.', inputSchema: obj({}) },
   { name: 'review_card_update', description: 'After you merge a dd/* branch into the default branch (or abandon it), close its "Ready to review" card so the founder doesn\'t see a card for work that already landed: status "merged" (pass merged_commit when you have it) or "dismissed" (give a short reason). Call this in the same step you merge a dd/* branch.', inputSchema: obj({ branch: { type: 'string', description: 'The dd/* branch of the card.' }, status: { type: 'string', enum: ['merged', 'dismissed'] }, reason: { type: 'string', description: 'For "dismissed": why, in a few words.' }, merged_commit: { type: 'string', description: 'The merge commit sha, if you have it.' } }, ['branch', 'status']) },
 ]

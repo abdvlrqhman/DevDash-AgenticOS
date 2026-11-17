@@ -32,6 +32,7 @@ const HARMLESS = new Set([
   'TodoWrite', 'Task', 'Agent', 'WebSearch', 'ToolSearch', 'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'Skill',
   'SlashCommand', 'TaskOutput', 'TaskStop', 'SendMessage', 'ListAgents', 'EnterWorktree', 'ExitWorktree', 'ScheduleWakeup',
   'CronCreate', 'CronDelete', 'CronList', 'PushNotification', 'LSP',
+  'mcp__plugin_devdash_devdash__notify', // tells people something; uses none of the owner's accounts
 ])
 /** File tools, and which of their inputs is a path. */
 const PATHS: Record<string, string[]> = {
