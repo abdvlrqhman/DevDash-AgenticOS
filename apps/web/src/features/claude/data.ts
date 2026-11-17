@@ -3,6 +3,7 @@ import type { InferResponseType } from 'hono/client'
 import { api, unwrap } from '../../lib/api'
 import { useTopic } from '../../lib/live'
 import { URGENCY } from './places'
+import type { Harness } from './harness'
 
 export { byFolder, folderName, sessionPlace, shortPath } from './places'
 
@@ -39,11 +40,11 @@ export type SubagentActivity = InferResponseType<(typeof api.api.claude.sessions
 
 export const profilesQuery = queryOptions({
   queryKey: ['claude', 'profiles'],
-  queryFn: () => unwrap(api.api.claude.profiles.$get()),
+  queryFn: () => unwrap(api.api.claude.profiles.$get({ query: {} })),
   staleTime: 30_000,
 })
 /** Slash commands and models: a Claude profile's, or another agent's (OpenCode lists every provider's models). */
-export const commandsQuery = (profile: string, harness: 'claude' | 'opencode' = 'claude') => queryOptions({
+export const commandsQuery = (profile: string, harness: Harness = 'claude') => queryOptions({
   queryKey: ['claude', 'commands', harness, profile],
   queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile, harness } })),
   staleTime: 60_000,

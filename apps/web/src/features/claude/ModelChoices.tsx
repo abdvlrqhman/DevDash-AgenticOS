@@ -15,7 +15,7 @@ import { groupModels, isDefaultModel, modelLabel, type ModelInfo } from './model
  * with more than one version expands in place, and the one holding the current choice starts open. `null` means the
  * agent's default.
  */
-export function ModelChoices({ models, harness, value, onChange }: { models: ModelInfo[]; harness: Harness; value: string | null; onChange: (v: string | null) => void }) {
+export function ModelChoices({ models, harness, value, onChange, hideDefault = false }: { models: ModelInfo[]; harness: Harness; value: string | null; onChange: (v: string | null) => void; hideDefault?: boolean }) {
   const { defName, families } = useMemo(() => groupModels(models), [models])
   const current = isDefaultModel(value) ? 'default' : value!
   const holder = families.find((f) => f.rows.some((r) => r.value === current))
@@ -24,12 +24,12 @@ export function ModelChoices({ models, harness, value, onChange }: { models: Mod
 
   return (
     <DropdownMenuRadioGroup value={current} onValueChange={(v) => onChange(v === 'default' ? null : v)}>
-      <DropdownMenuRadioItem value="default" className="items-start">
+      {!hideDefault && <DropdownMenuRadioItem value="default" className="items-start">
         <span className="flex flex-col">
           <span>{HARNESS[harness].label}'s default{defName && <span className="text-muted-foreground"> · {defName}</span>}</span>
           <span className="text-xs text-muted-foreground">{HARNESS[harness].defaultModel}</span>
         </span>
-      </DropdownMenuRadioItem>
+      </DropdownMenuRadioItem>}
       {families.map((f) => f.rows.length === 1 ? (
         <DropdownMenuRadioItem key={f.name} value={f.rows[0]!.value}>
           <span className="flex-1">{f.rows[0]!.displayName}</span>
@@ -86,7 +86,7 @@ export function ModelField({ id, harness, models, value, onChange, onCommit, cus
         </DropdownMenuContent>
       </DropdownMenu>
       {custom && (
-        <Input aria-label="Model ID" className="h-10 font-mono" placeholder={harness === 'claude' ? 'claude-opus-4-1' : 'anthropic/claude-sonnet-4-5'} value={value}
+        <Input aria-label="Model ID" className="h-10 font-mono" placeholder={harness === 'claude' ? 'claude-opus-4-1' : harness === 't3code' ? 'provider/model' : 'anthropic/claude-sonnet-4-5'} value={value}
           onChange={(e) => onChange(e.target.value)} onBlur={onCommit && commit}
           onKeyDown={onCommit && ((e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } })}
           spellCheck={false} autoCapitalize="none" autoFocus />

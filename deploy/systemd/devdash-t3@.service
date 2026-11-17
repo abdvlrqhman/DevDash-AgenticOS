@@ -1,0 +1,22 @@
+[Unit]
+Description=Member-owned T3 Code for DevDash user %i
+After=network.target
+
+[Service]
+# An independent data directory and OS user are the security boundary; no shared/root T3 instance is allowed.
+Slice=system-devdash-agent.slice
+User=%i
+WorkingDirectory=~
+Environment=LANG=C.UTF-8
+EnvironmentFile=/home/%i/.config/devdash/t3-service.env
+ExecStartPre=/usr/bin/test %i != root
+ExecStartPre=/usr/bin/node -e "const uid = process.getuid(); if (uid < 1000 || uid >= 65534) process.exit(1)"
+ExecStart=/opt/devdash/t3code/current/t3 serve --base-dir /home/%i/.local/share/devdash-t3 --host 127.0.0.1 --port ${DEVDASH_T3_PORT}
+KillMode=control-group
+Restart=on-failure
+RestartSec=3
+# Project files keep the same collaboration permissions as the member's agent. The data directory is private 0700.
+UMask=0002
+
+[Install]
+WantedBy=multi-user.target

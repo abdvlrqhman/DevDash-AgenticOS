@@ -23,7 +23,7 @@ import type { ModelInfo } from './models'
 type Profile = { name: string; loggedIn: boolean; authMethod: string | null; email: string | null; plan: string | null; memory: boolean }
 type Defaults = { harness: string; profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
 /** Another coding agent on this server, as the member's agent sees it (apps/agent/src/harness.ts). */
-type Agent = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[] }
+type Agent = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[]; error?: string }
 
 const profileName = (p: Profile) => (p.name === 'default' ? 'Default' : p.name)
 
@@ -31,6 +31,14 @@ export function SetupPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const q = useQuery(profilesQuery)
+  const refreshT3 = useMutation({
+    mutationFn: () => unwrap(api.api.claude.profiles.$get({ query: { refresh: 'true' } })),
+    onSuccess: async (data) => {
+      qc.setQueryData(profilesQuery.queryKey, data)
+      await qc.invalidateQueries({ queryKey: ['claude', 'commands', 't3code'] })
+      toast.success('T3 Code connection refreshed')
+    },
+  })
   const profiles = (q.data?.profiles as Profile[] | undefined) ?? []
   const [name, setName] = useState('')
   const create = useMutation({
@@ -83,9 +91,30 @@ export function SetupPage() {
         </Group>
         {!q.isPending && profiles.length > 0 && <MemorySection profiles={profiles} />}
         {q.data && <OpenCodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 'opencode')} onConnect={(p, kind) => navigate({ to: '/terminal', search: { open: `oc-${kind}-${p}` } })} />}
+        {q.data && <T3CodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 't3code')} refresh={() => refreshT3.mutate()} refreshing={refreshT3.isPending} error={refreshT3.error} />}
         {q.data && <DefaultsCard profiles={profiles} agents={q.data.agents as Agent[]} initial={q.data.defaults} />}
       </PageBody>
     </>
+  )
+}
+
+function T3CodeSection({ agent, refresh, refreshing, error }: { agent: Agent | undefined; refresh: () => void; refreshing: boolean; error?: unknown }) {
+  const connected = !!agent?.installed && !agent.error
+  const providers = agent?.profiles.find((p) => p.name === 'default')?.providers ?? []
+  return (
+    <Group title="T3 Code connection" description="Use the providers and models connected in T3 Code. Sessions open in Chat and keep their conversation in T3 Code.">
+      <div className="flex items-center gap-3 rounded-2xl bg-surface px-4 py-3.5 text-sm">
+        <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={connected ? 'live' : 'idle'} /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">{connected ? 'Connected' : 'Not connected'}</span>
+          <span className="block text-pretty text-muted-foreground">{agent?.error || (connected ? providers.join(', ') || 'T3 Code is ready.' : 'Configure a T3 Code connection for your account on this server, then check again.')}</span>
+          {connected && agent?.version && <span className="block text-muted-foreground">T3 Code {agent.version}</span>}
+        </span>
+        <Button size="sm" variant="outline" disabled={refreshing} onClick={refresh}><RotateCw className={refreshing ? 'animate-spin' : ''} />Refresh connection</Button>
+      </div>
+      <ErrorAlert error={error} />
+      <p className="text-sm text-pretty text-muted-foreground">Connect only a T3 Code instance running as your own Linux account. This connection supports text Chat with explicit Full access; DevDash approval prompts, Plan mode, guests and autopilot are unavailable.</p>
+    </Group>
   )
 }
 
@@ -310,6 +339,7 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
   })
   const set = (patch: Partial<Defaults>) => {
     const next = { ...d, ...patch }
+    if (!HARNESS[harnessOf(next)].cli) next.open_in = 'chat'
     setD(next)
     save.mutate(next)
   }
@@ -318,7 +348,7 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
   // The same models a new session offers: Claude Code's with every version, OpenCode's from each provider you connected.
   const listed = useQuery({ ...commandsQuery(d.profile, harness), enabled: profiles.includes(d.profile) })
   const offered = listed.data?.models as ModelInfo[] | undefined
-  const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default', description: "OpenCode's own default" }]
+  const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default', description: HARNESS[harness].defaultModel }]
   const [customModel, setCustomModel] = useState(false)
   const Row = ({ id, label, value, options, onPick, description }: { id: string; label: string; value: string; options: { value: string; label: string }[]; onPick: (v: string) => void; description?: string }) => (
     <Field>
@@ -344,7 +374,7 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
           </Field>
           <Row id="d-perm" label="Permissions" value={d.permission_mode} onPick={(v) => set({ permission_mode: v })}
             options={PERMISSION_MODES.filter((p) => HARNESS[harness].modes.includes(p.value)).map((p) => ({ value: p.value, label: p.label }))} description={PERMISSION_MODES.find((p) => p.value === d.permission_mode)?.hint} />
-          <Row id="d-open" label="Open sessions in" value={d.open_in} onPick={(v) => set({ open_in: v as 'chat' | 'cli' })} options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]} />
+          {HARNESS[harness].cli && <Row id="d-open" label="Open sessions in" value={d.open_in} onPick={(v) => set({ open_in: v as 'chat' | 'cli' })} options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]} />}
           <ErrorAlert error={save.error} />
         </FieldGroup>
       </div>

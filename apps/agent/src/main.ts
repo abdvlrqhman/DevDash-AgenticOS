@@ -106,6 +106,11 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'claude.answer': (r) => (running(str(r.id, 'id')).answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never, { owner: (r.by as { owner?: unknown } | undefined)?.owner === true }), { ok: true }),
   'claude.interrupt': async (r) => (await running(str(r.id, 'id')).interrupt(str(r.id, 'id')), { ok: true }),
   'claude.set': async (r) => (await running(str(r.id, 'id')).setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
+  'claude.selection': async (r) => {
+    if ((r.model !== null && typeof r.model !== 'string') || (r.effort !== null && typeof r.effort !== 'string')) throw new Error('Invalid T3 Code model or effort.')
+    await harness.setSelection(str(r.id, 'id'), r.model as string | null, r.effort as string | null)
+    return { ok: true }
+  },
   'claude.remote': (r) => (acp(r) ? { url: null } : claude.remote(launchOf(r), r.enabled === true)),
   'claude.complete': async (r) => {
     const o = { model: typeof r.model === 'string' ? r.model : undefined, system: typeof r.system === 'string' ? r.system : undefined }
@@ -125,10 +130,13 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile')) : claude.commandsAndModels(str(r.profile, 'profile'))),
   'claude.title': (r) => (acp(r) ? harness : claude).title(launchOf(r)),
   'claude.rename': async (r) => (await (acp(r) ? harness : claude).rename(launchOf(r), str(r.title, 'title')), { ok: true }),
-  'claude.profiles': async () => ({
-    profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })),
-    agents: await harness.agents().catch(() => []),
-  }),
+  'claude.profiles': async (r) => {
+    if (r.refresh === true) harness.refreshT3()
+    return {
+      profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })),
+      agents: await harness.agents().catch(() => []),
+    }
+  },
   'claude.memory': async (r) => (await memory.set(str(r.profile, 'profile'), r.enabled === true), { ok: true }),
   'claude.memory.health': async () => ({ health: await memory.health(claude.profileNames()) }),
   'claude.memory.restart': async () => (await memory.restart(claude.profileNames()), { ok: true }),

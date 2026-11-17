@@ -5,7 +5,7 @@ import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
 import type { ActivityService } from '../activity/service.ts'
 import type { User } from '../auth/repo.ts'
-import { agentName, harnessOf, type ClaudeService, type Harness, type TurnEnd } from '../claude/service.ts'
+import { agentName, harnessOf, agentCapabilities, type ClaudeService, type Harness, type TurnEnd } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import type { ProjectsService } from '../projects/service.ts'
 import type { Priority, TasksService } from '../tasks/service.ts'
@@ -967,6 +967,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     createRole(user: User, slug: string, input: RoleInput & { schedule?: unknown[] }) {
       const { p } = on(slug)
       const harness = harnessOf(input.harness)
+      if (!agentCapabilities(harness).toolPolicies) throw new AppError(400, 'unsupported_role', 'T3 Code cannot run team roles because DevDash tool policies are unavailable through this connection.')
       const id = repo.insertRole(p.id, { ...input, harness, model: roleModel(harness, input.model) }, user.id)
       // The first CEO leads unless someone else already does.
       if (input.name.trim().toUpperCase() === 'CEO' && !repo.lead(p.id)) repo.setLead(p.id, id, true)
@@ -980,6 +981,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     updateRole(id: number, input: RoleInput) {
       const { r, p } = findRole(id)
       const harness = harnessOf(input.harness ?? r.harness)
+      if (!agentCapabilities(harness).toolPolicies) throw new AppError(400, 'unsupported_role', 'T3 Code cannot run team roles because DevDash tool policies are unavailable through this connection.')
       repo.updateRole(id, { ...input, harness, model: roleModel(harness, input.model) })
       const next = repo.role(id)!
       // Its chat picks up the new instructions the next time Claude starts for it.

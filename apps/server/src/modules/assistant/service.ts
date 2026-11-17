@@ -8,7 +8,7 @@ import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
 import { dueSlots, nextRun, slotKey, validSlots, validTz, type Slot } from '../../core/schedule.ts'
 import type { User } from '../auth/repo.ts'
-import { HARNESSES, type ClaudeService, type Harness } from '../claude/service.ts'
+import { HARNESSES, agentCapabilities, type ClaudeService, type Harness } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { AGENT_NAME, instructions, READ_ONLY } from './prompt.ts'
 
@@ -286,6 +286,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
    */
   async function setup(user: User, input: { harness: string; profile: string; tz?: string }) {
     if (!(HARNESSES as readonly string[]).includes(input.harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+    if (!agentCapabilities(input.harness).toolPolicies) throw new AppError(400, 'unsupported_assistant', 'T3 Code is available for regular Chat sessions. Hamasa requires DevDash tool policies, which this connection cannot enforce.')
     if (!PROFILE_RE.test(input.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
     const old = chatFor(user.id, input.harness)
     const tz = input.tz && validTz(input.tz) ? input.tz : member(user.id)?.tz ?? 'UTC'
@@ -310,6 +311,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     async switchTo(user: User, harness: string) {
       if (!member(user.id)) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
       if (!(HARNESSES as readonly string[]).includes(harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+      if (!agentCapabilities(harness).toolPolicies) throw new AppError(400, 'unsupported_assistant', 'T3 Code is available for regular Chat sessions. Hamasa requires DevDash tool policies, which this connection cannot enforce.')
       if (!chatFor(user.id, harness)) return setup(user, { harness, profile: 'default' })
       q.setActive.run(harness, user.id)
       changed(user.id)
