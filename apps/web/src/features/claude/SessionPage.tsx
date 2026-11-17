@@ -39,7 +39,7 @@ import { useArchiveSession } from './ArchiveSession'
 import { ShareDialog, sharingLabel } from './ShareDialog'
 import { Requests, requestSummary } from './Requests'
 import { PlanUsage } from './Usage'
-import { agentName, HARNESS, harnessOf } from './harness'
+import { agentCapabilities, agentName, HARNESS, harnessOf } from './harness'
 import { servicesQuery, stateOf } from '../services/data'
 import { tailnetStatusQuery } from '../network/NetworkPage'
 import { buildTranscript, mergePage, mergeRaw, sessionFacts, touchedFiles, type Raw } from './transcript'
@@ -310,12 +310,12 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
           <div className="hidden xl:flex"><Watchers viewers={viewers} me={me.id} /></div>
           {showComments && <CommentsButton count={commentCount} onClick={() => setCommentsOpen(true)} />}
           <ModelMenu s={s} disabled={!canSend} isOwner={isOwner} onUpdate={(v) => update.mutate(v)} />
-          <Tabs value={s.mode} onValueChange={(v) => v !== s.mode && switchMode.mutate(v as 'chat' | 'cli')}>
+          {HARNESS[harnessOf(s)].cli && <Tabs value={s.mode} onValueChange={(v) => v !== s.mode && switchMode.mutate(v as 'chat' | 'cli')}>
             <TabsList className="pointer-coarse:h-10!">
               <TabsTrigger value="chat" disabled={!canSend || switchMode.isPending}><MessageSquare /><span className="hidden xl:inline">Chat</span></TabsTrigger>
               <TabsTrigger value="cli" disabled={!fullAccess || switchMode.isPending}><SquareTerminal /><span className="hidden xl:inline">CLI</span></TabsTrigger>
             </TabsList>
-          </Tabs>
+          </Tabs>}
           <SessionMenu s={s} isOwner={isOwner} canSend={canSend} access={info.data!.access} onUpdate={(v) => update.mutate(v)} onShare={() => setShare(true)} onRename={() => setSettings(true)} onUsage={() => setUsage(true)} onTailnet={() => setTailnet(true)} />
         </>} />}
 
@@ -345,7 +345,7 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
           <div className={cn('bg-background px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]', embedded ? 'md:pb-3' : 'md:px-6 md:pb-4')}>
             <div className="mx-auto max-w-4xl">
               <Composer sessionId={id} profile={s.profile} harness={harnessOf(s)} name={embedded?.name} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
-                disabledReason={canSend ? undefined : <WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} />}
+                disabledReason={canSend ? undefined : <WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} fullAccessOnly={!agentCapabilities(s.harness).guests} />}
                 footer={<SessionChips s={s} isOwner={isOwner} canSend={canSend} working={working} onUpdate={(v) => update.mutate(v)}
                   onCompact={() => void send('/compact', []).catch((err: Error) => toast.error(err.message))} />} />
             </div>
@@ -544,10 +544,10 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] w-72 overflow-y-auto">
         <DropdownMenuLabel>Model</DropdownMenuLabel>
-        <ModelChoices models={list} harness={harnessOf(s)} value={s.model} onChange={(v) => onUpdate({ model: v })} />
+        <ModelChoices models={list} harness={harnessOf(s)} value={s.model} onChange={(v) => onUpdate({ model: v })} hideDefault={!agent.defaultModelSwitch && s.started} />
         <DropdownMenuSeparator />
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Permissions: {modeLabel(s.permissionMode)}</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger disabled={!agent.mutablePermissions && s.started}>Permissions: {modeLabel(s.permissionMode)}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-72">
             <DropdownMenuRadioGroup value={s.permissionMode} onValueChange={(v) => onUpdate({ permissionMode: v as PermissionMode })}>
               {PERMISSION_MODES.filter((p) => agent.modes.includes(p.value)).map((p) => (
@@ -619,7 +619,7 @@ function SessionMenu({ s, isOwner, canSend, access, onUpdate, onShare, onRename,
           <>
             <DropdownMenuItem onSelect={onRename}><Pencil />Rename</DropdownMenuItem>
             <DropdownMenuItem onSelect={onUsage}><Gauge />Usage</DropdownMenuItem>
-            <DropdownMenuItem onSelect={onTailnet}><Network />Reach my tailnet{s.reachTailnet ? ' · on' : ''}</DropdownMenuItem>
+            {agentCapabilities(s.harness).devdashConnections && <DropdownMenuItem onSelect={onTailnet}><Network />Reach my tailnet{s.reachTailnet ? ' · on' : ''}</DropdownMenuItem>}
             <DropdownMenuItem onSelect={onShare}>
               <Share2 />Share…<span className="ml-auto truncate text-xs text-muted-foreground">{sharingLabel(s) || 'only you'}</span>
             </DropdownMenuItem>

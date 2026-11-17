@@ -1,0 +1,56 @@
+// T3 Code's own MCP integration. Credentials belong to the DevDash member; the configured T3 server runs the tools.
+import { existsSync, statSync } from 'node:fs'
+import { T3Client, configPath } from './t3-client.ts'
+
+export type Capabilities = {
+  runtimeMode: string
+  providers: { providerInstanceId: string; canRunChildTask: boolean; displayName: string | null; runtimeModes?: string[]; models: { id: string; label?: string | null; options?: { id: string; default?: string | boolean | null; values: (string | boolean)[] }[] | null }[] }[]
+}
+export const installed = () => existsSync(configPath())
+export const modelId = (instance: string, model: string) => `${instance}/${model}`
+export function selection(value: string) {
+  const split = value.indexOf('/')
+  if (split < 1 || !value.slice(split + 1)) throw new Error('Choose a T3 Code provider/model from the model list.')
+  return { instanceId: value.slice(0, split), model: value.slice(split + 1) }
+}
+/** T3's runnable flag includes enabled state, executable availability and authentication checks.
+ * Its catalog also contains disabled providers and their models, which must not be offered as connected. */
+export async function connectedCapabilities(client: T3Client): Promise<Capabilities> {
+  const capabilities = await client.call<Capabilities>('orchestrator_capabilities', {})
+  return { ...capabilities, providers: capabilities.providers.filter((p) => p.canRunChildTask === true) }
+}
+export async function inspect(budgetMs = 5000) {
+  const client = new T3Client(undefined, { timeoutMs: budgetMs, signal: AbortSignal.timeout(budgetMs) })
+  try {
+    await client.connect()
+    const capabilities = await connectedCapabilities(client)
+    return { version: client.serverVersion, capabilities }
+  } finally { await client.close() }
+}
+export async function models() {
+  const { capabilities } = await inspect()
+  return capabilities.providers.flatMap((p) => p.models.map((m) => modelId(p.providerInstanceId, m.id)))
+}
+let cached: { key: string; at: number; value: Awaited<ReturnType<typeof probeInfo>> } | undefined
+let probing: { key: string; value: Promise<Awaited<ReturnType<typeof probeInfo>>> } | undefined
+let generation = 0
+export const invalidateInfo = () => { generation++; cached = undefined; probing = undefined }
+async function probeInfo() {
+  try {
+    const { version, capabilities } = await inspect(1500)
+    return { harness: 't3code', installed: true, version, profiles: [{ name: 'default', providers: capabilities.providers.filter((p) => p.models.length).map((p) => p.displayName ?? p.providerInstanceId) }] }
+  } catch {
+    return { harness: 't3code', installed: false, version: null, profiles: [], error: 'Cannot connect to your member-owned T3 Code instance. Check its service and connection configuration.' }
+  }
+}
+export async function info() {
+  if (!installed()) return { harness: 't3code', installed: false, version: null, profiles: [], error: 'No member-owned T3 Code connection configured for your account.' }
+  let key: string
+  try { key = `${configPath()}:${statSync(configPath()).mtimeMs}` } catch { return probeInfo() }
+  if (cached?.key === key && Date.now() - cached.at < 15_000) return cached.value
+  if (probing?.key === key) return probing.value
+  const started = generation
+  const value = probeInfo().then((value) => { if (generation === started) cached = { key, at: Date.now(), value }; return value }).finally(() => { if (probing?.value === value) probing = undefined })
+  probing = { key, value }
+  return value
+}

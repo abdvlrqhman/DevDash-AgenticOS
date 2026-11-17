@@ -888,3 +888,15 @@ test("a role's model is checked for its agent: a Claude family, or OpenCode's pr
   assert.equal(roleModel('opencode', 'opus'), null)
   assert.equal(roleModel('opencode', null), null)
 })
+
+test('T3 Code roles are rejected before creating or updating role state', (t) => {
+  const { team, yara } = setup()
+  t.after(() => team.stop())
+  team.enable(yara, 'shop')
+  const input = { name: 'CTO', summary: 'Original', instructions: '', model: null }
+  assert.throws(() => team.createRole(yara, 'shop', { ...input, harness: 't3code' }), /cannot run team roles/)
+  const role = team.createRole(yara, 'shop', input)
+  assert.throws(() => team.updateRole(role.id, { ...input, summary: 'Changed', harness: 't3code' }), /cannot run team roles/)
+  assert.equal(team.role(role.id).role.summary, 'Original')
+  assert.equal(team.role(role.id).role.harness, 'claude')
+})

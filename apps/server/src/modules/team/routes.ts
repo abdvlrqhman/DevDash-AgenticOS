@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
 import { TRIGGERS } from './schedule.ts'
-import { HARNESSES } from '../claude/service.ts'
+import { agentCapabilities, HARNESSES } from '../claude/service.ts'
 import { CLOSE_AS, MESSAGE_KINDS, type TeamService } from './service.ts'
 import { SOURCE_KINDS } from './sources.ts'
 
@@ -11,7 +11,7 @@ const RoleInput = z.object({
   name: z.string().trim().min(1).max(60),
   summary: z.string().trim().max(300).default(''),
   instructions: z.string().max(20_000).default(''),
-  harness: z.enum(HARNESSES).default('claude'),
+  harness: z.enum(HARNESSES.filter((h) => agentCapabilities(h).toolPolicies)).default('claude'),
   // Checked for its agent by the service (roleModel): a Claude family, or OpenCode's provider/model.
   model: z.string().max(160).nullable().default(null),
 })

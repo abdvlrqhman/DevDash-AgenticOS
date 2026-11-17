@@ -91,6 +91,13 @@ test("picking the agent starts its conversation: unlisted, the member's own, wit
   assert.equal(assistant.state(ann).sessionId, null)
 })
 
+test('T3 Code cannot run Hamasa and rejecting it preserves the current agent and conversation', async () => {
+  const { assistant, ann } = setup()
+  const current = await assistant.setup(ann, { harness: 'claude', profile: 'default' })
+  await assert.rejects(assistant.setup(ann, { harness: 't3code', profile: 'default' }), /Hamasa requires DevDash tool policies/)
+  assert.deepEqual(assistant.state(ann), current)
+})
+
 test("the agent's tools work only in the member's own agent, and act as them", async () => {
   const { assistant, rpc, sent, ann } = setup()
   const { sessionId } = await assistant.setup(ann, { harness: 'claude', profile: 'default' })

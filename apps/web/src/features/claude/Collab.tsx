@@ -102,7 +102,7 @@ export function CommentsButton({ count, onClick }: { count: number; onClick: () 
 }
 
 /** Instead of the message box, for teammates who can watch but not send. */
-export function WatchOnly({ id, owner, onComment }: { id: string; owner: string; onComment: () => void }) {
+export function WatchOnly({ id, owner, onComment, fullAccessOnly = false }: { id: string; owner: string; onComment: () => void; fullAccessOnly?: boolean }) {
   const [asked, setAsked] = useState(false)
   const ask = useMutation({
     mutationFn: () => unwrap(api.api.claude.sessions[':id'].join.$post({ param: { id } })),
@@ -111,10 +111,10 @@ export function WatchOnly({ id, owner, onComment }: { id: string; owner: string;
   })
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-      <p className="text-sm text-muted-foreground">{owner} shared this session to watch.</p>
+      <p className="text-sm text-muted-foreground">{owner} shared this session to watch.{fullAccessOnly && ' To send messages, ask them to share it with you by name with Full access.'}</p>
       <div className="flex gap-2">
         <Button size="sm" variant="outline" onClick={onComment}><MessageSquareText />Comment</Button>
-        <Button size="sm" disabled={asked || ask.isPending} onClick={() => ask.mutate()}><Hand />{asked ? 'Asked' : 'Ask to join'}</Button>
+        {!fullAccessOnly && <Button size="sm" disabled={asked || ask.isPending} onClick={() => ask.mutate()}><Hand />{asked ? 'Asked' : 'Ask to join'}</Button>}
       </div>
     </div>
   )

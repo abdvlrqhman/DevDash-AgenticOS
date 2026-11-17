@@ -10,7 +10,7 @@ import { AppError } from '../../core/http.ts'
 import { validTz } from '../../core/schedule.ts'
 import type { User } from '../auth/repo.ts'
 import { condense } from '../assistant/mcp.ts'
-import { harnessOf, type ClaudeService, type Harness } from '../claude/service.ts'
+import { agentName, HARNESSES, harnessOf, agentCapabilities, type ClaudeService, type Harness } from '../claude/service.ts'
 import type { SessionRow } from '../claude/repo.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { convertPrototypeRules, isDuplicate, parsePrototypeLog } from './migrate.ts'
@@ -98,7 +98,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     lastSender: db.prepare('select user_id from claude_message_senders where session_id = ? order by rowid desc limit 1'),
     goal: db.prepare(`select m.message_uuid from claude_message_senders m where m.session_id = ? and m.user_id = ?
       and not exists (select 1 from autopilot_sent a where a.uuid = m.message_uuid) order by m.rowid desc limit 1`),
-    session: db.prepare(`select s.id, s.owner_id, s.cwd, s.title, s.archived, s.origin_kind, p.slug as project_slug, u.username as owner_username
+    session: db.prepare(`select s.id, s.harness, s.owner_id, s.cwd, s.title, s.archived, s.origin_kind, p.slug as project_slug, u.username as owner_username
       from claude_sessions s join users u on u.id = s.owner_id left join projects p on p.id = s.project_id where s.id = ?`),
     // Team threads one of the member's sessions wrote in, where a role answered after the session's last word.
     threadReplies: db.prepare(`select t.id as thread_id, t.title, m.id as message_id, m.body, m.kind, m.author_label, mine.session_id
@@ -243,7 +243,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
   /** Who is sending right now on the supervisor's behalf: its own messages don't resolve "Needs you". */
   const supervising = new Set<string>()
   claude.addPreamble((s, o) => {
-    if (o.role || s.origin_kind === 'proposal') return []
+    if (!agentCapabilities(s.harness).autopilot || o.role || s.origin_kind === 'proposal') return []
     if (!supervising.has(s.id)) {
       // The member wrote in it themself: whatever it waited for them on is theirs now.
       if (q.resolveSession.run(Math.floor(now() / 1000), s.id).changes) changed(s.owner_id)
@@ -266,8 +266,9 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
 
   /** What the autopilot tools act on: the member's own session, outside team roles' and proposals', in their own turn. */
   function toolContext(username: string, sessionId: string | null) {
-    const s = sessionId ? (q.session.get(sessionId) as { id: string; owner_id: number; cwd: string; title: string; origin_kind: string | null; project_slug: string | null; owner_username: string } | undefined) : undefined
+    const s = sessionId ? (q.session.get(sessionId) as { id: string; harness: string; owner_id: number; cwd: string; title: string; origin_kind: string | null; project_slug: string | null; owner_username: string } | undefined) : undefined
     if (!s || s.owner_username !== username) throw new AppError(403, 'not_yours', 'Autopilot works only in your own DevDash sessions.')
+    if (!agentCapabilities(s.harness).autopilot) throw new AppError(403, 'not_autopilot', "Autopilot doesn't apply to this agent.")
     if (s.origin_kind === 'proposal' || claude.ownedActive(username).some((x) => x.id === s.id && x.role)) {
       throw new AppError(403, 'not_autopilot', "Autopilot doesn't apply in a team role's session: ask as usual.")
     }
@@ -284,7 +285,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
 
   /** The member's sessions as the sweep judges them. */
   function candidates(user: User, r: Row) {
-    return claude.ownedActive(user.username).map((s) => {
+    return claude.ownedActive(user.username).filter((s) => agentCapabilities(s.harness).autopilot).map((s) => {
       const mem = q.memory.get(s.id) as Memory | undefined
       const last = q.lastSender.get(s.id) as { user_id: number } | undefined
       const goal = (q.goal.get(s.id, user.id) as { message_uuid: string } | undefined)?.message_uuid ?? null
@@ -556,6 +557,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     return done
   }
   claude.onPrompt((s) => {
+    if (!agentCapabilities(s.harness).autopilot) return
     const a = active(s.owner_id)
     if (!a) return
     clearTimeout(timers.get(s.id))
@@ -732,7 +734,8 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       const int = (v: number | undefined, old: number, min: number, max: number) => (v === undefined ? old : Math.max(min, Math.min(max, Math.round(v))))
       if (p.tz !== undefined && !validTz(p.tz)) throw new AppError(400, 'bad_tz', 'Unknown time zone.')
       if (p.pingAt !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(p.pingAt)) throw new AppError(400, 'bad_time', 'The ping time is HH:MM, 24-hour.')
-      if (p.svHarness !== undefined && !['claude', 'opencode'].includes(p.svHarness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+      if (p.svHarness !== undefined && !(HARNESSES as readonly string[]).includes(p.svHarness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+      if (p.svHarness !== undefined && !agentCapabilities(p.svHarness).completions) throw new AppError(400, 'unsupported_supervisor', 'T3 Code cannot run the supervisor because tool-free background completions are unavailable.')
       if (p.svProfile !== undefined && !/^[a-z0-9][a-z0-9-]{0,20}$/.test(p.svProfile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
       db.prepare(`update autopilot set tz = ?, ping_at = ?, quiet_min = ?, night_cap = ?, max_nudges = ?, approvals = ?, prompt_wait_min = ?,
         sv_harness = ?, sv_profile = ?, sv_model = ?, sv_daily_cap = ?, updated_at = unixepoch() where user_id = ?`).run(
@@ -748,7 +751,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       if (svChanged) {
         const h = p.svHarness ?? r.sv_harness
         const m = p.svModel ?? r.sv_model
-        log(user.id, { tier: 'system', source: 'system', what: `Supervisor: ${h === 'opencode' ? 'OpenCode' : 'Claude Code'}, ${m}` })
+        log(user.id, { tier: 'system', source: 'system', what: `Supervisor: ${h === 'claude' ? 'Claude Code' : agentName(h)}, ${m}` })
       }
       changed(user.id)
       return state(user)
@@ -796,8 +799,8 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     },
     /** For the tool list: autopilot's tools are listed in a member's own sessions, not in team roles'. */
     toolsHere(username: string, sessionId: string | null) {
-      const s = sessionId ? (q.session.get(sessionId) as { owner_username: string; origin_kind: string | null } | undefined) : undefined
-      return !!s && s.owner_username === username && s.origin_kind !== 'proposal' && !claude.ownedActive(username).some((x) => x.id === sessionId && x.role)
+      const s = sessionId ? (q.session.get(sessionId) as { owner_username: string; harness: string; origin_kind: string | null } | undefined) : undefined
+      return !!s && agentCapabilities(s.harness).autopilot && s.owner_username === username && s.origin_kind !== 'proposal' && !claude.ownedActive(username).some((x) => x.id === sessionId && x.role)
     },
 
     /**

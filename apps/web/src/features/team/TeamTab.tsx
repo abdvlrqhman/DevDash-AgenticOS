@@ -15,6 +15,7 @@ import { api, unwrap } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { relativeTime } from '../claude/data'
+import { agentName, harnessOf } from '../claude/harness'
 import { CLOSED_AS, firstLine, nextLabel, roleMark, roleTone, teamQuery, useLiveTeam, type CloseAs, type Role, type Team } from './data'
 import { RoleDialog } from './RoleDialog'
 import { Sources } from './Sources'
@@ -206,7 +207,7 @@ function RoleCard({ slug, r }: { slug: string; r: Role }) {
       </p>
       <p className="mt-auto flex justify-between gap-2 text-xs text-muted-foreground">
         <span>{r.nextShiftAt ? `Next: ${nextLabel(r.nextShiftAt)}` : r.paused ? 'Paused' : r.schedule.length ? 'Team paused' : 'No schedule'}</span>
-        {r.harness === 'opencode' ? <span>OpenCode{r.model ? `, ${r.model}` : ''}</span> : r.model && <span className="capitalize">{r.model}</span>}
+        {harnessOf(r) !== 'claude' ? <span>{agentName(r.harness)}{r.model ? `, ${r.model}` : ''}</span> : r.model && <span className="capitalize">{r.model}</span>}
       </p>
     </Link>
   )

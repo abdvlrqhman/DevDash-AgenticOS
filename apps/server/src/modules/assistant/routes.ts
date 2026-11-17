@@ -2,10 +2,10 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { json } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
-import { HARNESSES, PERMISSION_MODES } from '../claude/service.ts'
+import { agentCapabilities, HARNESSES, PERMISSION_MODES } from '../claude/service.ts'
 import type { AssistantService } from './service.ts'
 
-const Setup = z.object({ harness: z.enum(HARNESSES), profile: z.string().max(21).default('default'), tz: z.string().max(64).optional() })
+const Setup = z.object({ harness: z.enum(HARNESSES.filter((h) => agentCapabilities(h).toolPolicies)), profile: z.string().max(21).default('default'), tz: z.string().max(64).optional() })
 const Settings = z.object({
   model: z.string().max(160).nullable().optional(),
   effort: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,39}$/i).nullable().optional(),

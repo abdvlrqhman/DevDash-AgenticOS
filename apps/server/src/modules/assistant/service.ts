@@ -7,7 +7,7 @@ import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
 import { dueSlots, nextRun, slotKey, validSlots, validTz, type Slot } from '../../core/schedule.ts'
 import type { User } from '../auth/repo.ts'
-import { HARNESSES, type ClaudeService, type Harness } from '../claude/service.ts'
+import { HARNESSES, agentCapabilities, type ClaudeService, type Harness } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { AGENT_NAME, instructions, READ_ONLY } from './prompt.ts'
 
@@ -243,6 +243,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     /** Picks (or changes) the member's agent. Another agent or account starts a new conversation; the old one stays. */
     async setup(user: User, input: { harness: string; profile: string; tz?: string }) {
       if (!(HARNESSES as readonly string[]).includes(input.harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+      if (!agentCapabilities(input.harness).toolPolicies) throw new AppError(400, 'unsupported_assistant', 'T3 Code is available for regular Chat sessions. Hamasa requires DevDash tool policies, which this connection cannot enforce.')
       if (!PROFILE_RE.test(input.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
       const old = row(user.id)
       const tz = input.tz && validTz(input.tz) ? input.tz : old?.tz ?? 'UTC'

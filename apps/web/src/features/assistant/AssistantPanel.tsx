@@ -15,7 +15,7 @@ import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { modeLabel, profilesQuery, relativeTime, sessionQuery, STATUS_LABEL, type Session } from '../claude/data'
-import { HARNESS, HARNESSES, harnessOf, type Harness } from '../claude/harness'
+import { agentCapabilities, HARNESS, HARNESSES, harnessOf, type Harness } from '../claude/harness'
 import { ModelMenu, SessionView, type Updater } from '../claude/SessionPage'
 import { AgentGlyph, assistantQuery } from './AssistantDock'
 import { AGENT_NAME, pageTag, panelCoversPage, setAssistantOpen, showingSession, toggleBig, useBig } from './store'
@@ -209,7 +209,7 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
         )}
         {setup.isPending ? <Skeleton className="h-28" /> : (
           <RadioGroup value={picked} onValueChange={(v) => setHarness(v as Harness)} className="gap-2">
-            {HARNESSES.map((h) => (
+            {HARNESSES.filter((h) => agentCapabilities(h).toolPolicies).map((h) => (
               <label key={h} className={cn('flex items-start gap-3 rounded-lg border p-3 text-sm has-[[data-state=checked]]:border-primary', !installed(h) && 'opacity-60')}>
                 <RadioGroupItem value={h} disabled={!installed(h)} className="mt-0.5" />
                 <span className="min-w-0">
