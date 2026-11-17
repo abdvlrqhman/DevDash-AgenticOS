@@ -24,8 +24,7 @@ export function assistantRoutes(assistant: AssistantService, mw: ReturnType<type
     .put('/', json(Setup), async (c) => c.json(await assistant.setup(c.get('user'), c.req.valid('json'))))
     .patch('/', json(Settings), async (c) => c.json(await assistant.settings(c.get('user'), c.req.valid('json'))))
     .post('/new', async (c) => c.json(await assistant.fresh(c.get('user'))))
-    .get('/conversations', (c) => c.json({ conversations: assistant.conversations(c.get('user')) }))
-    .post('/conversations/:id', async (c) => c.json(await assistant.resume(c.get('user'), c.req.param('id'))))
+    .post('/seen', (c) => c.json(assistant.seen(c.get('user'))))
     .patch('/schedules/:id', json(SchedulePatch), (c) =>
       c.json(assistant.updateSchedule(c.get('user'), Number(c.req.param('id')), c.req.valid('json'))))
     .delete('/schedules/:id', (c) => {

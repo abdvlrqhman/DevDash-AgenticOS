@@ -70,7 +70,7 @@ More agents that speak ACP (Gemini CLI, Goose, Codex through its adapter and oth
   <img alt="Hamasa's panel open over the task board: it lists what needs the member today and starts a review session for a task" src=".github/assets/hamasa-light.png">
 </picture>
 
-Every member has their own agent, one shortcut away (⌘I or Ctrl+I) on every page, in the browser and the apps.
+Every member has their own agent, one shortcut away (⌘I or Ctrl+I) or a tap on the round button in the corner, on every page, in the browser and the apps. A dot on it says when Hamasa wrote to you and you haven't looked yet.
 
 - **Knows your work.** It answers from everything you can see, across all projects: tasks, notes, sessions, services and
   your devices. It knows which page you're on, so "this" and "here" mean what you're looking at.
@@ -80,13 +80,13 @@ Every member has their own agent, one shortcut away (⌘I or Ctrl+I) on every pa
   (empty, or cloned from a repository), then starts work there. DevDash refuses it unless you asked in a message you
   wrote yourself: never from a schedule, autopilot or a teammate's request.
 - **Works on a schedule.** Ask for a morning brief on weekdays, or a one-off check after tonight's deploy. Each schedule
-  runs in a conversation of its own, never the one you're chatting in, reports in a few lines and notifies you only when
-  something needs you.
+  runs on its own, out of your chat, and stays silent. When something needs you (a check-in, a question, a failure), it
+  hands it to your chat: Hamasa writes to you there and you get one notification.
 - **Your agent, your access.** It runs as your own Linux user, on Claude Code or OpenCode, with the model, effort and
   permission level you pick. Reading is free; anything that changes things asks first unless you choose otherwise. It
   can reach your tailnet and your Google Drive when you switch them on. It can't answer another session's questions
   for you: it tells you which one is waiting and links it.
-- **A real session underneath.** Questions, permissions, history, past conversations and notifications work as in any
+- **A real session underneath.** Questions, permissions, history and notifications work as in any
   other session.
 
 ### Autopilot

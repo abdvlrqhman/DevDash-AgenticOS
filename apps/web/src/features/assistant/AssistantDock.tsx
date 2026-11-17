@@ -7,13 +7,14 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api, unwrap } from '@/lib/api'
 import { useTopic } from '@/lib/live'
 import { cn } from '@/lib/utils'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { sessionQuery, type Session } from '../claude/data'
 import { AGENT_NAME, panelCoversPage, setAssistantOpen, toggleAssistant, useAssistantOpen, useBig } from './store'
 
 /**
  * Hamasa, each member's personal agent: an expandable chat over the page's bottom-right corner, never part of the
- * page's layout. Closed, nothing of it covers the page: it opens from the sidebar (the top bar on phones) or ⌘I, never
- * by itself, and Esc or its minimize button puts it away again. It can be expanded when there's more to read; on
+ * page's layout. Closed, a round button holds its place there on a desk (the top bar on phones); the sidebar and ⌘I
+ * open it too, never by itself, and Esc or its minimize button puts it away again. It can be expanded when there's more to read; on
  * phones it takes the whole screen. The launchers show when it works or waits for you, so it can stay closed. The
  * conversation itself loads only once it's opened (AssistantPanel).
  */
@@ -25,7 +26,7 @@ export function AssistantDock() {
   const open = useAssistantOpen()
   const big = useBig()
   useAssistantEvents(open)
-  if (!open) return null
+  if (!open) return <Launcher />
   return (
     <section data-assistant role="dialog" aria-modal="false" aria-label={AGENT_NAME}
       // Esc puts it away, unless something inside used it first (a menu, the composer's suggestions).
@@ -40,6 +41,39 @@ export function AssistantDock() {
       </Suspense>
     </section>
   )
+}
+
+/** Closed, on a desk: a round button in the corner the chat opens in, with the launchers' dot. */
+function Launcher() {
+  const mobile = useIsMobile()
+  const status = useAssistantStatus()
+  const unread = useAssistantUnread()
+  if (mobile !== false) return null // phones and narrow windows have it in the top bar
+  return (
+    <Button size="icon" onClick={toggleAssistant} aria-label={statusTitle(status, unread)} title={`${statusTitle(status, unread)} (⌘I)`}
+      className="fixed right-5 bottom-5 z-40 size-12 rounded-full shadow-lg">
+      <AgentGlyph status={status} unread={unread} className="[&_svg]:size-5" />
+    </Button>
+  )
+}
+
+/** Whether the agent wrote in their chat since they last looked. */
+export const useAssistantUnread = () => !!useQuery(assistantQuery).data?.unread
+
+/** Their chat with the agent in sight (the panel, or its full page a notification opens): what it wrote is seen. */
+export function useMarkSeen(id: string) {
+  const qc = useQueryClient()
+  const st = useQuery(assistantQuery).data
+  const due = st?.sessionId === id && st.unread
+  useEffect(() => {
+    if (!due) return
+    const look = () => {
+      if (document.visibilityState === 'visible') void unwrap(api.api.assistant.seen.$post()).then((r) => qc.setQueryData(assistantQuery.queryKey, r), () => {})
+    }
+    look()
+    document.addEventListener('visibilitychange', look)
+    return () => document.removeEventListener('visibilitychange', look)
+  }, [due, qc])
 }
 
 /** The agent showing a page (its open_page tool), the panel's data changing elsewhere, and the keyboard shortcut. */
@@ -79,28 +113,29 @@ export function useAssistantStatus(): Session['status'] | null {
   return s?.status ?? null
 }
 
-/** The agent's mark, with a dot while it works (pulsing) or waits for the person (amber). */
-export function AgentGlyph({ status, className }: { status: Session['status'] | null; className?: string }) {
+/** The agent's mark, with a dot while it works (pulsing), waits for the person (amber) or wrote something they haven't seen (blue). */
+export function AgentGlyph({ status, unread, className }: { status: Session['status'] | null; unread?: boolean; className?: string }) {
+  const dot = status === 'waiting' ? 'bg-attention' : status === 'working' ? 'animate-pulse bg-emerald-500' : unread ? 'bg-sky-500' : null
   return (
     <span className={cn('relative inline-flex', className)}>
       <Bot className="size-4" />
-      {(status === 'working' || status === 'waiting') && (
-        <span className={cn('absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-background', status === 'waiting' ? 'bg-attention' : 'animate-pulse bg-emerald-500')} />
-      )}
+      {dot && <span className={cn('absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-background', dot)} />}
     </span>
   )
 }
-export const statusTitle = (status: Session['status'] | null) =>
-  status === 'waiting' ? `${AGENT_NAME} needs you` : status === 'working' ? `${AGENT_NAME} is working` : `${AGENT_NAME}, your agent`
+export const statusTitle = (status: Session['status'] | null, unread?: boolean) =>
+  status === 'waiting' ? `${AGENT_NAME} needs you` : status === 'working' ? `${AGENT_NAME} is working`
+    : unread ? `${AGENT_NAME} wrote to you` : `${AGENT_NAME}, your agent`
 
 /** On phones and tablets (no sidebar): the agent in every page's top bar. */
 export function AssistantHeaderButton({ className }: { className?: string }) {
   const status = useAssistantStatus()
+  const unread = useAssistantUnread()
   const open = useAssistantOpen()
   return (
-    <Button variant="ghost" size="icon-lg" className={cn('-mr-2', className)} aria-pressed={open} aria-label={statusTitle(status)} title={statusTitle(status)}
+    <Button variant="ghost" size="icon-lg" className={cn('-mr-2', className)} aria-pressed={open} aria-label={statusTitle(status, unread)} title={statusTitle(status, unread)}
       onClick={toggleAssistant}>
-      <AgentGlyph status={status} className="[&_svg]:size-5" />
+      <AgentGlyph status={status} unread={unread} className="[&_svg]:size-5" />
     </Button>
   )
 }

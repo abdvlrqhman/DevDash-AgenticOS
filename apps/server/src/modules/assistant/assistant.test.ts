@@ -43,7 +43,7 @@ function setup() {
   const rpc = (username: string, method: string, sessionId: string | null, args: Record<string, unknown> = {}) =>
     Promise.resolve().then(() => rpcs.get(`mcp.${method}`)!(username, { sessionId, args }))
   const session = (id: string) => db.prepare('select * from claude_sessions where id = ?').get(id) as Record<string, unknown>
-  return { db, connected, sent, notified, assistant, claude, projects, rpc, session, emit: (ev: Record<string, unknown>) => onEvent?.('ann', ev), ann: user(1, 'Ann Lee', 'ann'), bob: user(2, 'Bob', 'bob') }
+  return { db, hub, notify, connected, sent, notified, assistant, claude, projects, rpc, session, emit: (ev: Record<string, unknown>) => onEvent?.('ann', ev), ann: user(1, 'Ann Lee', 'ann'), bob: user(2, 'Bob', 'bob') }
 }
 
 test('schedule times: weekly slots and one-offs, read the way people and agents write them', () => {
@@ -75,7 +75,7 @@ test("picking the agent starts its conversation: unlisted, the member's own, wit
   assert.ok((JSON.parse(String(s.tool_policy)).allow as string[]).includes('mcp__plugin_devdash_devdash__session_read'))
   assert.ok(!(JSON.parse(String(s.tool_policy)).allow as string[]).includes('mcp__plugin_devdash_devdash__session_send'))
 
-  // Same agent: same conversation. Another agent: a new one, and the old one is archived (still in past conversations).
+  // Same agent: same conversation. Another agent: a new one, and the old one is archived (archived, not deletedons).
   assert.equal((await assistant.setup(ann, { harness: 'opencode', profile: 'work' })).sessionId, st.sessionId)
   const next = await assistant.setup(ann, { harness: 'claude', profile: 'default' })
   assert.notEqual(next.sessionId, st.sessionId)
@@ -173,7 +173,8 @@ test('schedules run once per slot in the member\'s time zone; one-offs switch of
   const brief = await rpc('ann', 'schedule_create', sessionId, { title: 'Morning brief', prompt: 'List my open tasks.', at: '09:00', days: 'daily' }) as { id: number; when: string; tz: string }
   assert.equal(brief.when, 'Every day at 09:00')
   assert.equal(brief.tz, 'Africa/Cairo')
-  const sends = () => sent.filter((r) => r.op === 'claude.send').map((r) => (r.content as { text: string }[]).at(-1)!.text)
+  // Without the pointer to their chat that every run gets (tested below).
+  const sends = () => sent.filter((r) => r.op === 'claude.send').map((r) => (r.content as { text: string }[]).at(-1)!.text.replace(/\n\n\(Their chat with you is session [^)]*\)$/, ''))
 
   await assistant.tick(Date.parse('2026-11-05T06:55:00Z')) // 08:55 in Cairo
   assert.deepEqual(sends(), [])
@@ -234,6 +235,75 @@ test("a schedule runs in a conversation of its own, never in the one the member 
   const moved = runs().slice(6).find((r) => r.text.includes('Deploy check'))!
   assert.equal(session(moved.to).harness, 'opencode')
   assert.notEqual(moved.to, b.to)
+})
+
+test("a schedule hands what needs the member to their chat, and the agent's answer there is the one notification", async () => {
+  const { assistant, rpc, sent, notified, emit, ann } = setup()
+  const { sessionId: chat } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'UTC' })
+  const check = assistant.createSchedule(ann, { title: 'Routine check', prompt: 'Did they finish their routine?', at: '21:00', days: 'daily' })
+  const sends = () => sent.filter((r) => r.op === 'claude.send').map((r) => ({ to: (r.launch as { id: string }).id, text: (r.content as { text: string }[]).at(-1)!.text }))
+  await assistant.tick(Date.parse('2026-11-05T21:00:30Z'))
+  const run = assistant.schedules(ann).find((x) => x.id === check.id)!.conversation!
+  assert.ok(run && run !== chat)
+  assert.match(sends()[0]!.text, new RegExp(`Their chat with you is session ${chat}`), 'the run can read what they said there')
+
+  await assert.rejects(rpc('ann', 'hand_off', chat, { note: 'x' }), /schedule's run/, 'in their chat there is nothing to hand over')
+  await assert.rejects(rpc('ann', 'notify_me', run, { title: 'Routine not done' }), /use hand_off/, 'a run never pings them itself')
+  assert.match(await rpc('ann', 'hand_off', run, { note: 'Nothing of the routine is done; ask what got in the way.' }) as string, /Handed to their chat/)
+  const handed = sends().at(-1)!
+  assert.equal(handed.to, chat)
+  assert.match(handed.text, /^<system-reminder>Their schedule "Routine check" ran on its own[\s\S]*ask what got in the way\.[\s\S]*<\/system-reminder>$/)
+  assert.equal(notified.length, 0, 'nothing until the agent has written to them')
+
+  emit({ ev: 'claude.msg', id: chat, msg: { type: 'result', subtype: 'success', result: "It's 9 pm and none of today's routine is done. What got in the way?" } })
+  assert.deepEqual(notified.map((n) => [n.userId, n.kind, n.title]), [[1, 'needs_you', 'Hamasa']])
+  emit({ ev: 'claude.msg', id: chat, msg: { type: 'result', subtype: 'success', result: 'Got it, tomorrow at 8.' } })
+  assert.equal(notified.length, 1, 'their own conversation after that notifies no one')
+})
+
+test("a dot on the launchers while the agent wrote in their chat and they haven't looked", async () => {
+  const { assistant, emit, ann } = setup()
+  const { sessionId: chat } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'UTC' })
+  const result = (id: string) => emit({ ev: 'claude.msg', id, msg: { type: 'result', subtype: 'success', result: 'Done.' } })
+  assert.equal(assistant.state(ann).unread, false)
+  result(chat!)
+  assert.equal(assistant.state(ann).unread, true)
+  assert.equal(assistant.seen(ann).unread, false)
+  // A schedule's run happens out of their chat: no dot for it.
+  assistant.createSchedule(ann, { title: 'Brief', prompt: 'Brief me.', at: '09:00', days: 'daily' })
+  await assistant.tick(Date.parse('2026-11-05T09:00:30Z'))
+  result(assistant.schedules(ann)[0]!.conversation!)
+  assert.equal(assistant.state(ann).unread, false)
+  // Clearing the chat clears the dot.
+  result(chat!)
+  await assistant.fresh(ann)
+  assert.equal(assistant.state(ann).unread, false)
+})
+
+test("schedules' runs can't ping the member through the general notify tool either, and never run in their chat", async () => {
+  const { assistant, claude, db, sent, ann } = setup()
+  const { sessionId: chat } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'UTC' })
+  const brief = assistant.createSchedule(ann, { title: 'Brief', prompt: 'Brief me.', at: '09:00', days: 'daily' })
+  await assistant.tick(Date.parse('2026-11-05T09:00:30Z'))
+  const run = assistant.schedules(ann)[0]!.conversation!
+  assert.match(String(claude.notifyFrom('ann', { sessionId: run, args: { message: 'Brief is ready' } })), /^Not sent: a schedule's run/)
+  assert.doesNotMatch(String(await Promise.resolve(claude.notifyFrom('ann', { sessionId: chat, args: { message: 'Done' } })).catch((e: Error) => e.message)), /schedule/)
+
+  // An earlier version could open a schedule's conversation as the chat: its next run goes to a new one, not the chat.
+  db.prepare('update assistants set session_id = ? where user_id = 1').run(run)
+  await assistant.tick(Date.parse('2026-11-06T09:00:30Z'))
+  const to = (sent.filter((r) => r.op === 'claude.send').at(-1)!.launch as { id: string }).id
+  assert.ok(to !== run && to !== chat)
+  assert.equal(assistant.schedules(ann).find((x) => x.id === brief.id)!.conversation, to)
+})
+
+test('after an update, conversations made before get the current instructions and allowed tools', async () => {
+  const { assistant, claude, db, hub, session, notify, ann } = setup()
+  const { sessionId: chat } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'UTC' })
+  db.prepare("update claude_sessions set instructions = 'old', tool_policy = '{\"allow\":[]}' where id = ?").run(chat)
+  assistantService({ db, hub, claude, notify }) // the server starting again
+  assert.match(String(session(chat!).instructions), /hand_off/)
+  assert.ok((JSON.parse(String(session(chat!).tool_policy)).allow as string[]).includes('mcp__plugin_devdash_devdash__hand_off'))
 })
 
 test("the agent's conversation is unlisted but still tells its owner when it needs them", async () => {

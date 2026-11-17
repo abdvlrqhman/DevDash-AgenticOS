@@ -47,6 +47,7 @@ import { SubagentCtx } from './ToolSteps'
 import { useTopic } from '@/lib/live'
 import { usePageTitle } from '@/lib/title'
 import { cn } from '@/lib/utils'
+import { useMarkSeen } from '../assistant/AssistantDock'
 
 const light = (s: Session['status']) => (s === 'working' ? 'live' : s === 'waiting' ? 'waiting' : s === 'error' ? 'error' : 'idle')
 const termSize = () => ({ cols: Math.max(40, Math.min(220, Math.floor(innerWidth / 8.2))), rows: Math.max(15, Math.min(80, Math.floor(innerHeight / 19))) })
@@ -65,6 +66,7 @@ export function SessionPage() {
 export type Embedded = { header: ReactNode; name?: string; empty?: (send: (text: string) => void) => ReactNode; prefix?: () => string }
 
 export function SessionView({ id, embedded }: { id: string; embedded?: Embedded }) {
+  useMarkSeen(id)
   const me = useQuery(meQuery).data!
   const qc = useQueryClient()
   const info = useQuery(sessionQuery(id))

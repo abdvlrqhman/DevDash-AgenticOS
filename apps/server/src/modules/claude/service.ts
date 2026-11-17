@@ -185,7 +185,7 @@ export type SessionExtras = {
   sharedCanSend?: boolean
   /** Where it came from when a person didn't start it themselves: a team role's approved code proposal, or the owner's
    *  personal agent (unlisted, but it tells its owner what needs them like any session of theirs). */
-  origin?: { kind: 'proposal'; role: string } | { kind: 'assistant' }
+  origin?: { kind: 'proposal'; role: string } | { kind: 'assistant'; role?: 'schedule' }
 }
 
 /** Text blocks a feature puts before the owner's own message (see addPreamble); `role`: a team role's session. */
@@ -364,6 +364,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     if (!s || s.owner_username !== username) throw new AppError(400, 'no_session', 'Only a DevDash session can send notifications.')
     // Like alert(): a session a feature started (a team role's, a review's) reports through that feature.
     if (!s.listed && s.origin_kind !== 'assistant') return 'Not sent: this session reports through the feature that started it.'
+    // A personal agent's schedule runs out of their sight: it hands what needs them to their chat (hand_off) instead.
+    if (s.origin_kind === 'assistant' && s.origin_role === 'schedule') return "Not sent: a schedule's run doesn't ping them; hand_off puts it in their chat, and that notifies them."
     const a = c.args ?? {}
     const message = typeof a.message === 'string' ? a.message.replace(/\s+/g, ' ').trim() : ''
     if (!message) throw new AppError(400, 'bad_args', 'Give the message: one line, leading with what they should know or do.')

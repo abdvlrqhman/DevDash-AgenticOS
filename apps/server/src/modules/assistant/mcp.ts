@@ -228,7 +228,14 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     assistant.open(c.user.id, path)
     return `Opened ${path} wherever ${c.user.name.split(' ')[0]} has DevDash open.`
   })
+  // A schedule's run doesn't reach them itself: it hands over to their chat, so there's one place and one notification.
+  on('hand_off', async (c) => {
+    const s = assistant.scheduleOf(c.user, c.sessionId)
+    if (!s) throw new AppError(400, 'bad_args', "hand_off is for a schedule's run; here you're already talking to them.")
+    return assistant.handOff(c.user, s.title, clip(need(c.args.note, 'the note: what you found, and what to tell or ask them'), 2000))
+  })
   on('notify_me', async (c) => {
+    if (assistant.scheduleOf(c.user, c.sessionId)) throw new AppError(400, 'use_hand_off', 'From a schedule, use hand_off: you tell them in their chat, and that notifies them.')
     const title = clip(need(c.args.title, 'a title'), 120)
     const url = str(c.args.url)
     await notify(c.user.id, 'needs_you', {

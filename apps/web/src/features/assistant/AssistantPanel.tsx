@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, CalendarClock, Ellipsis, ExternalLink, History, Maximize2, Minimize2, Minus, Settings2, SlidersHorizontal, SquarePen, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarClock, Ellipsis, Eraser, ExternalLink, Maximize2, Minimize2, Minus, Settings2, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { confirmAction } from '@/components/app/confirm'
 import { NativeSelect } from '@/components/app/native-select'
 import { Button } from '@/components/ui/button'
@@ -22,7 +22,7 @@ import { AGENT_NAME, pageTag, panelCoversPage, setAssistantOpen, showingSession,
 
 type State = Awaited<ReturnType<typeof assistantQuery.queryFn & {}>>
 type Schedule = State['schedules'][number]
-type View = 'chat' | 'schedules' | 'history' | 'settings'
+type View = 'chat' | 'schedules' | 'settings'
 type AgentInfo = { harness: string; installed: boolean; profiles: { name: string }[] }
 
 /** The heading of the page the person is on (not the panel's own), for the agent's sense of "this". */
@@ -38,7 +38,6 @@ export function AssistantPanel() {
   const st = q.data
   if (!st.agent || view === 'settings') return <Setup st={st} onDone={back} onBack={st.agent ? back : undefined} />
   if (view === 'schedules') return <Schedules list={st.schedules} onBack={back} />
-  if (view === 'history') return <Conversations current={st.sessionId} onBack={back} />
   return <Chat st={st} onView={setView} />
 }
 
@@ -91,7 +90,10 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
       </div>
       {/* Model, effort and permission level, one tap away; kept for new conversations too. */}
       {session && <ModelMenu s={session} disabled={false} isOwner compact onUpdate={settings} />}
-      <Button variant="ghost" size="icon" aria-label="New conversation" title="New conversation" disabled={fresh.isPending} onClick={() => fresh.mutate()}><SquarePen /></Button>
+      {/* One conversation: clearing it starts afresh (the old one is archived, not deleted). */}
+      <Button variant="ghost" size="icon" aria-label="Clear conversation" title="Clear conversation" disabled={fresh.isPending} onClick={async () => {
+        if (await confirmAction({ title: 'Clear the conversation?', description: `${AGENT_NAME} starts afresh. Your schedules and settings stay.`, action: 'Clear' })) fresh.mutate()
+      }}><Eraser /></Button>
       <Button variant="ghost" size="icon" aria-label={`Schedules${active ? ` (${active} on)` : ''}`} title="Schedules" className="relative" onClick={() => onView('schedules')}>
         <CalendarClock />
         {active > 0 && <span className="absolute top-1 right-1 min-w-3.5 rounded-full bg-muted px-0.5 text-[9px] leading-3.5 font-semibold text-foreground tabular-nums">{active}</span>}
@@ -99,7 +101,6 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
       <DropdownMenu>
         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="More"><Ellipsis /></Button></DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-52">
-          <DropdownMenuItem onSelect={() => onView('history')}><History />Past conversations</DropdownMenuItem>
           {id && <DropdownMenuItem onSelect={() => { closeOnPhones(); void navigate({ to: '/sessions/$id', params: { id } }) }}><ExternalLink />Open as a full page</DropdownMenuItem>}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => onView('settings')}><Settings2 />Settings and access…</DropdownMenuItem>
@@ -231,7 +232,7 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
         {profiles.find((p) => p.name === chosen)?.loggedIn === false && (
           <p className="text-sm text-attention-foreground">This account isn't signed in. Sign in under <Link to="/sessions/setup" className="underline" onClick={closeOnPhones}>Agent setup</Link> first.</p>
         )}
-        {restarts && <p className="text-xs text-muted-foreground">This starts a new conversation; the current one stays under Past conversations.</p>}
+        {restarts && <p className="text-xs text-muted-foreground">This clears the conversation and starts it afresh.</p>}
         <ErrorAlert error={save.error} />
         {(!current || restarts) && <div><Button type="submit" disabled={save.isPending || setup.isPending}>{current ? 'Switch' : 'Start'}</Button></div>}
         {current && <Access st={st} />}
@@ -285,23 +286,13 @@ const SlidersIcon = () => <SlidersHorizontal className="inline size-3 align-[-1p
 
 const fmt = (unix: number) => new Date(unix * 1000).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 
-/** Goes on in an earlier conversation: the panel switches to it. */
-function useResume(onDone: () => void) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) => unwrap(api.api.assistant.conversations[':id'].$post({ param: { id } })),
-    onSuccess: (r) => { qc.setQueryData(assistantQuery.queryKey, r); onDone() },
-    onError: (e) => toast.error(e.message),
-  })
-}
-
 /**
  * What runs by itself: each schedule's prompt and time, paused or on, and when it runs next. The agent makes them. Each
  * runs in a conversation of its own, never the one being chatted in.
  */
 function Schedules({ list, onBack }: { list: Schedule[]; onBack: () => void }) {
   const qc = useQueryClient()
-  const resume = useResume(onBack)
+  const navigate = useNavigate()
   const refresh = () => void qc.invalidateQueries({ queryKey: ['assistant'] })
   const toggle = useMutation({
     mutationFn: (s: Schedule) => unwrap(api.api.assistant.schedules[':id'].$patch({ param: { id: String(s.id) }, json: { enabled: !s.enabled } })),
@@ -339,36 +330,12 @@ function Schedules({ list, onBack }: { list: Schedule[]; onBack: () => void }) {
             </div>
             <p className="line-clamp-2 text-xs">{s.prompt}</p>
             {s.conversation && (
-              <Button variant="link" size="sm" className="h-auto self-start p-0 text-xs" disabled={resume.isPending} onClick={() => resume.mutate(s.conversation!)}>
-                <History />Open its runs
+              <Button variant="link" size="sm" className="h-auto self-start p-0 text-xs"
+                onClick={() => { closeOnPhones(); void navigate({ to: '/sessions/$id', params: { id: s.conversation! } }) }}>
+                <ExternalLink />Open its runs
               </Button>
             )}
           </div>
-        ))}
-      </div>
-    </>
-  )
-}
-
-/** Earlier conversations with the agent: pick one to carry on in it. */
-function Conversations({ current, onBack }: { current: string | null; onBack: () => void }) {
-  const q = useQuery({ queryKey: ['assistant', 'conversations'], queryFn: () => unwrap(api.api.assistant.conversations.$get()), staleTime: 0 })
-  const resume = useResume(onBack)
-  return (
-    <>
-      <Bar title="Past conversations" onBack={onBack} />
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-        <ErrorAlert error={q.error} />
-        {q.isPending && [0, 1, 2].map((i) => <Skeleton key={i} className="h-12" />)}
-        {q.data && !q.data.conversations.length && <p className="p-2 text-sm text-muted-foreground">No earlier conversations yet.</p>}
-        {q.data?.conversations.map((c) => (
-          <button key={c.id} type="button" disabled={resume.isPending} onClick={() => (c.id === current ? onBack() : resume.mutate(c.id))}
-            className="flex flex-col rounded-md px-2 py-2 text-left text-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
-            <span className="truncate font-medium">{c.title}</span>
-            <span className="text-xs text-muted-foreground">
-              {c.id === current ? 'Current · ' : ''}{relativeTime(c.lastActivityAt)} · {HARNESS[harnessOf(c)].label}
-            </span>
-          </button>
         ))}
       </div>
     </>

@@ -31,7 +31,7 @@ import { useDragWidth, useStoredWidth } from './resize-handle'
 import { SearchDialog, showSearch } from './search'
 import { ApprovalsBadge } from '@/features/team/Approvals' // Team (optional)
 import { SidebarPins } from '@/features/pins/pins'
-import { AgentGlyph, AssistantDock, statusTitle, useAssistantStatus } from '@/features/assistant/AssistantDock'
+import { AgentGlyph, AssistantDock, statusTitle, useAssistantStatus, useAssistantUnread } from '@/features/assistant/AssistantDock'
 import { AGENT_NAME, toggleAssistant, useAssistantOpen } from '@/features/assistant/store'
 
 type NavItem = { to: string; label: string; icon: typeof House; exact?: true }
@@ -224,11 +224,12 @@ function AppSidebar({ waiting, pane }: { waiting: number; pane: ReturnType<typeo
 /** Hamasa, the personal agent: opens its chat over the page (the same as ⌘I); its dot says when it works or waits for you. */
 function AgentItem() {
   const status = useAssistantStatus()
+  const unread = useAssistantUnread()
   const open = useAssistantOpen()
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton tooltip={statusTitle(status)} isActive={open} onClick={toggleAssistant} className="h-7" aria-pressed={open}>
-        <AgentGlyph status={status} /><span>{AGENT_NAME}</span><kbd className="ml-auto rounded border px-1 font-mono text-[10px] text-muted-foreground">⌘I</kbd>
+      <SidebarMenuButton tooltip={statusTitle(status, unread)} isActive={open} onClick={toggleAssistant} className="h-7" aria-pressed={open}>
+        <AgentGlyph status={status} unread={unread} /><span>{AGENT_NAME}</span><kbd className="ml-auto rounded border px-1 font-mono text-[10px] text-muted-foreground">⌘I</kbd>
       </SidebarMenuButton>
     </SidebarMenuItem>
   )

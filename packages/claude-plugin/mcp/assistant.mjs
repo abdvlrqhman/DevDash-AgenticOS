@@ -110,8 +110,13 @@ export const ASSISTANT_TOOLS = [
     inputSchema: obj({ path: { type: 'string' } }, ['path']),
   },
   {
+    name: 'hand_off',
+    description: "Only in a schedule's run: hand what needs the person to their chat with you (a check-in, a question, something they must know or fix). You then write to them there and they're notified once. If nothing needs them, don't call it: the run stays silent.",
+    inputSchema: obj({ note: { type: 'string', description: 'What you found and what to tell or ask them, with the facts their chat needs.' } }, ['note']),
+  },
+  {
     name: 'notify_me',
-    description: "Notify the person's phone and browsers. Only for what needs them or that they asked to hear about, mostly from scheduled runs: they already see your replies.",
+    description: "Notify the person's phone and browsers. Only for what needs them or that they asked to hear about: they already see your replies. Not from a schedule's run (use hand_off).",
     inputSchema: obj({ title: { type: 'string' }, body: { type: 'string' }, url: { type: 'string', description: 'A DevDash path to open; default: this conversation.' } }, ['title']),
   },
 ]
