@@ -23,9 +23,9 @@ import { NativeSelect } from '@/components/app/native-select'
 import { Switch } from '@/components/ui/switch'
 import { projectsQuery, type SessionSharing } from '../work/data'
 import { useArchiveSession } from './ArchiveSession'
-import { ModelField } from './ModelChoices'
-import type { ModelInfo } from './models'
-import { byFolder, commandsQuery, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, relativeTime, sessionPlace, sessionsQuery, type PermissionMode, type Session } from './data'
+import { ModelField, ThinkingLevelField } from './ModelChoices'
+import { effortLevels, type ModelInfo } from './models'
+import { byFolder, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, relativeTime, sessionPlace, sessionsQuery, useOfferedModels, type PermissionMode, type Session } from './data'
 import { HARNESS, HARNESSES, harnessOf, type Harness } from './harness'
 
 export function SessionsPage() {
@@ -175,6 +175,7 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   const [harness, setHarness] = useState<Harness>('claude')
   const [profile, setProfile] = useState('default')
   const [model, setModel] = useState('')
+  const [effort, setEffort] = useState<string | null>(null)
   const [perm, setPerm] = useState<PermissionMode>('bypassPermissions')
   const [openIn, setOpenIn] = useState<'chat' | 'cli'>('chat')
   const projects = useQuery({ ...projectsQuery, enabled: open }).data?.projects ?? []
@@ -185,13 +186,15 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   const chosenSharing = sharingPick ?? projects.find((p) => p.slug === project)?.sessionSharing ?? 'private'
   const sharing = !HARNESS[harness].guests && chosenSharing === 'shared_can_send' ? 'shared' : chosenSharing
   useEffect(() => {
-    if (!d) return
+    if (!open || !d) return
     setHarness(harnessOf(d))
     setProfile(d.profile)
     setModel(d.model ?? '')
+    setCustomModel(false)
+    setEffort(d.harness === 't3code' ? d.effort : null)
     setPerm(d.permission_mode as PermissionMode)
     setOpenIn(HARNESS[harnessOf(d)].cli ? d.open_in : 'chat')
-  }, [d])
+  }, [d, open])
   useEffect(() => { if (open) { setPrompt(initialPrompt); setCwd(initialCwd ?? sessionFolder()); setProject(initialProject ?? ''); setSharing(null) } }, [open, initialPrompt, initialCwd, initialProject])
 
   const agent = HARNESS[harness]
@@ -202,15 +205,14 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   const chosen = profiles.find((p) => p.name === profile)
   const missing = harness !== 'claude' && setup.isSuccess && (!other?.installed || other.error) ? other ?? { error: 'This agent is unavailable.' } : undefined
   // The models this agent offers (Claude Code's with their versions; OpenCode's from every provider you connected).
-  const listed = useQuery({ ...commandsQuery(profile, harness), enabled: open && !missing && (!profiles.length || !!chosen) })
-  const offered = listed.data?.models as ModelInfo[] | undefined
+  const offered = useOfferedModels(profile, harness, model, open && !missing && (!profiles.length || !!chosen))
   const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
   const modes = PERMISSION_MODES.slice(0, 4).filter((p) => agent.modes.includes(p.value))
   const supportedMode = agent.modes.includes(perm)
   const create = useMutation({
     mutationFn: () => unwrap(api.api.claude.sessions.$post({
       json: {
-        prompt, images: [], cwd, harness, profile: chosen ? profile : 'default', model: model && model !== 'default' ? model.trim() : null, effort: null, permissionMode: perm, mode: agent.cli ? openIn : 'chat',
+        prompt, images: [], cwd, harness, profile: chosen ? profile : 'default', model: model && model !== 'default' ? model.trim() : null, effort, permissionMode: perm, mode: agent.cli ? openIn : 'chat',
         project: project || undefined, worktree: project ? worktree : undefined,
         ...((sharingPick || !agent.guests) && { shared: sharing !== 'private', sharedCanSend: sharing === 'shared_can_send' }),
         cols: Math.max(40, Math.min(220, Math.floor(innerWidth / 8.2))), rows: Math.max(15, Math.min(80, Math.floor(innerHeight / 19))),
@@ -262,7 +264,7 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
               <FieldDescription>A new folder of its own in your projects folder (~/projects). Rename it, or pick an existing folder to work there.</FieldDescription>
             </Field>
           )}
-          <Choice id="ns-agent" label="Agent" value={harness} onChange={(v) => { const next = HARNESS[v as Harness]; setHarness(v as Harness); setProfile('default'); setModel(''); setCustomModel(false); if (!next.cli) setOpenIn('chat'); if (!next.modes.includes(perm)) setPerm('bypassPermissions') }}
+          <Choice id="ns-agent" label="Agent" value={harness} onChange={(v) => { const next = HARNESS[v as Harness]; setHarness(v as Harness); setProfile('default'); setModel(''); setEffort(null); setCustomModel(false); if (!next.cli) setOpenIn('chat'); if (!next.modes.includes(perm)) setPerm('bypassPermissions') }}
             options={HARNESSES.map((h) => ({ value: h, label: HARNESS[h].label }))} description={agent.hint} />
           {!agent.toolPolicies && <Alert><AlertDescription>This connection runs with your Linux account’s full access. DevDash approval prompts, Plan mode, guest permissions and autopilot are unavailable.</AlertDescription></Alert>}
           {missing && (
@@ -270,7 +272,7 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
               <AlertDescription>{harness === 't3code' ? <>{missing.error || 'T3 Code is not connected.'} <Link to="/sessions/setup" className="underline" onClick={onClose}>Check the connection</Link>.</> : <>{agent.label} isn't installed on this server yet. An admin can install it from the <Link to="/server" className="underline" onClick={onClose}>Server page</Link>.</>}</AlertDescription>
             </Alert>
           )}
-          {harness === 'opencode' && !missing && listed.isSuccess && !offered?.length && (
+          {harness === 'opencode' && !missing && offered?.length === 0 && (
             <Alert>
               <AlertDescription>OpenCode has no model provider connected yet. <Link to="/sessions/setup" className="underline" onClick={onClose}>Connect one</Link> first.</AlertDescription>
             </Alert>
@@ -285,9 +287,10 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
           )}
           <Field>
             <FieldLabel htmlFor="ns-model">Model</FieldLabel>
-            <ModelField id="ns-model" harness={harness} models={models} value={model} onChange={setModel} custom={customModel} onCustom={setCustomModel}
+            <ModelField id="ns-model" harness={harness} models={models} value={model} onChange={(v) => { if (model !== v) setEffort(null); setModel(v) }} custom={customModel} onCustom={setCustomModel}
               note="Change it any time in the session." />
           </Field>
+          {harness === 't3code' && <ThinkingLevelField id="ns-effort" levels={effortLevels(models, model)} value={effort} onChange={setEffort} />}
           <Choice id="ns-perm" label="Permissions" value={perm} onChange={(v) => setPerm(v as PermissionMode)}
             options={modes.map((p) => ({ value: p.value, label: p.label }))}
             description={PERMISSION_MODES.find((p) => p.value === perm)?.hint} />

@@ -2,9 +2,10 @@
 import { existsSync, statSync } from 'node:fs'
 import { T3Client, configPath } from './t3-client.ts'
 
+type Model = { id: string; label?: string | null; options?: { id: string; values: (string | boolean)[] }[] | null }
 export type Capabilities = {
   runtimeMode: string
-  providers: { providerInstanceId: string; canRunChildTask: boolean; displayName: string | null; runtimeModes?: string[]; models: { id: string; label?: string | null; options?: { id: string; default?: string | boolean | null; values: (string | boolean)[] }[] | null }[] }[]
+  providers: { providerInstanceId: string; canRunChildTask: boolean; displayName: string | null; runtimeModes?: string[]; models: Model[]; omittedModels?: number }[]
 }
 export const installed = () => existsSync(configPath())
 export const modelId = (instance: string, model: string) => `${instance}/${model}`
@@ -13,23 +14,36 @@ export function selection(value: string) {
   if (split < 1 || !value.slice(split + 1)) throw new Error('Choose a T3 Code provider/model from the model list.')
   return { instanceId: value.slice(0, split), model: value.slice(split + 1) }
 }
+/** The MCP catalog exposes native option IDs and values. Each driver names its reasoning control. */
+export function effortOption(model: Model | undefined) {
+  const opt = model?.options?.find((o) => /reasoning.*effort|thinking[_-]?level|thought[_-]?level|^(effort|variant)$/i.test(o.id))
+  if (!opt) return undefined
+  return { id: opt.id, levels: opt.values.filter((v): v is string => typeof v === 'string' && v !== 'default') }
+}
 /** T3's runnable flag includes enabled state, executable availability and authentication checks.
  * Its catalog also contains disabled providers and their models, which must not be offered as connected. */
-export async function connectedCapabilities(client: T3Client): Promise<Capabilities> {
-  const capabilities = await client.call<Capabilities>('orchestrator_capabilities', {})
+export async function connectedCapabilities(client: T3Client, search?: string): Promise<Capabilities> {
+  const capabilities = await client.call<Capabilities>('orchestrator_capabilities', search ? { search } : {})
   return { ...capabilities, providers: capabilities.providers.filter((p) => p.canRunChildTask === true) }
 }
-export async function inspect(budgetMs = 5000) {
+export async function inspect(budgetMs = 5000, search?: string) {
   const client = new T3Client(undefined, { timeoutMs: budgetMs, signal: AbortSignal.timeout(budgetMs) })
   try {
     await client.connect()
-    const capabilities = await connectedCapabilities(client)
+    const capabilities = await connectedCapabilities(client, search)
     return { version: client.serverVersion, capabilities }
   } finally { await client.close() }
 }
-export async function models() {
-  const { capabilities } = await inspect()
-  return capabilities.providers.flatMap((p) => p.models.map((m) => modelId(p.providerInstanceId, m.id)))
+export async function modelChoices(search?: string) {
+  const { capabilities } = await inspect(5000, search)
+  // The service catalog does not identify which model a new project will use for Default.
+  return [
+    { value: '', displayName: 'Default', description: "T3 Code's own default" },
+    ...capabilities.providers.flatMap((p) => p.models.map((m) => {
+      const value = modelId(p.providerInstanceId, m.id)
+      return { value, displayName: m.label || m.id, description: value, group: p.providerInstanceId, supportedEffortLevels: effortOption(m)?.levels ?? [] }
+    })),
+  ]
 }
 let cached: { key: string; at: number; value: Awaited<ReturnType<typeof probeInfo>> } | undefined
 let probing: { key: string; value: Promise<Awaited<ReturnType<typeof probeInfo>>> } | undefined

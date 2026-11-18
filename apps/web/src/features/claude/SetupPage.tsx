@@ -14,11 +14,11 @@ import { Spinner } from '@/components/ui/spinner'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, unwrap } from '@/lib/api'
 import { ErrorAlert } from '../auth/LoginPage'
-import { commandsQuery, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, type PermissionMode } from './data'
+import { FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, useOfferedModels, type PermissionMode } from './data'
 import { describeMemory, memoryQuery } from './memory'
 import { HARNESS, HARNESSES, harnessOf } from './harness'
-import { ModelField } from './ModelChoices'
-import type { ModelInfo } from './models'
+import { ModelField, ThinkingLevelField } from './ModelChoices'
+import { effortLevels, type ModelInfo } from './models'
 
 type Profile = { name: string; loggedIn: boolean; authMethod: string | null; email: string | null; plan: string | null; memory: boolean }
 type Defaults = { harness: string; profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
@@ -331,10 +331,14 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
   const [d, setD] = useState(initial)
   useEffect(() => setD(initial), [initial])
   const save = useMutation({
-    mutationFn: (next: Defaults) => unwrap(api.api.claude.defaults.$put({ json: { ...next, harness: harnessOf(next), effort: null, permission_mode: next.permission_mode as PermissionMode } })),
-    onSuccess: () => {
-      toast.success('Defaults saved')
-      void qc.invalidateQueries({ queryKey: profilesQuery.queryKey })
+    scope: { id: 'session-defaults' },
+    mutationKey: ['claude', 'save-defaults'],
+    mutationFn: (next: Defaults) => unwrap(api.api.claude.defaults.$put({ json: { ...next, harness: harnessOf(next), permission_mode: next.permission_mode as PermissionMode } })),
+    onSuccess: ({ defaults }) => {
+      if (qc.isMutating({ mutationKey: ['claude', 'save-defaults'] }) === 1) {
+        qc.setQueryData(profilesQuery.queryKey, (prev) => prev && { ...prev, defaults })
+        toast.success('Defaults saved')
+      }
     },
   })
   const set = (patch: Partial<Defaults>) => {
@@ -346,8 +350,7 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
   const harness = harnessOf(d)
   const profiles = harness === 'claude' ? claudeProfiles.map((p) => p.name) : agents.find((a) => a.harness === harness)?.profiles.map((p) => p.name) ?? ['default']
   // The same models a new session offers: Claude Code's with every version, OpenCode's from each provider you connected.
-  const listed = useQuery({ ...commandsQuery(d.profile, harness), enabled: profiles.includes(d.profile) })
-  const offered = listed.data?.models as ModelInfo[] | undefined
+  const offered = useOfferedModels(d.profile, harness, d.model, profiles.includes(d.profile))
   const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default', description: HARNESS[harness].defaultModel }]
   const [customModel, setCustomModel] = useState(false)
   const Row = ({ id, label, value, options, onPick, description }: { id: string; label: string; value: string; options: { value: string; label: string }[]; onPick: (v: string) => void; description?: string }) => (
@@ -363,15 +366,17 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
     <Group title="Defaults for new sessions" description="You can change any of these per session.">
       <div className="rounded-2xl bg-surface p-4 md:p-5">
         <FieldGroup>
-          <Row id="d-agent" label="Agent" value={harness} onPick={(v) => (setCustomModel(false), set({ harness: v, profile: 'default', model: null, permission_mode: HARNESS[harnessOf({ harness: v })].modes.includes(d.permission_mode as PermissionMode) ? d.permission_mode : 'bypassPermissions' }))}
+          <Row id="d-agent" label="Agent" value={harness} onPick={(v) => (setCustomModel(false), set({ harness: v, profile: 'default', model: null, effort: null, permission_mode: HARNESS[harnessOf({ harness: v })].modes.includes(d.permission_mode as PermissionMode) ? d.permission_mode : 'bypassPermissions' }))}
             options={HARNESSES.map((h) => ({ value: h, label: HARNESS[h].label }))} />
-          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v })} options={profiles.map((p) => ({ value: p, label: p === 'default' ? 'Default' : p }))} />}
+          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v, effort: null })} options={profiles.map((p) => ({ value: p, label: p === 'default' ? 'Default' : p }))} />}
           <Field>
             <FieldLabel htmlFor="d-model">Model</FieldLabel>
             <ModelField id="d-model" harness={harness} models={models} value={d.model ?? ''} custom={customModel} onCustom={setCustomModel}
-              onChange={(v) => setD({ ...d, model: v || null })} onCommit={(v) => (v || null) !== initial.model && set({ model: v || null })}
+              onChange={(v) => setD({ ...d, model: v || null, effort: (v || null) === d.model ? d.effort : null })}
+              onCommit={(v) => { if (customModel || (v || null) !== d.model) set({ model: v || null, effort: (v || null) === d.model ? d.effort : null }) }}
               note="New sessions start on this model." />
           </Field>
+          {harness === 't3code' && <ThinkingLevelField id="d-effort" levels={effortLevels(models, d.model)} value={d.effort} onChange={(effort) => set({ effort })} />}
           <Row id="d-perm" label="Permissions" value={d.permission_mode} onPick={(v) => set({ permission_mode: v })}
             options={PERMISSION_MODES.filter((p) => HARNESS[harness].modes.includes(p.value)).map((p) => ({ value: p.value, label: p.label }))} description={PERMISSION_MODES.find((p) => p.value === d.permission_mode)?.hint} />
           {HARNESS[harness].cli && <Row id="d-open" label="Open sessions in" value={d.open_in} onPick={(v) => set({ open_in: v as 'chat' | 'cli' })} options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]} />}

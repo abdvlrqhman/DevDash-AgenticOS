@@ -34,3 +34,15 @@ test('models group by family, newest first, the default says what it is', () => 
   assert.deepEqual(effortLevels(list, 'claude-haiku-4-5-20251001', all), ['low', 'high'])
   assert.deepEqual(effortLevels(list, 'fable', all), all, 'unknown support: offer everything')
 })
+
+test('T3 thinking levels follow the selected model, including provider-specific values', () => {
+  const models = [
+    { value: '', displayName: 'Default' },
+    { value: 'codex/sol', displayName: 'Sol', supportedEffortLevels: ['minimal', 'xhigh', 'ultra'] },
+    { value: 'other/fast', displayName: 'Fast', supportedEffortLevels: [] },
+  ]
+  assert.deepEqual(effortLevels(models, 'codex/sol'), ['minimal', 'xhigh', 'ultra'])
+  assert.deepEqual(effortLevels(models, 'other/fast'), [])
+  assert.deepEqual(effortLevels(models, 'other/custom'), [])
+  assert.deepEqual(effortLevels(models, null), [])
+})

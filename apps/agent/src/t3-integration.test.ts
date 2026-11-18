@@ -14,13 +14,16 @@ const token = 'fake-integration-token'
 const config = join(home, 't3code.json')
 Object.assign(process.env, { HOME: home, DEVDASH_T3_CONFIG: config })
 type Item = { itemId: string; messageId?: string; position: number; runId: string; type: string; createdBy: string; text: string; title: string | null; status: string }
-type Thread = { threadId: string; projectId: string; model: string; providerInstanceId: string; status: string; title: string; runtimeMode: string; interactionMode: string; items: Item[]; runId?: string; reads: number; behavior: string; runs: { runId: string; status: string }[] }
+type ModelSelection = { instanceId: string; model: string; options?: { id: string; value: string | boolean }[] }
+type Thread = { options?: ModelSelection['options']; threadId: string; projectId: string; model: string; providerInstanceId: string; status: string; title: string; runtimeMode: string; interactionMode: string; items: Item[]; runId?: string; reads: number; behavior: string; runs: { runId: string; status: string }[] }
 const threads = new Map<string, Thread>()
 const calls: { name: string; args: Record<string, unknown> }[] = []
+const selectionWrites = () => calls.filter((c) => c.name === 't3_thread_configure' && c.args.modelSelection !== undefined)
 const events: Record<string, unknown>[] = []
 const waiters = new Set<() => void>()
 const live = new Set<string>()
 let initialized = 0, deleted = 0
+let defaultModel = 'one'
 let stalledDiscovery = false
 let discoveryHold: { entered: () => void; released: Promise<void> } | undefined
 let delayed: { name: string; threadId: string; entered: () => void; released: Promise<void> } | undefined
@@ -39,8 +42,10 @@ async function hold(name: string, threadId: string) {
 const caps = {
   runtimeMode: 'full-access',
   providers: [{ providerInstanceId: 'fake', canRunChildTask: true, displayName: 'Fake T3 provider', runtimeModes: ['full-access', 'approval-required'], models: [
-    { id: 'one', options: [{ id: 'reasoningEffort', default: 'medium', values: ['low', 'medium', 'high'] }] },
-    { id: 'two', options: [{ id: 'reasoningEffort', default: 'low', values: ['low', 'high'] }] },
+    { id: 'one', options: [{ id: 'reasoningEffort', default: 'medium', values: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] }] },
+    { id: 'two', options: [{ id: 'variant', default: 'low', values: ['low', 'high'] }] },
+    { id: 'three', options: [{ id: 'thinking_level', default: 'high', values: ['low', 'high', 'xhigh'] }, { id: 'serviceTier', default: 'default', values: ['default', 'priority'] }] },
+    { id: 'four', options: [{ id: 'serviceTier', default: 'default', values: ['default', 'priority'] }] },
   ] }, { providerInstanceId: 'disabled', canRunChildTask: false, displayName: 'Disabled provider', runtimeModes: ['full-access'], models: [{ id: 'unconnected' }] }],
 }
 function externalRun(t: Thread) {
@@ -71,21 +76,28 @@ const http = createServer(async (req, res) => {
   let data: unknown
   if (name === 'orchestrator_capabilities') {
     if (stalledDiscovery) return
-    data = structuredClone(caps)
+    const result = structuredClone(caps)
+    if (defaultModel === 'outside-short-list') {
+      if (args.search === defaultModel) result.providers[0]!.models = [{ id: defaultModel, options: [{ id: 'thinking_level', default: 'low', values: ['low', 'adaptive'] }] }]
+      else Object.assign(result.providers[0]!, { omittedModels: 1 })
+    }
+    data = result
     if (discoveryHold) { const pause = discoveryHold; discoveryHold = undefined; pause.entered(); await pause.released }
   }
   else if (name === 't3_project_list') data = { projects: [{ id: 'project', workspaceRoot: home }], nextCursor: null }
   else if (name === 't3_project_read') data = { id: String(args.projectId), workspaceRoot: args.projectId === 'wrong-project' ? tmpdir() : home }
   else if (name === 't3_thread_launch') {
     const id = `thread-${threads.size + 1}`
-    const selected = args.modelSelection as { model?: string; instanceId?: string } | undefined
-    threads.set(id, { threadId: id, projectId: 'project', model: selected?.model ?? 'one', providerInstanceId: selected?.instanceId ?? 'fake', title: 'Test', status: 'idle', runtimeMode: String(args.runtimeMode), interactionMode: String(args.interactionMode), items: [], reads: 0, behavior: '', runs: [] })
+    const selected = args.modelSelection as ModelSelection | undefined
+    threads.set(id, { threadId: id, projectId: 'project', options: selected?.options, model: selected?.model ?? defaultModel, providerInstanceId: selected?.instanceId ?? 'fake', title: 'Test', status: 'idle', runtimeMode: String(args.runtimeMode), interactionMode: String(args.interactionMode), items: [], reads: 0, behavior: '', runs: [] })
     data = { threadId: id }
   } else if (name === 't3_thread_configure') {
     assert.ok(t)
-    const s = args.modelSelection as { model: string; instanceId: string }
-    t.model = s.model; t.providerInstanceId = s.instanceId
-    data = { ok: true }
+    const s = args.modelSelection as ModelSelection | undefined
+    if (s) {
+      t.model = s.model; t.providerInstanceId = s.instanceId; t.options = s.options
+      data = { sequence: 1 }
+    } else data = { threadId: t.threadId, modelSelection: { instanceId: t.providerInstanceId, model: t.model, options: t.options } }
   } else if (name === 't3_thread_send') {
     assert.ok(t)
     const prompt = String(args.message)
@@ -173,7 +185,10 @@ test.after(async () => {
 
 test('T3 discovery only lists connected providers and their models', async () => {
   const listed = await H.commandsAndModels('t3code', 'default')
-  assert.deepEqual(listed.models.map((m) => m.value), ['', 'fake/one', 'fake/two'])
+  assert.deepEqual(listed.models.map((m) => m.value), ['', 'fake/one', 'fake/two', 'fake/three', 'fake/four'])
+  assert.deepEqual(listed.models.map((m) => m.supportedEffortLevels), [
+    undefined, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], ['low', 'high'], ['low', 'high', 'xhigh'], [],
+  ])
   const agent = (await H.agents()).find((a) => a.harness === 't3code')!
   assert.deepEqual(agent.profiles, [{ name: 'default', providers: ['Fake T3 provider'] }])
   const l = launch()
@@ -214,12 +229,31 @@ test('T3 model and effort changes reach configure and unsupported options fail',
   await turn(l, 'quick')
   await H.setOption(l.id, 'model', 'fake/two')
   await H.setOption(l.id, 'effort', 'high')
-  const selected = calls.filter((c) => c.name === 't3_thread_configure').at(-1)?.args.modelSelection
-  assert.deepEqual(selected, { instanceId: 'fake', model: 'two', options: [{ id: 'reasoningEffort', value: 'high' }] })
+  const selected = selectionWrites().at(-1)?.args.modelSelection
+  assert.deepEqual(selected, { instanceId: 'fake', model: 'two', options: [{ id: 'variant', value: 'high' }] })
   await assert.rejects(H.setOption(l.id, 'effort', 'turbo'), /effort level/)
   await assert.rejects(H.setOption(l.id, 'model', 'fake/missing'), /not available/)
   await assert.rejects(H.setOption(l.id, 'permissionMode', 'plan'), /fixed/)
   await H.stop(l.id)
+})
+
+test('T3 launches with the chosen native thinking level and resets it without changing other options', async () => {
+  const l = { ...launch(), model: 'fake/three', effort: 'xhigh' }
+  await turn(l, 'quick')
+  const launched = calls.filter((c) => c.name === 't3_thread_launch').at(-1)!
+  assert.deepEqual(launched.args.modelSelection, { instanceId: 'fake', model: 'three', options: [{ id: 'thinking_level', value: 'xhigh' }] })
+  const native = events.find((e) => e.id === l.id && e.ev === 'claude.native')!.nativeId as string
+  const t = threads.get(native)!
+  t.options!.push({ id: 'serviceTier', value: 'priority' })
+  await H.setSelection(l.id, l.model, null)
+  assert.deepEqual(t.options, [{ id: 'serviceTier', value: 'priority' }])
+  await H.setSelection(l.id, 'fake/one', 'ultra')
+  assert.deepEqual(t.options, [{ id: 'reasoningEffort', value: 'ultra' }])
+  await H.stop(l.id)
+  const invalid = { ...launch(), model: 'fake/three', effort: 'ultra' }
+  const before = calls.filter((c) => c.name === 't3_thread_launch').length
+  await assert.rejects(H.send(invalid, [{ type: 'text', text: 'quick' }], randomUUID()), /effort level/)
+  assert.equal(calls.filter((c) => c.name === 't3_thread_launch').length, before)
 })
 
 test('T3 model and effort are validated and applied together without partial remote changes', async () => {
@@ -227,16 +261,16 @@ test('T3 model and effort are validated and applied together without partial rem
   await turn(l, 'quick')
   await H.setSelection(l.id, 'fake/one', 'medium')
   const native = events.find((e) => e.id === l.id && e.ev === 'claude.native')!.nativeId as string
-  const before = calls.filter((c) => c.name === 't3_thread_configure').length
+  const before = selectionWrites().length
   await assert.rejects(H.setSelection(l.id, 'fake/two', 'medium'), /effort level/)
-  assert.equal(calls.filter((c) => c.name === 't3_thread_configure').length, before, 'reject the complete invalid pair before configuring T3')
+  assert.equal(selectionWrites().length, before, 'reject the complete invalid pair before configuring T3')
   assert.equal(threads.get(native)!.model, 'one')
   await H.setOption(l.id, 'effort', 'high')
-  assert.equal((calls.filter((c) => c.name === 't3_thread_configure').at(-1)!.args.modelSelection as { model: string }).model, 'one', 'failed pair keeps the local model selection')
-  const successful = calls.filter((c) => c.name === 't3_thread_configure').length
+  assert.equal((selectionWrites().at(-1)!.args.modelSelection as { model: string }).model, 'one', 'failed pair keeps the local model selection')
+  const successful = selectionWrites().length
   await H.setSelection(l.id, 'fake/two', 'high')
-  assert.equal(calls.filter((c) => c.name === 't3_thread_configure').length, successful + 1, 'one remote configure commits the valid pair')
-  assert.deepEqual(calls.filter((c) => c.name === 't3_thread_configure').at(-1)!.args.modelSelection, { instanceId: 'fake', model: 'two', options: [{ id: 'reasoningEffort', value: 'high' }] })
+  assert.equal(selectionWrites().length, successful + 1, 'one remote configure commits the valid pair')
+  assert.deepEqual(selectionWrites().at(-1)!.args.modelSelection, { instanceId: 'fake', model: 'two', options: [{ id: 'variant', value: 'high' }] })
   await assert.rejects(H.setOption(l.id, 'model', null), /Choose a specific model/)
   await H.stop(l.id)
 })
@@ -246,8 +280,30 @@ test('T3 an effort change keeps the actual model when the conversation started o
   l.model = null
   await turn(l, 'quick')
   await H.setSelection(l.id, null, 'medium')
-  assert.deepEqual(calls.filter((c) => c.name === 't3_thread_configure').at(-1)!.args.modelSelection, { instanceId: 'fake', model: 'one', options: [{ id: 'reasoningEffort', value: 'medium' }] })
+  assert.deepEqual(selectionWrites().at(-1)!.args.modelSelection, { instanceId: 'fake', model: 'one', options: [{ id: 'reasoningEffort', value: 'medium' }] })
   await H.stop(l.id)
+})
+
+test('T3 discovers a project default outside the short list and restores its level on resume', async () => {
+  defaultModel = 'outside-short-list'
+  const l = { ...launch(), model: null, effort: 'adaptive' }
+  try {
+    const id = 'fake/outside-short-list'
+    const picker = await H.commandsAndModels('t3code', 'default', id)
+    assert.deepEqual(picker.models.find((m) => m.value === id)?.supportedEffortLevels, ['low', 'adaptive'])
+    assert.ok(!(await H.commandsAndModels('t3code', 'default')).models.some((m) => m.value === id))
+    await turn(l, 'quick')
+    const native = events.find((e) => e.id === l.id && e.ev === 'claude.native')!.nativeId as string
+    const t = threads.get(native)!
+    assert.deepEqual(t.options, [{ id: 'thinking_level', value: 'adaptive' }])
+    assert.deepEqual(events.find((e) => e.id === l.id && e.ev === 'claude.efforts')?.efforts, ['low', 'adaptive'])
+    await H.stop(l.id)
+    // The native app changed reasoning offline; read it and apply DevDash's saved setting before the next turn.
+    t.options = [{ id: 'thinking_level', value: 'low' }]
+    await turn({ ...l, started: true, nativeId: native }, 'quick')
+    assert.deepEqual(t.options, [{ id: 'thinking_level', value: 'adaptive' }])
+    await H.stop(l.id)
+  } finally { defaultModel = 'one' }
 })
 
 test('T3 explicit connection refresh invalidates its cached models', async () => {
@@ -360,6 +416,24 @@ test('T3 replays paginated native history and a workspace mismatch never starts 
   await assert.rejects(H.send(resumed, [{ type: 'text', text: 'wrong-folder' }], randomUUID()), /different folder/)
   assert.equal(calls.filter((c) => c.name === 't3_thread_launch').length, launches)
   assert.equal(calls.filter((c) => c.name === 't3_thread_send').length, sends)
+})
+
+test('T3 can change thinking after the idle bridge closes without sending a turn', async () => {
+  const l = launch()
+  await turn(l, 'quick')
+  const nativeId = String(events.find((e) => e.id === l.id && e.ev === 'claude.native')!.nativeId)
+  await H.stop(l.id)
+  const stopped = { ...l, started: true, nativeId }
+  const before = calls.length
+  await assert.rejects(H.setSelection(l.id, 'fake/two', 'medium', stopped), /effort level/)
+  assert.equal(threads.get(nativeId)!.model, 'one')
+  await H.setSelection(l.id, 'fake/two', 'high', stopped)
+  assert.equal(threads.get(nativeId)!.model, 'two')
+  const writes = calls.slice(before).filter((c) => c.name === 't3_thread_configure' && c.args.modelSelection)
+  assert.equal(writes.length, 1)
+  assert.deepEqual((writes[0]!.args.modelSelection as { options: unknown[] }).options, [{ id: 'variant', value: 'high' }])
+  assert.ok(!calls.slice(before).some((c) => c.name === 't3_thread_send' || c.name === 't3_thread_launch'))
+  await H.stop(l.id)
 })
 
 test('T3 poll read failures interrupt the active native run before reporting an error', async () => {

@@ -1,5 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { AppError } from '../../core/http.ts'
+import { authMiddleware } from '../auth/routes.ts'
+import type { AuthService } from '../auth/service.ts'
+import { claudeRoutes } from './routes.ts'
 import { openDb } from '../../core/db.ts'
 import { createHub } from '../../core/hub.ts'
 import type { AgentsService } from '../agents/service.ts'
@@ -520,7 +524,7 @@ test('an OpenCode session: its agent goes with every start, its own session id i
   emit({ ev: 'claude.status', id: 'o1', status: 'error', detail: 'boom' })
   assert.match(notified.at(-1)!.title, /^OpenCode stopped with an error/)
   // New sessions start with the agent the member chose as their default.
-  assert.equal(claude.saveDefaults(ann, { harness: 'opencode', profile: 'default', model: null, effort: null, permission_mode: 'acceptEdits', open_in: 'chat' }).harness, 'opencode')
+  assert.equal((await claude.saveDefaults(ann, { harness: 'opencode', profile: 'default', model: null, effort: null, permission_mode: 'acceptEdits', open_in: 'chat' })).harness, 'opencode')
 })
 
 test('the advisor is off unless the owner picks one; a pick applies live and on the next start, and only in Claude Code', async () => {
@@ -549,12 +553,13 @@ test('T3 Code preserves its native thread id, models, effort and defaults, and n
   await claude.send(ann, 's1', 'again', [])
   assert.equal((sent.find((r) => r.op === 'claude.send')!.launch as { nativeId: string }).nativeId, 't3-thread')
   assert.equal(await claude.command(ann, 's1', '/model codex/gpt-6.1-sol'), 'Model switched to codex/gpt-6.1-sol.')
-  assert.equal(await claude.command(ann, 's1', '/effort ultra'), 'Effort set to ultra.')
+  emit({ ev: 'claude.efforts', id: 's1', efforts: ['medium', 'ultra'] })
+  assert.equal(await claude.command(ann, 's1', '/effort Ultra'), 'Effort set to ultra.')
   const selected = db.prepare("select model, effort from claude_sessions where id = 's1'").get() as { model: string; effort: string }
   assert.deepEqual([selected.model, selected.effort], ['codex/gpt-6.1-sol', 'ultra'])
   emit({ ev: 'claude.status', id: 's1', status: 'error', detail: 'connection lost' })
   assert.match(notified.at(-1)!.title, /^T3 Code stopped with an error/)
-  assert.equal(claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: 'codex/gpt-6.1-sol', effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' }).harness, 't3code')
+  assert.equal((await claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: 'codex/gpt-6.1-sol', effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' })).harness, 't3code')
 })
 
 test('T3 Code creates Chat sessions with Drive disabled and rejects unsupported launch options before writing', async () => {
@@ -572,8 +577,70 @@ test('T3 Code creates Chat sessions with Drive disabled and rejects unsupported 
   assert.equal(created.harness, 't3code')
   assert.equal((db.prepare('select drive from claude_sessions where id = ?').get(created.id) as { drive: number }).drive, 0)
   await assert.rejects(claude.switchMode(ann, created.id, 'cli', 100, 30), /open in Chat/)
-  assert.throws(() => claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'cli' }), /open in Chat/)
-  assert.throws(() => claude.saveDefaults(ann, { harness: 't3code', profile: 'work', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' }), /default connection/)
+  await assert.rejects(claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'cli' }), /open in Chat/)
+  await assert.rejects(claude.saveDefaults(ann, { harness: 't3code', profile: 'work', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' }), /default connection/)
+})
+
+test('T3 Code HTTP defaults and new sessions accept every advertised effort and reject unsupported pairs before saving', async () => {
+  const { db, ann } = inProject()
+  const levels = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ProviderSpecific']
+  const agents = {
+    onEvent: () => {},
+    request: async (_username: string, r: { op: string; model?: string }) => {
+      assert.equal(r.op, 'claude.commands')
+      return { commands: [], models: [
+        // This model is outside the short catalog. Its levels are available when requested by ID.
+        ...(r.model === 'codex/sol' ? [{ value: r.model, displayName: 'Sol', supportedEffortLevels: levels }] : []),
+        { value: 'another/fast', displayName: 'Fast', supportedEffortLevels: [] },
+      ] }
+    },
+  } as unknown as AgentsService
+  const projects = { bySlug: () => ({ id: 1, slug: 'app' }), path: () => '/srv/app' } as unknown as ProjectsService
+  const claude = claudeService({ db, agents, projects, hub: createHub(), notify: async () => {} })
+  const mw = authMiddleware({ sessionUser: () => ({ user: ann }) } as unknown as AuthService)
+  const app = claudeRoutes(claude, mw)
+  app.onError((e, c) => { if (e instanceof AppError) return c.json({ error: e.message }, e.status); throw e })
+  const request = (path: string, method: string, body: object) => app.request(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+  const listedModels = async (query: string) => {
+    const res = await app.request('/commands?' + query)
+    assert.equal(res.status, 200)
+    return ((await res.json()) as { models: { value: string }[] }).models.map((m) => m.value)
+  }
+  assert.deepEqual(await listedModels('harness=t3code'), ['another/fast'])
+  assert.deepEqual(await listedModels('harness=t3code&model=codex%2Fsol'), ['codex/sol', 'another/fast'])
+  assert.deepEqual(await listedModels('harness=opencode&model=codex%2Fsol'), ['another/fast'])
+  assert.equal((await app.request('/commands?harness=t3code&model=' + 'x'.repeat(161))).status, 400)
+
+  const sessionFrom = async (res: Response) => ((await res.json()) as { session: { id: string; effort: string | null } }).session
+  const defaults = { harness: 't3code', profile: 'default', model: 'codex/sol', permission_mode: 'bypassPermissions', open_in: 'chat' }
+  const newSession = { harness: 't3code', model: 'codex/sol', project: 'app' }
+  for (const effort of levels) {
+    const saved = await request('/defaults', 'PUT', { ...defaults, effort })
+    assert.equal(saved.status, 200)
+    assert.equal(((await saved.json()) as { defaults: { effort: string } }).defaults.effort, effort)
+    const created = await request('/sessions', 'POST', { ...newSession, effort })
+    assert.equal(created.status, 200)
+    assert.equal((await sessionFrom(created)).effort, effort)
+  }
+  const count = () => (db.prepare('select count(*) as n from claude_sessions').get() as { n: number }).n
+  const before = count()
+  for (const model of ['another/fast', null]) {
+    assert.equal((await request('/defaults', 'PUT', { ...defaults, model, effort: 'ultra' })).status, 400)
+    assert.equal((await request('/sessions', 'POST', { ...newSession, model, effort: 'ultra' })).status, 400)
+  }
+  assert.equal(count(), before)
+  assert.equal(claude.defaults(ann).effort, 'ProviderSpecific')
+  assert.equal((await request('/defaults', 'PUT', { ...defaults, harness: 'claude', effort: 'ultra' })).status, 400)
+
+  const idle = await sessionFrom(await request('/sessions', 'POST', { ...newSession, effort: 'ultra' }))
+  const path = `/sessions/${idle.id}`
+  assert.match((await claude.command(ann, idle.id, '/effort'))!, /low, medium, high, xhigh, max, ultra, ProviderSpecific/)
+  assert.equal((await request(path, 'PATCH', { model: 'another/fast', effort: 'ultra' })).status, 400)
+  const unchanged = db.prepare('select model, effort from claude_sessions where id = ?').get(idle.id)!
+  assert.deepEqual([unchanged.model, unchanged.effort], ['codex/sol', 'ultra'])
+  const changed = await request(path, 'PATCH', { model: 'another/fast' })
+  assert.equal((await sessionFrom(changed)).effort, null)
 })
 
 test('T3 Code rejects guest messages and uploads before using the owner account; full access can send', async () => {
@@ -600,7 +667,7 @@ test('T3 Code only supports explicit Full access and cannot silently persist app
   const before = row()
   for (const permissionMode of ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto']) {
     await assert.rejects(claude.update(ann, 's1', { title: 'Changed', permissionMode }), /explicit Full access/)
-    assert.throws(() => claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: null, effort: null, permission_mode: permissionMode, open_in: 'chat' }), /explicit Full access/)
+    await assert.rejects(claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: null, effort: null, permission_mode: permissionMode, open_in: 'chat' }), /explicit Full access/)
   }
   for (const patch of [
     { reachTailnet: true }, { tailnetMcps: [{ name: 'ida', url: 'http://100.64.0.9/mcp' }] }, { drive: true },
@@ -700,15 +767,34 @@ test('T3 Code validates one live model/effort pair before saving any requested c
   const changed = row() as { model: string; effort: string }
   assert.deepEqual([changed.model, changed.effort], ['codex/gpt-6.1-sol', 'ultra'])
   assert.deepEqual(remote, { model: 'codex/gpt-6.1-sol', effort: 'ultra' })
-  assert.deepEqual(sent, [{ op: 'claude.selection', id: 's1', model: 'codex/gpt-6.1-sol', effort: 'ultra' }])
+  assert.equal((sent[0]?.launch as { id: string }).id, 's1', 'the member agent can reattach a stopped chat')
+  const selections = () => sent.map(({ launch: _launch, ...selection }) => selection)
+  assert.deepEqual(selections(), [{ op: 'claude.selection', id: 's1', model: 'codex/gpt-6.1-sol', effort: 'ultra' }])
   sent.length = 0
   await claude.update(ann, 's1', { model: 'claude/sonnet' })
   const nextModel = row() as { model: string; effort: string | null }
   assert.deepEqual([nextModel.model, nextModel.effort], ['claude/sonnet', null], 'a different model cannot inherit effort levels from the old model on restart')
-  assert.deepEqual(sent, [{ op: 'claude.selection', id: 's1', model: 'claude/sonnet', effort: null }])
+  assert.deepEqual(selections(), [{ op: 'claude.selection', id: 's1', model: 'claude/sonnet', effort: null }])
   sent.length = 0
   await claude.update(ann, 's1', { effort: 'low' })
-  assert.deepEqual(sent, [{ op: 'claude.selection', id: 's1', model: 'claude/sonnet', effort: 'low' }], 'effort-only changes include the saved model')
+  assert.deepEqual(selections(), [{ op: 'claude.selection', id: 's1', model: 'claude/sonnet', effort: 'low' }], 'effort-only changes include the saved model')
+})
+
+test('overlapping T3 model and effort changes resolve against the latest saved selection', async () => {
+  const { claude, db, sent, emit, ann } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0, model = 'codex/old', effort = 'high' where id = 's1'").run()
+  await Promise.all([
+    claude.update(ann, 's1', { model: 'other/new' }),
+    claude.update(ann, 's1', { effort: 'ultra' }),
+    claude.update(ann, 's1', { model: 'other/new' }),
+  ])
+  assert.deepEqual(sent.map((r) => [r.model, r.effort]), [['other/new', null], ['other/new', 'ultra'], ['other/new', 'ultra']])
+  const row = db.prepare("select model, effort from claude_sessions where id = 's1'").get()!
+  assert.deepEqual([row.model, row.effort], ['other/new', 'ultra'])
+
+  const levels = Array.from({ length: 25 }, (_, i) => `level-${i}`)
+  emit({ ev: 'claude.efforts', id: 's1', efforts: levels })
+  assert.deepEqual(claude.list(ann, false)[0]!.efforts, levels)
 })
 
 test('T3 Code existing conversations reject Default without silently changing the saved model', async () => {

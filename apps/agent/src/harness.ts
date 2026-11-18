@@ -21,6 +21,8 @@ import { agentCapabilities } from '../../../packages/agents/capabilities.ts'
 import { fileURLToPath } from 'node:url'
 import { sessionSkills } from './skill-scope.ts'
 
+type ModelChoice = { value: string; displayName: string; description?: string; group?: string; supportedEffortLevels?: string[]; resolvedModel?: string }
+
 /** What DevDash needs to know about one ACP agent. */
 type Agent = {
   name: string
@@ -31,10 +33,9 @@ type Agent = {
   createProfile: (name: string) => void
   profileEnv: (profile: string) => Record<string, string>
   providers: (profile: string) => Promise<string[]>
-  models: (profile: string) => Promise<string[]>
-  /** Env for one session: its rules and MCP servers. */
+  models: (profile: string) => Promise<ModelChoice[]>
   /** Env for one session: its rules and MCP servers, and in the CLI how it asks and which session the plugin reports. */
-  sessionEnv: (o: Parameters<typeof opencode.config>[0] & { nativeId?: string; permissionMode?: string; model?: string | null; title?: string }) => Record<string, string>
+  sessionEnv: (o: Parameters<typeof opencode.config>[0] & { nativeId?: string; permissionMode?: string; model?: string | null; effort?: string | null; title?: string }) => Record<string, string>
   acpArgs: string[]
   cliArgs: (nativeId: string) => string[]
   loginArgs: (target: string | null) => string[]
@@ -50,7 +51,11 @@ export const AGENTS: Record<string, Agent> = {
   opencode: {
     name: 'OpenCode', bin: opencode.OPENCODE_BIN, installed: opencode.installed, version: opencode.version,
     profileNames: opencode.profileNames, createProfile: opencode.createProfile, profileEnv: opencode.profileEnv,
-    providers: opencode.providers, models: opencode.models,
+    providers: opencode.providers,
+    models: async (profile) => [
+      { value: '', displayName: 'Default', description: "OpenCode's own default" },
+      ...(await opencode.models(profile)).map((id) => ({ value: id, displayName: id.split('/').slice(1).join('/'), description: id, group: id.split('/')[0] })),
+    ],
     sessionEnv: ({ nativeId, ...o }) => ({ OPENCODE_CONFIG_CONTENT: JSON.stringify(opencode.config(o)), ...(nativeId ? { DEVDASH_OPENCODE_SESSION: nativeId } : {}) }),
     acpArgs: opencode.acpArgs, cliArgs: opencode.cliArgs, loginArgs: opencode.loginArgs, signIns: opencode.SIGN_INS, modeFor: opencode.modeFor, commands: opencode.COMMANDS,
   },
@@ -58,10 +63,10 @@ export const AGENTS: Record<string, Agent> = {
     name: 'T3 Code', bin: process.execPath, installed: t3code.installed,
     version: async () => (await t3code.inspect()).version,
     profileNames: () => ['default'], createProfile: () => { throw new Error('T3 Code uses its connected account, not DevDash profiles.') }, profileEnv: () => ({}),
-    providers: async () => (await t3code.info()).profiles.flatMap((p) => p.providers), models: t3code.models,
+    providers: async () => (await t3code.info()).profiles.flatMap((p) => p.providers), models: () => t3code.modelChoices(),
     sessionEnv: (o) => {
       if (o.noTools) throw new Error('T3 Code does not support tool-free background completions through this connection.')
-      return { DEVDASH_T3_PERMISSION_MODE: o.permissionMode ?? 'default', DEVDASH_T3_MODEL: o.model ?? '', DEVDASH_T3_TITLE: o.title ?? 'DevDash session' }
+      return { DEVDASH_T3_PERMISSION_MODE: o.permissionMode ?? 'default', DEVDASH_T3_MODEL: o.model ?? '', DEVDASH_T3_EFFORT: o.effort ?? '', DEVDASH_T3_TITLE: o.title ?? 'DevDash session' }
     },
     acpArgs: [fileURLToPath(new URL('./t3-acp.ts', import.meta.url))], cliArgs: () => { throw new Error('T3 Code sessions use Chat.') },
     loginArgs: () => { throw new Error('Configure your T3 Code integration connection.') }, signIns: {}, modeFor: (m) => m, commands: [],
@@ -227,7 +232,7 @@ export function formAnswer(qs: ReturnType<typeof formQuestions>, answers: Record
   return content
 }
 
-async function startChat(l: Launch): Promise<Chat> {
+async function startChat(l: Launch, configureSelection = false): Promise<Chat> {
   validate(l)
   if (l.harness === 't3code') {
     if (l.profile !== 'default') throw new Error('T3 Code uses the default connection profile.')
@@ -249,7 +254,7 @@ async function startChat(l: Launch): Promise<Chat> {
   const hideSkills = (await sessionSkills(l.cwd).catch(() => null))?.hide
   const child = spawn(agent.bin, agent.acpArgs, {
     cwd: l.cwd,
-    env: { ...process.env, ...agent.profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}), ...agent.sessionEnv({ rulesFile, mcp, hideSkills, permissionMode: l.permissionMode, model: l.model, title: l.title }) },
+    env: { ...process.env, ...agent.profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}), ...agent.sessionEnv({ rulesFile, mcp, hideSkills, permissionMode: l.permissionMode, model: l.model, effort: l.effort, title: l.title }) },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   child.stderr!.on('data', (d: Buffer) => console.error(`[${l.id.slice(0, 8)}] ${d.toString().trimEnd().slice(0, 2000)}`))
@@ -310,6 +315,7 @@ async function startChat(l: Launch): Promise<Chat> {
     chat.t = t(l.nativeId) // the live turns start from a clean slate, not the replay's
   }
   if (!opened) {
+    if (configureSelection) return failed(new Error('The existing T3 Code conversation could not be loaded.'))
     opened = await rpc.request<{ sessionId: string; configOptions?: Config[] }>('session/new', { cwd: l.cwd, mcpServers: [] }).catch(failed)
     chat.sessionId = opened.sessionId!
     chat.t = t(chat.sessionId)
@@ -322,8 +328,15 @@ async function startChat(l: Launch): Promise<Chat> {
   }
   chat.config = opened.configOptions ?? []
   try {
-    await applyModel(chat, l.model ?? null)
-    await applyEffort(chat, l.effort ?? null)
+    if (l.harness === 't3code') {
+      chat.model = option(chat, 'model')?.currentValue ?? chat.model
+      if (configureSelection || (l.model && l.model !== chat.model) || (l.effort ?? 'default') !== option(chat, 'thought_level')?.currentValue) {
+        await applyT3Selection(chat, l.model ?? null, l.effort ?? null)
+      }
+    } else {
+      await applyModel(chat, l.model ?? null)
+      await applyEffort(chat, l.effort ?? null)
+    }
     await applyMode(chat)
   } catch (err) { failed(err as Error) }
   reportEfforts(chat)
@@ -338,7 +351,6 @@ async function applyModel(c: Chat, model: string | null) {
   if (o?.currentValue) c.model = o.currentValue
   if (!o || !model || model === o.currentValue) return
   await setConfig(c, o.id, model).catch((err: Error) => {
-    if (c.launch.harness === 't3code') throw err
     emit({ ev: 'claude.status', id: c.launch.id, status: c.status, detail: `Model ${model} isn't available: ${err.message}`.slice(0, 300) })
   })
   c.model = model
@@ -350,8 +362,7 @@ async function applyModel(c: Chat, model: string | null) {
 async function applyEffort(c: Chat, effort: string | null) {
   const o = option(c, 'thought_level')
   const want = effort ?? 'default'
-  if (c.launch.harness === 't3code' && effort && !o?.options?.some((x) => x.value === want)) throw new Error('This effort level is not available for the T3 Code model.')
-  if (o && o.currentValue !== want && o.options?.some((x) => x.value === want)) await setConfig(c, o.id, want).catch((err: Error) => { if (c.launch.harness === 't3code') throw err })
+  if (o && o.currentValue !== want && o.options?.some((x) => x.value === want)) await setConfig(c, o.id, want).catch(() => {})
 }
 function reportEfforts(c: Chat) {
   const o = option(c, 'thought_level')
@@ -646,15 +657,23 @@ export async function interrupt(id: string) {
   c.pending.clear()
 }
 
-/** One T3 selection update: remote validation succeeds before either locally saved setting changes. */
-export const setSelection = (id: string, model: string | null, effort: string | null) => serial(id, async () => {
-  const c = chats.get(id)
-  if (!c) return // its next start applies the selection the server saves
-  if (c.launch.harness !== 't3code') throw new Error('Combined model selection is only available for T3 Code.')
+async function applyT3Selection(c: Chat, model: string | null, effort: string | null) {
   const r = await c.rpc.request<{ configOptions: Config[] }>('session/set_selection', { sessionId: c.sessionId, model, effort })
   c.config = r.configOptions
   c.model = option(c, 'model')?.currentValue ?? c.model
   c.launch = { ...c.launch, model, effort }
+}
+
+/** Validate and apply the pair in the native thread, including after its idle ACP process has closed. */
+export const setSelection = (id: string, model: string | null, effort: string | null, launch?: Launch) => serial(id, async () => {
+  const c = chats.get(id)
+  if (!c) {
+    if (launch?.id !== id || launch.harness !== 't3code' || !launch.nativeId) throw new Error('Send a first message to open the T3 Code conversation.')
+    await startChat({ ...launch, model, effort }, true)
+    return
+  }
+  if (c.launch.harness !== 't3code') throw new Error('Combined model selection is only available for T3 Code.')
+  await applyT3Selection(c, model, effort)
   reportEfforts(c)
 })
 
@@ -670,7 +689,6 @@ export async function setOption(id: string, key: string, value: string | boolean
   if (key === 'guestCaps') c.launch = { ...c.launch, guestCaps: Array.isArray(value) ? value.filter((v) => typeof v === 'string') : [] }
   else if (key === 'model') {
     await applyModel(c, (value as string | null) ?? null)
-    if (c.launch.harness === 't3code') c.launch = { ...c.launch, effort: null }
     await applyEffort(c, c.launch.effort ?? null) // the new model's own level of the same name, if it has one
     reportEfforts(c)
   } else if (key === 'effort') {
@@ -786,24 +804,31 @@ export const pendingFor = (id: string) => [...(chats.get(id)?.pending.values() ?
 export const busy = () => [...chats.values()].some((c) => c.status === 'working' || c.status === 'waiting')
 
 const commandCache = new Map<string, Command[]>()
-const modelCache = new Map<string, { at: number; models: { value: string; displayName: string; description?: string; group?: string }[] }>()
+const modelCache = new Map<string, { at: number; models: Promise<ModelChoice[]> }>()
 /** Explicit connection refresh also invalidates the model picker, so newly connected models appear immediately. */
 export function refreshT3() {
   t3code.invalidateInfo()
   for (const key of modelCache.keys()) if (key.startsWith('t3code:')) modelCache.delete(key)
 }
 /** Commands and models for a profile of an agent: its models from every provider the profile has connected. */
-export async function commandsAndModels(harness: string, profile: string) {
+export async function commandsAndModels(harness: string, profile: string, selected?: string) {
   if (!PROFILE_RE.test(profile)) throw new Error('invalid profile')
   const agent = agentOf(harness)
   const key = `${harness}:${profile}`
-  const hit = modelCache.get(key)
+  let hit = modelCache.get(key)
   if (!hit || Date.now() - hit.at > (harness === 't3code' ? 15_000 : 5 * 60_000)) {
-    const ids = await agent.models(profile)
-    const listed = ids.map((v) => ({ value: v, displayName: v.split('/').slice(1).join('/'), description: v, group: v.split('/')[0] }))
-    modelCache.set(key, { at: Date.now(), models: [{ value: '', displayName: 'Default', description: `${agent.name}'s own default` }, ...listed] })
+    const models = agent.models(profile)
+    hit = { at: Date.now(), models }
+    modelCache.set(key, hit)
+    void models.catch(() => { if (modelCache.get(key)?.models === models) modelCache.delete(key) })
   }
-  return { commands: commandCache.get(key) ?? agent.commands, models: modelCache.get(key)!.models }
+  let models = await hit.models
+  if (harness === 't3code' && selected && /^[^/]+\/.+/.test(selected) && !models.some((m) => m.value === selected)) {
+    const matches = await t3code.modelChoices(t3code.selection(selected).model)
+    const exact = matches.find((m) => m.value === selected)
+    if (exact) models = [...models, exact]
+  }
+  return { commands: commandCache.get(key) ?? agent.commands, models }
 }
 
 /** Each ACP agent, whether it's installed, and its profiles with the providers each has connected. */
