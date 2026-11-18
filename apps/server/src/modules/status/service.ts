@@ -14,19 +14,19 @@ const run = promisify(execFile)
 const read = (path: string) => { try { return readFileSync(path, 'utf8') } catch { return null } }
 
 /**
- * The newest release in an image's version line on GitHub's registry: for ghcr.io/m1k1o/neko/chromium:3.1, the highest
- * 3.1.x tag. shortcut: ghcr.io images with a numeric line tag only; anything else reads as "could not check".
+ * The newest release with a major version on GitHub's registry: for ghcr.io/m1k1o/neko/chromium and 3, the highest
+ * 3.x.y tag. shortcut: ghcr.io images only; anything else reads as "could not check".
  */
-export async function newestInLine(image: string, get: typeof fetch = fetch): Promise<string | null> {
-  const m = /^ghcr\.io\/([a-z0-9._/-]+):(\d+(?:\.\d+)?)$/.exec(image)
-  if (!m) return null
-  const [, repo, line] = m
+export async function newestRelease(image: string, major: number, get: typeof fetch = fetch): Promise<string | null> {
+  const repo = /^ghcr\.io\/([a-z0-9._/-]+?)(?::[\w.-]+)?$/.exec(image)?.[1]
+  if (!repo || !Number.isInteger(major)) return null
   const opts = { signal: AbortSignal.timeout(8000) }
   const { token } = await (await get(`https://ghcr.io/token?scope=repository:${repo}:pull`, opts)).json() as { token?: string }
   const { tags } = await (await get(`https://ghcr.io/v2/${repo}/tags/list?n=1000`, { ...opts, headers: { authorization: `Bearer ${token}` } })).json() as { tags?: string[] }
-  const re = new RegExp(`^${line!.replaceAll('.', '\\.')}\\.(\\d+)$`)
-  const patch = (tags ?? []).map((t) => re.exec(t)?.[1]).filter((p): p is string => !!p).map(Number)
-  return patch.length ? `${line}.${Math.max(...patch)}` : null
+  const re = new RegExp(`^${major}\\.(\\d+)\\.(\\d+)$`)
+  const found = (tags ?? []).map((t) => re.exec(t)).filter((m): m is RegExpExecArray => !!m).map((m) => [Number(m[1]), Number(m[2])] as const)
+  const best = found.sort((a, b) => b[0] - a[0] || b[1] - a[1])[0]
+  return best ? `${major}.${best[0]}.${best[1]}` : null
 }
 
 /** One look at the server's health: resources, versions, backups and the parts of DevDash that run on it. */
@@ -52,7 +52,7 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
       return { id: target.split('/').pop() ?? target, since: Math.floor(statSync(target).mtimeMs / 1000) }
     } catch { return null }
   }
-  const helper = <T>(cmd: string, timeoutMs = 15_000) => requestLine<{ ok: boolean; error?: string } & T>(join(runDir, 'helper.sock'), { cmd }, timeoutMs)
+  const helper = <T>(cmd: string, args?: Record<string, unknown>, timeoutMs = 15_000) => requestLine<{ ok: boolean; error?: string } & T>(join(runDir, 'helper.sock'), { cmd, args }, timeoutMs)
     .then((r) => { if (!r.ok) throw new Error(r.error ?? `${cmd} failed`); return r })
 
   /**
@@ -116,7 +116,7 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
       },
       async update() {
         if (await askUpdating()) return
-        await helper(`${o.name}-update`)
+        await helper(`${o.name}-update`, { version: await newest() }) // the browser's needs it; the agents' look it up themselves
         void watch().catch((err) => console.error(`${o.name} update:`, err))
       },
     }
@@ -133,13 +133,13 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
   })
   // OpenCode starts a new process per session, so a new version applies to the next session by itself.
   const opencode = agentInstall({ name: 'opencode', read: ran('/opt/devdash/opencode/current/bin/opencode'), installed: linked('opencode'), newest: npmLatest('@opencode/cli') })
-  // The team browser: neko's image, pinned to one version line in the root helper (e.g. chromium:3.1); an update downloads
-  // that line's newest release, which the browser runs from its next start.
-  let browserImage: string | null = null
+  // The team browser: neko's image. An update downloads its newest release of the major version the root helper speaks
+  // (its settings and API), which the browser runs from its next start.
+  let neko: { image: string; major: number } | null = null
   const teamBrowser = agentInstall({
     name: 'browser',
-    read: () => helper<{ image: string; version: string | null }>('browser-version').then((r) => { browserImage = r.image; return r.version }),
-    newest: async () => (browserImage ? newestInLine(browserImage) : null),
+    read: () => helper<{ image: string; major: number; version: string | null }>('browser-version').then((r) => { neko = r; return r.version }),
+    newest: async () => (neko ? newestRelease(neko.image, neko.major) : null),
   })
 
   return {
