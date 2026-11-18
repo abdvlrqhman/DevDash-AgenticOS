@@ -13,6 +13,22 @@ import { memoryHealth } from '../claude/service.ts'
 const run = promisify(execFile)
 const read = (path: string) => { try { return readFileSync(path, 'utf8') } catch { return null } }
 
+/**
+ * The newest release in an image's version line on GitHub's registry: for ghcr.io/m1k1o/neko/chromium:3.1, the highest
+ * 3.1.x tag. shortcut: ghcr.io images with a numeric line tag only; anything else reads as "could not check".
+ */
+export async function newestInLine(image: string, get: typeof fetch = fetch): Promise<string | null> {
+  const m = /^ghcr\.io\/([a-z0-9._/-]+):(\d+(?:\.\d+)?)$/.exec(image)
+  if (!m) return null
+  const [, repo, line] = m
+  const opts = { signal: AbortSignal.timeout(8000) }
+  const { token } = await (await get(`https://ghcr.io/token?scope=repository:${repo}:pull`, opts)).json() as { token?: string }
+  const { tags } = await (await get(`https://ghcr.io/v2/${repo}/tags/list?n=1000`, { ...opts, headers: { authorization: `Bearer ${token}` } })).json() as { tags?: string[] }
+  const re = new RegExp(`^${line!.replaceAll('.', '\\.')}\\.(\\d+)$`)
+  const patch = (tags ?? []).map((t) => re.exec(t)?.[1]).filter((p): p is string => !!p).map(Number)
+  return patch.length ? `${line}.${Math.max(...patch)}` : null
+}
+
 /** One look at the server's health: resources, versions, backups and the parts of DevDash that run on it. */
 export function statusService({ db, agents, services, browser, runDir, dataDir, version }: {
   db: Db; agents: AgentsService; services: ServicesService; browser: BrowserService; runDir: string; dataDir: string; version: string
@@ -40,24 +56,25 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
     .then((r) => { if (!r.ok) throw new Error(r.error ?? `${cmd} failed`); return r })
 
   /**
-   * A coding agent installed for everyone in /opt/devdash/<name> (deploy/<name>-update.sh): the version it runs (asked
-   * once per update, not on every page load), the installed and newest package versions, and its install/update job.
+   * Something installed for everyone and updated by an admin from the Server page: the version it runs (asked once per
+   * update, not on every page load), the installed and newest versions, and its helper job (<name>-update[-status]).
    */
-  function agentInstall(o: { name: string; bin: string; pkg: string; afterUpdate?: () => Promise<unknown> }) {
+  function agentInstall(o: {
+    name: string; read: () => Promise<string | null>; newest: () => Promise<string | null>
+    /** The installed package's version, when it isn't the one it runs (Claude Code's SDK). Default: `read`. */
+    installed?: () => string | null
+    afterUpdate?: () => Promise<unknown>
+  }) {
     let running: { at: number; version: string | null } = { at: 0, version: null }
     let latest: { at: number; version: string | null } = { at: 0, version: null }
     async function version() {
       if (Date.now() - running.at < 10 * 60_000) return running.version
-      const out = await run(o.bin, ['--version'], { timeout: 10_000 }).then((r) => r.stdout, () => '')
-      running = { at: Date.now(), version: out.match(/\d+\.\d+\.\d+/)?.[0] ?? null }
+      running = { at: Date.now(), version: await o.read().catch(() => null) }
       return running.version
     }
-    // The installed package version names its folder.
-    const installed = () => { try { return readlinkSync(`/opt/devdash/${o.name}/current`).split('/').pop() ?? null } catch { return null } }
     async function newest() {
       if (Date.now() - latest.at < 60 * 60_000) return latest.version
-      const v = await fetch(`https://registry.npmjs.org/${o.pkg}/latest`, { signal: AbortSignal.timeout(5000) })
-        .then((r) => r.json() as Promise<{ version?: string }>).then((j) => j.version ?? null, () => null)
+      const v = await o.newest().catch(() => null)
       latest = { at: Date.now(), version: v ?? latest.version }
       return latest.version
     }
@@ -95,7 +112,7 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
       version,
       state: async () => {
         const s = await status()
-        return { installed: installed(), latest: await newest(), updating: s.running, failed: s.failed }
+        return { installed: o.installed ? o.installed() : await version(), latest: await newest(), updating: s.running, failed: s.failed }
       },
       async update() {
         if (await askUpdating()) return
@@ -104,13 +121,26 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
       },
     }
   }
+  const ran = (bin: string) => () => run(bin, ['--version'], { timeout: 10_000 }).then((r) => r.stdout.match(/\d+\.\d+\.\d+/)?.[0] ?? null)
+  const npmLatest = (pkg: string) => () => fetch(`https://registry.npmjs.org/${pkg}/latest`, { signal: AbortSignal.timeout(5000) })
+    .then((r) => r.json() as Promise<{ version?: string }>).then((j) => j.version ?? null)
+  // The installed package version names its folder.
+  const linked = (name: string) => () => { try { return readlinkSync(`/opt/devdash/${name}/current`).split('/').pop() ?? null } catch { return null } }
   // Claude Code comes from the Agent SDK package; agents restart onto a new one once no turn runs.
   const claude = agentInstall({
-    name: 'claude', bin: '/opt/devdash/claude/current/bin/claude', pkg: '@anthropic-ai/claude-agent-sdk',
+    name: 'claude', read: ran('/opt/devdash/claude/current/bin/claude'), installed: linked('claude'), newest: npmLatest('@anthropic-ai/claude-agent-sdk'),
     afterUpdate: () => agents.upgradeAll((members.all() as { username: string }[]).map((m) => m.username)),
   })
   // OpenCode starts a new process per session, so a new version applies to the next session by itself.
-  const opencode = agentInstall({ name: 'opencode', bin: '/opt/devdash/opencode/current/bin/opencode', pkg: '@opencode/cli' })
+  const opencode = agentInstall({ name: 'opencode', read: ran('/opt/devdash/opencode/current/bin/opencode'), installed: linked('opencode'), newest: npmLatest('@opencode/cli') })
+  // The team browser: neko's image, pinned to one version line in the root helper (e.g. chromium:3.1); an update downloads
+  // that line's newest release, which the browser runs from its next start.
+  let browserImage: string | null = null
+  const teamBrowser = agentInstall({
+    name: 'browser',
+    read: () => helper<{ image: string; version: string | null }>('browser-version').then((r) => { browserImage = r.image; return r.version }),
+    newest: async () => (browserImage ? newestInLine(browserImage) : null),
+  })
 
   return {
     release,
@@ -134,6 +164,7 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
           devdash: version, release: release(), claude: await claude.version(), node: process.versions.node,
           claudeSdk: await claude.state(),
           opencode: { version: await opencode.version(), ...(await opencode.state()) },
+          browser: await teamBrowser.state(),
         },
         backup: backup ? JSON.parse(backup) as { at: number; ok: boolean; snapshot: string; bytes: number; offsite: boolean; note: string } : null,
         agents: agentStates,
@@ -147,6 +178,8 @@ export function statusService({ db, agents, services, browser, runDir, dataDir, 
     updateClaude: () => claude.update(),
     /** Admins: install OpenCode, or update it to the latest version, for everyone. */
     updateOpencode: () => opencode.update(),
+    /** Admins: the team browser to the newest release of its version line. */
+    updateBrowser: () => teamBrowser.update(),
 
     async backupNow() {
       const r = await requestLine<{ ok: boolean; error?: string }>(join(runDir, 'helper.sock'), { cmd: 'backup-run' }, 30_000)

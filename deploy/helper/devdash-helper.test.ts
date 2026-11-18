@@ -116,6 +116,22 @@ test('opencode-update starts its own update unit without waiting; its status is 
   assert.deepEqual(s.planned, [])
 })
 
+test("browser-update downloads the pinned image line in the background; its status and version only read", () => {
+  const r = call({ cmd: 'browser-update' })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.planned, [
+    'systemctl reset-failed devdash-browser-update.service',
+    'systemd-run --unit devdash-browser-update --no-block --quiet /usr/bin/docker pull --quiet ghcr.io/m1k1o/neko/chromium:3.1',
+  ])
+  const s = call({ cmd: 'browser-update-status' }) as unknown as { ok: boolean; state: string; planned: string[] }
+  assert.equal(s.state, 'inactive')
+  assert.deepEqual(s.planned, [])
+  const v = call({ cmd: 'browser-version' }) as unknown as { ok: boolean; image: string; version: null; planned: string[] }
+  assert.deepEqual([v.ok, v.image, v.version, v.planned], [true, 'ghcr.io/m1k1o/neko/chromium:3.1', null, []])
+  // Stopping it also clears neko images an update left unused, and no others.
+  assert.ok(call({ cmd: 'browser-stop' }).planned.includes('docker image prune -f --filter label=net.m1k1o.neko.api-version'))
+})
+
 test('claude-update starts the update unit without waiting; its status is read-only', () => {
   const r = call({ cmd: 'claude-update' })
   assert.equal(r.ok, true)

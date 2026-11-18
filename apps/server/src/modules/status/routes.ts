@@ -17,6 +17,10 @@ export function statusRoutes(status: StatusService, deploys: ReturnType<typeof d
       await status.updateOpencode()
       return c.json({ ok: true })
     })
+    .post('/browser-update', mw.requireAdmin, async (c) => {
+      await status.updateBrowser()
+      return c.json({ ok: true })
+    })
     .post('/backup', mw.requireAdmin, async (c) => {
       await status.backupNow()
       return c.json({ ok: true })
