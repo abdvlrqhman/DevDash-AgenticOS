@@ -88,6 +88,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     resolveSession: db.prepare('update autopilot_inbox set resolved_at = ? where session_id = ? and resolved_at is null'),
     resolve: db.prepare('update autopilot_inbox set resolved_at = ? where id = ? and user_id = ? and resolved_at is null'),
     memory: db.prepare('select * from autopilot_sessions where session_id = ?'),
+    followed: db.prepare('select 1 from assistant_follows f join assistants a on a.user_id = f.user_id where f.session_id = ? and a.follow = 1'),
     remember: db.prepare(`insert into autopilot_sessions (session_id, goal, nudges, last_error, checked_activity) values (?1, ?2, ?3, ?4, ?5)
       on conflict (session_id) do update set goal = ?2, nudges = ?3, last_error = ?4, checked_activity = ?5`),
     rulesSent: db.prepare(`insert into autopilot_sessions (session_id, rules_sent) values (?1, ?2)
@@ -441,6 +442,9 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
    */
   async function attend(user: User, r: Row, s: SessionRow & { role: boolean }, c: Candidate, verdict: Verdict, done: Done[], room: { checked: boolean }) {
     if (verdict.act === false || busy.has(s.id)) return
+    // Hamasa follows it and answers it: autopilot only keeps deciding its approvals, when the member turned that on.
+    const followed = !!q.followed.get(s.id)
+    if (followed && !(s.status === 'waiting' && r.approvals)) return
     const nowS = Math.floor(now() / 1000)
     if (verdict.act === 'needs_you') {
       toInbox(user.id, { sessionId: s.id, kind: 'stuck', title: `Stuck: ${s.title}`, detail: verdict.reason })
@@ -461,6 +465,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     try {
       const pending = s.status === 'waiting' ? ((await claude.get(user, s.id)).pending as Pending[]) : []
       const prompt = pending.find((p) => p.toolName !== 'AskUserQuestion')
+      if (followed && !prompt) return
       const never = prompt && (r.approvals ? neverApprove(prompt) : 'approvals are yours (Autopilot handles approvals is off)')
       if (prompt && never) {
         q.remember.run(s.id, c.goal, c.memory.goal === c.goal ? c.memory.nudges : 0, null, c.lastActivity)
@@ -695,6 +700,21 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     entries,
     log,
     sweep,
+    /**
+     * Why autopilot can't send for the member right now (off or paused, the nightly cap, their Claude plan's usage), or
+     * null when it can: Hamasa's automatic replies to a session it follows go by the same limits.
+     */
+    async blocked(user: User): Promise<string | null> {
+      const a = active(user.id)
+      if (!a) return 'Autopilot is off (or paused) for them'
+      if ((q.sentSince.get(user.id, nightStart(now(), a.r.tz, a.r.ping_at)) as { n: number }).n >= a.r.night_cap) return `The nightly cap of ${a.r.night_cap} autopilot messages is reached`
+      return (await hasRoom(a.user, a.r)) ? null : 'Their Claude usage is near its limit; the rest is left for them'
+    },
+    /** Seconds a permission prompt is left to autopilot's approvals before anyone else looks, or null when that's off. */
+    approvalsWait(userId: number) {
+      const a = active(userId)
+      return a?.r.approvals ? a.r.prompt_wait_min * 60 + 10 : null
+    },
     promptNow,
     teamAsks: async (user: User) => {
       const r = row(user.id)

@@ -6,6 +6,7 @@ import type { AgentsService } from './modules/agents/service.ts'
 import type { ClaudeService } from './modules/claude/service.ts'
 import type { ServicesService } from './modules/services/service.ts'
 import { ADMIN_TERMINAL, type TerminalsService } from './modules/terminals/service.ts'
+import type { VoiceService } from './modules/voice/service.ts'
 
 const size = (ctx: WsContext) => {
   const n = (k: string, min: number, max: number, d: number) => {
@@ -23,7 +24,7 @@ function open(sock: WebSocket, agents: AgentsService, username: string, msg: obj
   }
 }
 
-export function registerSockets(ws: WsRouter, d: { hub: Hub; agents: AgentsService; terms: TerminalsService; claude: ClaudeService; services: ServicesService }) {
+export function registerSockets(ws: WsRouter, d: { hub: Hub; agents: AgentsService; terms: TerminalsService; claude: ClaudeService; services: ServicesService; voice: VoiceService }) {
   // Live updates for one browser tab.
   ws.route(/^\/api\/live$/, (sock, ctx) => d.hub.attach(sock, ctx.user))
 
@@ -54,4 +55,11 @@ export function registerSockets(ws: WsRouter, d: { hub: Hub; agents: AgentsServi
     },
     (ctx) => void d.claude.cliAccess(ctx.user, ctx.match[1]!),
   )
+
+  // A voice conversation with the member's personal agent: mic audio in, its spoken answers out. Whether they can
+  // talk now (on, keys, cap) is said on the socket, so the browser can show why not.
+  ws.route(/^\/api\/voice\/ws$/, (sock, ctx) => {
+    const session = ctx.url.searchParams.get('session')
+    void d.voice.talk(ctx.user, sock, ctx.url.searchParams.get('mode') === 'ptt' ? 'ptt' : 'hands-free', session && /^[0-9a-f-]{36}$/.test(session) ? session : null)
+  })
 }

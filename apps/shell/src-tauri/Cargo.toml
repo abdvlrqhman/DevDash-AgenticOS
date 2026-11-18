@@ -1,6 +1,6 @@
 [package]
 name = "devdash"
-version = "0.1.12"
+version = "0.1.13"
 description = "DevDash: your team's space on your own server"
 license = "PolyForm-Noncommercial-1.0.0"
 edition = "2021"

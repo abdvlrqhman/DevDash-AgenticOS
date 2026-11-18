@@ -19,6 +19,8 @@ import { HARNESS, HARNESSES, harnessOf, type Harness } from '../claude/harness'
 import { ModelMenu, SessionView, type Updater } from '../claude/SessionPage'
 import { AgentGlyph, assistantQuery } from './AssistantDock'
 import { AGENT_NAME, pageTag, panelCoversPage, setAssistantOpen, showingSession, toggleBig, useBig } from './store'
+import { openVoiceSettings, useVoice, VoiceBar, VoiceButton, voiceQuery } from '../voice/VoiceMode'
+import { FollowSetting, FollowStrip } from './Following'
 
 type State = Awaited<ReturnType<typeof assistantQuery.queryFn & {}>>
 type Schedule = State['schedules'][number]
@@ -77,6 +79,10 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
   const fresh = useMutation({ mutationFn: () => unwrap(api.api.assistant.new.$post()), onSuccess: set, onError: (e) => toast.error(e.message) })
   const settings = useSettings()
   const agent = st.agent!
+  const voiceSettings = useQuery(voiceQuery).data
+  const { client: voice, snap } = useVoice(() => pageTag(`${location.pathname}${location.search}`, pageHeading()))
+  const talking = snap.phase !== 'off'
+  const toVoiceSettings = () => { closeOnPhones(); openVoiceSettings(navigate, { path: `${location.pathname}${location.search}`, label: 'where you were' }) }
   const active = st.schedules.filter((s) => s.enabled).length
 
   const header = (
@@ -109,16 +115,19 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
       <WindowButtons />
     </header>
   )
+  const top = <>{header}<FollowStrip st={st} /></>
   if (!id) {
     return <>{header}<div className="p-4"><Button onClick={() => fresh.mutate()} disabled={fresh.isPending}>Start a conversation</Button></div></>
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SessionView key={id} id={id} embedded={{
-        header,
+        header: top,
         name: AGENT_NAME,
         empty: (send) => <Starters send={send} />,
         prefix: () => pageTag(`${location.pathname}${location.search}`, pageHeading()),
+        voiceTool: <VoiceButton v={voiceSettings} snap={snap} onStart={() => void voice.start()} onSetup={toVoiceSettings} />,
+        composer: talking ? <VoiceBar client={voice} snap={snap} onSettings={() => { voice.stop(); toVoiceSettings() }} /> : undefined,
       }} />
     </div>
   )
@@ -236,6 +245,8 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
         <ErrorAlert error={save.error} />
         {(!current || restarts) && <div><Button type="submit" disabled={save.isPending || setup.isPending}>{current ? 'Switch' : 'Start'}</Button></div>}
         {current && <Access st={st} />}
+        {current && <VoiceLink />}
+        {current && <FollowSetting st={st} />}
       </form>
     </>
   )
@@ -279,6 +290,19 @@ function Access({ st }: { st: State }) {
           <Switch checked={r.on} disabled={!r.connected || save.isPending} aria-label={r.label} onCheckedChange={(v) => save.mutate({ [r.key]: v })} />
         </div>
       ))}
+    </section>
+  )
+}
+/** Voice mode's settings live in Account → Voice (one place for Hamasa and every session): a way there. */
+function VoiceLink() {
+  const navigate = useNavigate()
+  return (
+    <section className="flex items-start gap-3 border-t pt-5">
+      <div className="min-w-0 flex-1">
+        <h2 className="text-sm font-semibold">Voice mode</h2>
+        <p className="mt-1 text-xs text-pretty text-muted-foreground">Talk to {AGENT_NAME} instead of typing. Keys, voice, languages and cost are in Account → Voice.</p>
+      </div>
+      <Button type="button" variant="outline" size="sm" onClick={() => { closeOnPhones(); openVoiceSettings(navigate, { path: `${location.pathname}${location.search}`, label: 'where you were' }) }}>Voice settings</Button>
     </section>
   )
 }

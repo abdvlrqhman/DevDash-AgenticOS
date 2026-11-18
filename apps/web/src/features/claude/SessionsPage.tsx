@@ -3,6 +3,7 @@ import { UserAvatar } from '@/components/app/user-avatar'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Archive, ArrowLeft, ChevronRight, Plus, Settings2 } from 'lucide-react'
+import { FollowGlyph } from '../assistant/Following'
 import { StatusLight } from '@/components/app/brand'
 import { Orb } from '@/components/app/orb'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -128,6 +129,7 @@ function SessionRow({ s, me, highlight, orb, onArchive }: { s: Session; me: numb
             <span className="sm:hidden"> · {HARNESS[harnessOf(s)].name}</span>
           </span>
         </span>
+        <FollowGlyph id={s.id} />
         {/* Which agent runs it, for every session alike: a team can use several. */}
         <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
           {[HARNESS[harnessOf(s)].label, s.mode === 'cli' && 'CLI', mine && s.audience !== 'private' && (s.audience === 'people' ? `Shared with ${s.sharedWith}` : 'Shared')].filter(Boolean).join(', ')}

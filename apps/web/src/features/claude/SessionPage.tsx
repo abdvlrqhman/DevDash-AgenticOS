@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { Archive, ArchiveRestore, Bot, Check, ChevronDown, Circle, Ellipsis, FileCode, Gauge, LoaderCircle, MessageSquare, Network, Pencil, Plus, Share2, SquareTerminal, Shield, ShieldOff, SlidersHorizontal, X, Zap } from 'lucide-react'
+import { Archive, ArchiveRestore, AudioLines, Bot, Check, ChevronDown, Circle, Ellipsis, FileCode, Gauge, LoaderCircle, MessageSquare, Network, Pencil, Plus, Share2, SquareTerminal, Shield, ShieldOff, SlidersHorizontal, X, Zap } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { Orb } from '@/components/app/orb'
@@ -48,6 +48,8 @@ import { useTopic } from '@/lib/live'
 import { usePageTitle } from '@/lib/title'
 import { cn } from '@/lib/utils'
 import { useMarkSeen } from '../assistant/AssistantDock'
+import { ReplyProse } from '../voice/ReplyProse'
+import { openVoiceSettings, useVoice, VoiceBar, VoiceButton, voiceQuery } from '../voice/VoiceMode'
 
 const light = (s: Session['status']) => (s === 'working' ? 'live' : s === 'waiting' ? 'waiting' : s === 'error' ? 'error' : 'idle')
 const termSize = () => ({ cols: Math.max(40, Math.min(220, Math.floor(innerWidth / 8.2))), rows: Math.max(15, Math.min(80, Math.floor(innerHeight / 19))) })
@@ -63,7 +65,13 @@ export function SessionPage() {
  * the agent's in the message box, `empty` shows before the first message (and can send one), and `prefix` goes before
  * each message the person sends (not before /commands).
  */
-export type Embedded = { header: ReactNode; name?: string; empty?: (send: (text: string) => void) => ReactNode; prefix?: () => string }
+export type Embedded = {
+  header: ReactNode; name?: string; empty?: (send: (text: string) => void) => ReactNode; prefix?: () => string
+  /** Takes the message box's place while it's set (voice mode). */
+  composer?: ReactNode
+  /** Voice mode's mic, beside Attach in the message box. */
+  voiceTool?: ReactNode
+}
 
 export function SessionView({ id, embedded }: { id: string; embedded?: Embedded }) {
   useMarkSeen(id)
@@ -85,6 +93,11 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
   const [loadingOlder, setLoadingOlder] = useState(false)
   const keepPlace = useRef<{ height: number; top: number } | null>(null)
   const [liveText] = useState(createLiveText)
+  // Voice mode in their own sessions (Hamasa's panel has its own): one conversation at a time, ended on leaving.
+  const { client: voice, snap: voiceSnap } = useVoice(() => '', id)
+  const voiceSettings = useQuery({ ...voiceQuery, enabled: !embedded }).data
+  const navigateTo = useNavigate()
+  const toVoiceSettings = () => openVoiceSettings(navigateTo, { path: `/sessions/${id}`, label: 'the session' })
   const [pending, setPending] = useState<PendingRequest[]>([])
   const [settings, setSettings] = useState(false)
   const [usage, setUsage] = useState(false)
@@ -344,10 +357,15 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
           </div>
           <div className={cn('bg-background px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]', embedded ? 'md:pb-3' : 'md:px-6 md:pb-4')}>
             <div className="mx-auto max-w-4xl">
-              <Composer sessionId={id} profile={s.profile} harness={harnessOf(s)} name={embedded?.name} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
-                disabledReason={canSend ? undefined : <WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} />}
-                footer={<SessionChips s={s} isOwner={isOwner} canSend={canSend} working={working} onUpdate={(v) => update.mutate(v)}
-                  onCompact={() => void send('/compact', []).catch((err: Error) => toast.error(err.message))} />} />
+              {embedded?.composer ?? (!embedded && canSend && voiceSnap.phase !== 'off' ? <VoiceBar client={voice} snap={voiceSnap} onSettings={() => { voice.stop(); toVoiceSettings() }} /> : <Composer sessionId={id} profile={s.profile} harness={harnessOf(s)} name={embedded?.name} working={working || s.status === 'waiting'} onSend={send} onStop={() => interrupt.mutate()}
+                // Voice mode where they can send (their own keys and voice; a voice message is them typing). Watching only: disabled, saying why.
+                tools={embedded ? embedded.voiceTool : <VoiceButton v={voiceSettings} snap={voiceSnap} onStart={() => void voice.start()} onSetup={toVoiceSettings} />}
+                disabledReason={canSend ? undefined : <div className="flex items-center gap-1">
+                  {!embedded && <VoiceButton v={voiceSettings} snap={voiceSnap} onStart={() => {}} onSetup={toVoiceSettings} cannot="You can only watch this session, so you can't talk to it." />}
+                  <div className="min-w-0 flex-1"><WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} /></div>
+                </div>}
+                footer={<><SessionChips s={s} isOwner={isOwner} canSend={canSend} working={working} onUpdate={(v) => update.mutate(v)}
+                  onCompact={() => void send('/compact', []).catch((err: Error) => toast.error(err.message))} /></>} />)}
             </div>
           </div>
         </div>
@@ -395,7 +413,7 @@ const LiveText = memo(function LiveText({ store, working, since, onGrow, agent =
   const grow = useRef(onGrow)
   grow.current = onGrow
   useLayoutEffect(() => grow.current(), [text])
-  if (text) return <Prose text={text} />
+  if (text) return <ReplyProse text={text} />
   return working ? (
     <p className="flex items-center gap-2.5 py-1 text-sm text-muted-foreground">
       <Orb state="working" size={20} />{agent} is working… <Elapsed since={since} />
@@ -620,6 +638,7 @@ function SessionMenu({ s, isOwner, canSend, access, onUpdate, onShare, onRename,
             <DropdownMenuItem onSelect={onRename}><Pencil />Rename</DropdownMenuItem>
             <DropdownMenuItem onSelect={onUsage}><Gauge />Usage</DropdownMenuItem>
             <DropdownMenuItem onSelect={onTailnet}><Network />Reach my tailnet{s.reachTailnet ? ' · on' : ''}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openVoiceSettings(navigate, { path: `/sessions/${s.id}`, label: 'the session' })}><AudioLines />Voice mode settings</DropdownMenuItem>
             <DropdownMenuItem onSelect={onShare}>
               <Share2 />Share…<span className="ml-auto truncate text-xs text-muted-foreground">{sharingLabel(s) || 'only you'}</span>
             </DropdownMenuItem>

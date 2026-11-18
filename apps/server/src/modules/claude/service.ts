@@ -324,10 +324,22 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   })
   const turnEnds = new Set<(t: TurnEnd) => void>()
   const labellers = new Set<(projectId: number) => Map<string, SessionLabel>>()
+  // Features that follow sessions' streams as they arrive: voice mode speaks Hamasa's answers.
+  const messages = new Set<(id: string, msg: unknown) => void>()
   // What a feature adds before the owner's own messages (autopilot's rules): never before a teammate's.
   const preambles = new Set<Preamble>()
   // Features told the moment a session asks something (a question, a permission, a plan): autopilot.
   const prompts = new Set<(s: SessionRow, request: { requestId: string; toolName: string; ownerOnly: boolean }) => void>()
+  // Features that report a session to its owner themselves (Hamasa following it): its own pings to the owner don't go out.
+  const reporters = new Set<(s: SessionRow) => boolean>()
+  const reported = (s: SessionRow) => [...reporters].some((fn) => {
+    try {
+      return fn(s)
+    } catch (err) {
+      console.error('session reporter:', err)
+      return false
+    }
+  })
   // Per session, from its first message until it goes quiet again: whether every message in that stretch was typed by
   // its owner (true), or one came from a schedule, autopilot, another agent or a teammate (false). Not kept over a
   // restart: unknown counts as not typed. Some tools only run on the owner's own word (directly).
@@ -366,6 +378,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     if (!s.listed && s.origin_kind !== 'assistant') return 'Not sent: this session reports through the feature that started it.'
     // A personal agent's schedule runs out of their sight: it hands what needs them to their chat (hand_off) instead.
     if (s.origin_kind === 'assistant' && s.origin_role === 'schedule') return "Not sent: a schedule's run doesn't ping them; hand_off puts it in their chat, and that notifies them."
+    if (reported(s)) return 'Not sent: Hamasa is following this session and reports it to them. Just finish your answer.'
     const a = c.args ?? {}
     const message = typeof a.message === 'string' ? a.message.replace(/\s+/g, ' ').trim() : ''
     if (!message) throw new AppError(400, 'bad_args', 'Give the message: one line, leading with what they should know or do.')
@@ -398,7 +411,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       lastError.set(s.id, Date.now())
     }
     const n = { title, body, url: `/sessions/${s.id}`, tag: `session:${s.id}` }
-    void notify(s.owner_id, kind, n).catch((err) => console.error('notify:', err))
+    if (!reported(s)) void notify(s.owner_id, kind, n).catch((err) => console.error('notify:', err))
     // A question, plan or permission needs whoever can answer: also ping the teammates the owner let in to send,
     // so it isn't only the owner who finds out Claude is blocked.
     if (kind === 'needs_you') {
@@ -530,6 +543,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         const top = ev.msg as { uuid?: string; parent_tool_use_id?: string | null; message?: { model?: string } }
         if ((m.type === 'assistant' || m.type === 'user') && top.uuid && !top.parent_tool_use_id) lastUuid.set(s.id, top.uuid)
         if (m.type === 'assistant' && !top.parent_tool_use_id && top.message?.model) lastModel.set(s.id, top.message.model)
+        for (const fn of messages) {
+          try { fn(s.id, ev.msg) } catch (err) { console.error('message listener:', err) }
+        }
         if (m.type === 'result') {
           const cost = turnCost(s.id, ev.msg as ResultMsg)
           saveTurn(s.id, ev.msg as ResultMsg, cost)
@@ -1166,6 +1182,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       return () => void preambles.delete(fn)
     },
 
+    /** `fn` says when a feature reports a session to its owner itself: the session's own pings to them don't go out then. */
+    addReporter(fn: (s: SessionRow) => boolean) {
+      reporters.add(fn)
+      return () => void reporters.delete(fn)
+    },
+
     /** Tells `fn` the moment a session asks its people something. Returns a function that stops it. */
     onPrompt(fn: (s: SessionRow, request: { requestId: string; toolName: string; ownerOnly: boolean }) => void) {
       prompts.add(fn)
@@ -1174,6 +1196,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
     /** A member's sessions that aren't archived, for features that watch them, each saying whether it's a team role's. */
     ownedActive: (username: string) => repo.ownedActive(username).map((s) => ({ ...s, role: !!roleLabel(s) })),
+
+    /** Tells `fn` every message of every session's stream as it arrives (text deltas included). Returns a function that stops it. */
+    onMessage(fn: (id: string, msg: unknown) => void) {
+      messages.add(fn)
+      return () => void messages.delete(fn)
+    },
 
     /** Tells `fn` whenever a Claude turn ends in any session. Returns a function that stops it. */
     onTurnEnd(fn: (t: TurnEnd) => void) {
@@ -1247,7 +1275,18 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
      * For the CLI view. The terminal runs as the owner, with nothing between keystrokes and their access, so only the owner
      * and people with full access type in it; everyone else watches.
      */
-    cliAccess(user: User, id: string) {
+    /**
+     * Voice mode in a session: wherever they may send messages (a spoken message is them typing, with their own voice
+     * keys), in Chat mode. Not where they only watch, and never someone else's personal agent.
+     */
+    voiceAccess(user: User, id: string) {
+      const s = find(user, id)
+      if (!canSend(user, s) || (s.origin_kind === 'assistant' && s.owner_id !== user.id)) throw new AppError(403, 'forbidden', 'You can only watch this session, so you can\'t talk to it.')
+      if (s.mode === 'cli') throw new AppError(409, 'cli_mode', 'This session is open in the CLI. Switch to Chat to talk to it.')
+      return { assistant: s.origin_kind === 'assistant' }
+    },
+
+        cliAccess(user: User, id: string) {
       const s = find(user, id)
       if (s.mode !== 'cli') throw new AppError(409, 'not_cli', 'This session is not open in the CLI.')
       return { owner: s.owner_username, readonly: !['owner', 'full'].includes(accessOf(user, s)) }

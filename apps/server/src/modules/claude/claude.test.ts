@@ -534,3 +534,16 @@ test('the advisor is off unless the owner picks one; a pick applies live and on 
   db.prepare("update claude_sessions set harness = 'opencode' where id = 's1'").run()
   await assert.rejects(claude.update(ann, 's1', { advisorModel: 'opus' }), /Only Claude Code/)
 })
+
+test('voice mode in a session: wherever they may send, never where they only watch, never in someone else\'s Hamasa', () => {
+  const { claude, db, ann, bob, cat } = setup()
+  // s1: Ann's, shared to watch. s2: Ann's, shared with send. s3: Ann's personal agent (Hamasa).
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, shared, shared_can_send, started) values ('s2', 1, 'Shop', '/home/ann', 1, 1, 1)").run()
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, shared, started, origin_kind) values ('s3', 1, 'Hamasa', '/home/ann', 1, 1, 'assistant')").run()
+  assert.deepEqual(claude.voiceAccess(ann, 's1'), { assistant: false })
+  assert.throws(() => claude.voiceAccess(bob, 's1'), /only watch this session/)
+  assert.deepEqual(claude.voiceAccess(bob, 's2'), { assistant: false }) // a teammate with write access, with their own keys
+  assert.deepEqual(claude.voiceAccess(ann, 's3'), { assistant: true })
+  assert.throws(() => claude.voiceAccess(bob, 's3'), /only watch|not_found|does not exist/)
+  void cat
+})

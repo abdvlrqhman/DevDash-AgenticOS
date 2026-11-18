@@ -9,5 +9,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<!-- Voice mode: without it the web view offers pages no microphone at all (navigator.mediaDevices is undefined). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>DevDash uses the microphone for voice mode, when you tap the mic to talk to Hamasa or a session.</string>
 </dict>
 </plist>

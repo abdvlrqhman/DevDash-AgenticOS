@@ -9,6 +9,8 @@ import { CopyButton } from './CopyButton'
 import { Prose } from './Prose'
 import { ToolSteps, type StepBlock } from './ToolSteps'
 import type { Block, EventTone } from './transcript'
+import { plainReply } from '../voice/reply'
+import { ReplyProse } from '../voice/ReplyProse'
 
 export { Prose }
 
@@ -33,7 +35,7 @@ function replies(blocks: Block[]) {
   let said: string[] = []
   for (const b of blocks) {
     if (b.kind === 'user') said = []
-    else if (b.kind === 'text') said.push(b.text.trim())
+    else if (b.kind === 'text') said.push(plainReply(b.text).trim())
     else if (b.kind === 'result') {
       if (said.length) out.set(b.key, said.join('\n\n'))
       said = []
@@ -92,7 +94,7 @@ export const Blocks = memo(function Blocks({ blocks, senders, nested, live = tru
             )
           }
           case 'text':
-            return <Prose key={b.key} text={b.text} cwd={b.cwd} />
+            return <ReplyProse key={b.key} text={b.text} cwd={b.cwd} />
           case 'thinking':
             return <Thinking key={b.key} text={b.text} />
           case 'tool':
