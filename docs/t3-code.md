@@ -44,6 +44,7 @@ T3 0.1.9 requires the `orchestration:read`, `orchestration:operate`, `settings:w
 - **Full access only**, selected explicitly when creating a session. DevDash cannot enforce its approval decisions through this bridge, so Ask and Plan are rejected and permissions cannot be changed later. T3 questions still require a response in the linked T3 conversation.
 - The exact folder DevDash selected is registered as a T3 project when needed, without cloning or changing branches. File operations run as that member.
 - New sessions may use T3’s default model. Switching an existing conversation requires an explicit model choice; model and effort are validated and applied together.
+- Choose a model in **New session** or **Agent setup** to see its **Thinking level** choices. DevDash reads these from T3, including Codex reasoning effort, OpenCode variants and Antigravity thinking levels. **Default** lets the provider choose. In an idle Chat, change the level in session settings or type `/effort` to see the available choices.
 - Owners and teammates given full access may send. Watch-only sharing works. Guests and restricted roles cannot execute T3 sessions.
 - A DevDash restart does not queue a second “Continue” prompt into an active T3 conversation. Reopening the conversation resumes its existing history.
 

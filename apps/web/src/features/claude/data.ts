@@ -1,15 +1,16 @@
-import { queryOptions, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { InferResponseType } from 'hono/client'
 import { api, unwrap } from '../../lib/api'
 import { useTopic } from '../../lib/live'
 import { URGENCY } from './places'
 import type { Harness } from './harness'
+import type { ModelInfo } from './models'
 
 export { byFolder, folderName, sessionPlace, shortPath } from './places'
 
 export type Session = InferResponseType<typeof api.api.claude.sessions.$get>['sessions'][number]
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto'
-export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 /** `ownerOnly`: a teammate (`askedBy`) asked for something that would use the owner's access: only the owner can answer. */
 export type PendingRequest = {
   requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[]
@@ -44,11 +45,30 @@ export const profilesQuery = queryOptions({
   staleTime: 30_000,
 })
 /** Slash commands and models: a Claude profile's, or another agent's (OpenCode lists every provider's models). */
-export const commandsQuery = (profile: string, harness: Harness = 'claude') => queryOptions({
-  queryKey: ['claude', 'commands', harness, profile],
-  queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile, harness } })),
+export const commandsQuery = (profile: string, harness: Harness = 'claude', model?: string) => queryOptions({
+  queryKey: ['claude', 'commands', harness, profile, ...(model ? [model] : [])],
+  queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile, harness, model } })),
   staleTime: 60_000,
 })
+
+/** T3's short catalog can omit a saved or typed model. Only look it up once the ID settles. */
+export function useOfferedModels(profile: string, harness: Harness, model: string | null, enabled: boolean) {
+  const catalog = useQuery({ ...commandsQuery(profile, harness), enabled })
+  const models = catalog.data?.models as ModelInfo[] | undefined
+  const id = model?.trim()
+  const missing = enabled && harness === 't3code' && id && id.length <= 160 && /^[^/]+\/.+/.test(id)
+    && models && !models.some((m) => m.value === id) ? id : undefined
+  const [settled, setSettled] = useState<string>()
+  useEffect(() => {
+    if (!missing) return
+    const timer = setTimeout(() => setSettled(missing), 450)
+    return () => clearTimeout(timer)
+  }, [missing])
+  const include = missing === settled ? missing : undefined
+  const extra = useQuery({ ...commandsQuery(profile, harness, include), enabled: !!include })
+  const row = include && (extra.data?.models as ModelInfo[] | undefined)?.find((m) => m.value === include)
+  return row && models ? [...models, row] : models
+}
 
 /** Keeps the cached session list in step with live status changes. */
 export function useLiveSessions() {

@@ -4,8 +4,9 @@ import { realpathSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { T3Client, T3RequestError } from './t3-client.ts'
-import { connectedCapabilities, selection, modelId, type Capabilities } from './t3code.ts'
+import { connectedCapabilities, effortOption, selection, modelId, type Capabilities } from './t3code.ts'
 
+type Selection = { model: string; instanceId: string; options?: { id: string; value: string | boolean }[] }
 type Item = { itemId: string; position: number; runId: string | null; type: string; createdBy: string | null; text: string | null; title: string | null; status: string; textTruncated?: boolean; nextTextOffset?: number | null; [key: string]: unknown }
 type Read = { thread: { threadId: string; projectId: string; worktreePath?: string | null; model: string; providerInstanceId: string; status: string; title: string; activeRunId?: string | null; latestRunId?: string | null; pendingRequestCount?: number; runtimeMode: string; interactionMode: string; link?: string | null }; items: Item[]; hasMore: boolean; nextPosition: number | null; recentRuns: { runId: string; status: string; [key: string]: unknown }[] }
 const terminal = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'rolled_back'])
@@ -31,11 +32,36 @@ const busyThread = (data: Read) => !!activeRun(data) || ['preparing', 'queued', 
 const limit = (name: string, fallback: number, min: number, max: number) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= min ? Math.min(n, max) : fallback }
 const turnLimitMs = limit('DEVDASH_T3_TURN_TIMEOUT_MS', 30 * 60_000, 100, 30 * 60_000)
 function currentModel() { return caps.providers.find((p) => p.providerInstanceId === thread?.providerInstanceId)?.models.find((m) => m.id === thread?.model) }
-function effortOption() { return currentModel()?.options?.find((o) => /reasoning.*effort|^effort$|thinkingLevel/i.test(o.id)) }
+/** A project's default or a resumed model may be outside T3's short list. Search its exact ID when necessary. */
+async function findModel(picked: Selection) {
+  const provider = caps.providers.find((p) => p.providerInstanceId === picked.instanceId)
+  const listed = provider?.models.find((m) => m.id === picked.model)
+  if (listed || !provider?.omittedModels) return listed
+  const result = await connectedCapabilities(client, picked.model)
+  const match = result.providers.find((p) => p.providerInstanceId === picked.instanceId)?.models.find((m) => m.id === picked.model)
+  if (match) provider.models.push(match)
+  return match
+}
+// With no modelSelection this MCP operation is read-only and returns options that t3_thread_read omits.
+async function readSelection() {
+  const result = await client.call<{ modelSelection: Selection }>('t3_thread_configure', { threadId: thread!.threadId })
+  return result.modelSelection
+}
+async function withEffort(picked: Selection, level: string | null): Promise<Selection> {
+  const model = await findModel(picked)
+  if (!model) throw new Error('That model is not available from a connected T3 Code provider.')
+  const opt = effortOption(model)
+  const options = (picked.options ?? []).filter((o) => o.id !== opt?.id)
+  if (level && level !== 'default') {
+    if (!opt?.levels.includes(level)) throw new Error('That effort level is not available for this T3 Code model.')
+    options.push({ id: opt.id, value: level })
+  }
+  return { instanceId: picked.instanceId, model: picked.model, ...(options.length ? { options } : {}) }
+}
 function configOptions() {
   return [
     { id: 'model', category: 'model', currentValue: thread ? modelId(thread.providerInstanceId, thread.model) : '', options: caps.providers.flatMap((p) => p.models.map((m) => ({ value: modelId(p.providerInstanceId, m.id), name: `${p.displayName ?? p.providerInstanceId}: ${m.label ?? m.id}` }))) },
-    { id: 'effort', category: 'thought_level', currentValue: effort, options: [{ value: 'default', name: 'Default' }, ...(effortOption()?.values ?? []).filter((v): v is string => typeof v === 'string').map((value) => ({ value, name: value }))] },
+    { id: 'effort', category: 'thought_level', currentValue: effort, options: [{ value: 'default', name: 'Default' }, ...(effortOption(currentModel())?.levels ?? []).map((value) => ({ value, name: value }))] },
   ]
 }
 function checkDeadline() {
@@ -114,20 +140,14 @@ async function checkWorkspace(cwd: string) {
 /** Validate the whole selection before T3 changes anything; committing model then effort can leave the two apps apart. */
 async function setSelection(model: string | null, requestedEffort: string | null) {
   if (running || unresolvedSend || activePrompt) throw new Error('Wait for T3 Code to finish before changing its model or effort.')
-  if (busyThread(await readThread())) throw new Error('T3 Code is already running this conversation. Wait for it to finish before changing its model or effort.')
   caps = await connectedCapabilities(client)
-  const picked = model ? selection(model) : selection(modelId(thread!.providerInstanceId, thread!.model))
-  const target = caps.providers.find((p) => p.providerInstanceId === picked.instanceId)?.models.find((m) => m.id === picked.model)
-  if (!target) throw new Error('That model is not available from this T3 Code connection.')
-  const opt = target.options?.find((o) => /reasoning.*effort|^effort$|thinkingLevel/i.test(o.id))
-  const nextEffort = requestedEffort ?? 'default'
-  if (nextEffort !== 'default' && !opt?.values.includes(nextEffort)) throw new Error('That effort level is not available for this T3 Code model.')
-  const value = nextEffort === 'default' ? opt?.default : nextEffort
-  await client.call('t3_thread_configure', {
-    threadId: thread!.threadId,
-    modelSelection: { ...picked, ...(opt && value != null ? { options: [{ id: opt.id, value }] } : {}) },
-  })
-  effort = nextEffort
+  const current = await readSelection()
+  // Keep unrelated options such as service tier when only the reasoning level changes.
+  const picked = !model || model === modelId(current.instanceId, current.model) ? current : selection(model)
+  const modelSelection = await withEffort(picked, requestedEffort)
+  if (busyThread(await readThread())) throw new Error('T3 Code is already running this conversation. Wait for it to finish before changing its model or effort.')
+  await client.call('t3_thread_configure', { threadId: thread!.threadId, modelSelection })
+  effort = requestedEffort ?? 'default'
   thread = { ...thread!, providerInstanceId: picked.instanceId, model: picked.model }
   return { configOptions: configOptions() }
 }
@@ -157,8 +177,8 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
     if (mode !== 'bypassPermissions') throw new Error('This T3 Code connection supports only explicitly selected Bypass sessions. DevDash approval modes are unavailable.')
     if (caps.runtimeMode !== 'full-access') throw new Error('The member T3 Code connection does not allow Bypass sessions.')
     const wanted = process.env.DEVDASH_T3_MODEL
-    const initial = wanted ? selection(wanted) : undefined
-    if (initial && !caps.providers.some((p) => p.providerInstanceId === initial.instanceId && p.models.some((m) => m.id === initial.model))) throw new Error('That model is not available from a connected T3 Code provider.')
+    const wantedEffort = process.env.DEVDASH_T3_EFFORT || null
+    const initial = wanted ? await withEffort(selection(wanted), wantedEffort) : undefined
     if (!caps.providers.some((p) => p.models.length)) throw new Error('No connected T3 Code provider has available models.')
     const cwd = realpathSync(String(p.cwd))
     // Bind every conversation to exactly the folder DevDash selected, including existing worktrees.
@@ -178,6 +198,8 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
     thread = (await readThread()).thread
     const desired = desiredModes()
     if (thread.runtimeMode !== desired.runtimeMode || thread.interactionMode !== desired.interactionMode) throw new Error('The member T3 Code instance did not open the requested Bypass conversation. Reconnect that member instance.')
+    if (initial) effort = wantedEffort ?? 'default'
+    else await findModel({ instanceId: thread.providerInstanceId, model: thread.model })
     return { sessionId: thread.threadId, configOptions: configOptions() }
   },
   'session/load': async (p) => {
@@ -187,6 +209,11 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
     await checkWorkspace(String(p.cwd))
     const desired = desiredModes()
     if (mode !== 'bypassPermissions' || thread.runtimeMode !== desired.runtimeMode || thread.interactionMode !== desired.interactionMode) throw new Error('This T3 Code connection supports only explicitly selected Bypass sessions. Start a new session to change permissions.')
+    const current = await readSelection()
+    thread = { ...thread, providerInstanceId: current.instanceId, model: current.model }
+    const opt = effortOption(await findModel(current))
+    const savedLevel = current.options?.find((o) => o.id === opt?.id)?.value
+    effort = typeof savedLevel === 'string' ? savedLevel : 'default'
     await transcribe(data.items, true)
     return { configOptions: configOptions() }
   },

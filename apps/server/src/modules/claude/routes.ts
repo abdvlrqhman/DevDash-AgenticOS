@@ -15,11 +15,13 @@ const Files = z.array(z.object({
   mediaType: z.string().max(120),
   data: z.string().max(14 * MB), // base64 of up to 10 MB
 })).max(6).default([])
-const Model = z.string().max(160).nullable()
+const ModelId = z.string().max(160)
+const Model = ModelId.nullable()
 const Harness = z.enum(HARNESSES)
-const Effort = z.enum(EFFORTS).nullable()
-/** In a session: Claude Code's levels, or another agent's model's own (OpenCode's variants: "minimal", "high"…). */
-const SessionEffort = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,39}$/i).nullable()
+const Effort = z.string().min(1).max(160).nullable()
+const initialEffortAllowed = (input: { harness: string; effort: string | null }) =>
+  input.harness === 't3code' || input.effort === null || (EFFORTS as readonly string[]).includes(input.effort)
+const unknownEffort = { message: 'Unknown effort level.', path: ['effort'] }
 const Mode = z.enum(PERMISSION_MODES)
 const Size = z.number().int().min(10).max(500)
 
@@ -40,7 +42,7 @@ const CreateInput = z.object({
   // Left out: the project's default for new sessions.
   shared: z.boolean().optional(),
   sharedCanSend: z.boolean().optional(),
-})
+}).refine(initialEffortAllowed, unknownEffort)
 // Big files are uploaded beforehand in pieces (POST /sessions/:id/uploads) and named here.
 const UploadId = z.string().regex(/^[a-f0-9]{16,64}$/)
 const Uploads = z.array(z.object({ upload: UploadId, name: z.string().min(1).max(255), size: z.number().int().min(0) })).max(6).default([])
@@ -60,7 +62,7 @@ const PatchInput = z.object({
   sharedCanSend: z.boolean().optional(),
   archived: z.boolean().optional(),
   model: Model.optional(),
-  effort: SessionEffort.optional(),
+  effort: Effort.optional(),
   permissionMode: Mode.optional(),
   fastMode: z.boolean().optional(),
   advisorModel: z.enum(ADVISORS).nullable().optional(),
@@ -80,7 +82,7 @@ const SharingInput = z.object({
 const ModeInput = z.object({ mode: z.enum(['chat', 'cli']), cols: Size.default(100), rows: z.number().int().min(4).max(200).default(30) })
 const DefaultsInput = z.object({
   harness: Harness.default('claude'), profile: z.string().max(21), model: Model, effort: Effort, permission_mode: Mode, open_in: z.enum(['chat', 'cli']),
-})
+}).refine(initialEffortAllowed, unknownEffort)
 
 export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMiddleware>) {
   return new Hono<AuthEnv>()
@@ -143,8 +145,10 @@ export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMi
       const { mode, cols, rows } = c.req.valid('json')
       return c.json({ session: await claude.switchMode(c.get('user'), c.req.param('id'), mode, cols, rows) })
     })
-    .get('/commands', query(z.object({ profile: z.string().max(21).default('default'), harness: Harness.default('claude') })), async (c) =>
-      c.json(await claude.commands(c.get('user'), c.req.valid('query').profile, c.req.valid('query').harness)))
+    .get('/commands', query(z.object({ profile: z.string().max(21).default('default'), harness: Harness.default('claude'), model: ModelId.optional() })), async (c) => {
+      const { profile, harness, model } = c.req.valid('query')
+      return c.json(await claude.commands(c.get('user'), profile, harness, model))
+    })
     .get('/profiles', query(z.object({ refresh: z.enum(['true', 'false']).optional() })), async (c) =>
       c.json(await claude.profiles(c.get('user'), c.req.valid('query').refresh === 'true')))
     .get('/usage/:profile', async (c) => c.json({ usage: await claude.usage(c.get('user'), c.req.param('profile')) }))
@@ -161,5 +165,5 @@ export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMi
     .put('/profiles/:name/memory', json(z.object({ enabled: z.boolean() })), async (c) => {
       return c.json(await claude.setMemory(c.get('user'), c.req.param('name'), c.req.valid('json').enabled))
     })
-    .put('/defaults', json(DefaultsInput), (c) => c.json({ defaults: claude.saveDefaults(c.get('user'), c.req.valid('json')) }))
+    .put('/defaults', json(DefaultsInput), async (c) => c.json({ defaults: await claude.saveDefaults(c.get('user'), c.req.valid('json')) }))
 }

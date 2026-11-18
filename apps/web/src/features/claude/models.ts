@@ -70,8 +70,13 @@ export function modelLabel(models: ModelInfo[], value: string | null | undefined
   return models.find((m) => m.value === value)?.displayName ?? value!
 }
 
-/** The effort levels the chosen model supports; every level when Claude Code doesn't say. */
-export function effortLevels(models: ModelInfo[], value: string | null | undefined, all: readonly string[]) {
-  const m = isDefaultModel(value) ? groupModels(models).def : models.find((x) => x.value === value)
-  return m?.supportedEffortLevels?.length ? all.filter((e) => m.supportedEffortLevels!.includes(e)) : [...all]
+/** T3 reports the levels for each model. Claude also has standard levels to offer when its catalog omits them. */
+export function effortLevels(models: ModelInfo[], value: string | null | undefined, standard?: readonly string[]) {
+  const id = value?.trim()
+  const m = models.find((x) => isDefaultModel(id) ? isDefaultModel(x.value) : x.value === id)
+  const levels = m?.supportedEffortLevels
+  if (!standard) return levels ?? []
+  return levels?.length ? standard.filter((e) => levels.includes(e)) : [...standard]
 }
+
+export const effortLabel = (value: string) => value === 'xhigh' ? 'Extra high' : value.charAt(0).toUpperCase() + value.slice(1)

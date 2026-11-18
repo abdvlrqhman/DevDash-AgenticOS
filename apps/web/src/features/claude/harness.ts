@@ -48,7 +48,7 @@ export const HARNESS: Record<Harness, Info> = {
     planLimits: false, effort: true, fast: false, advisor: false, remote: false,
     modes: [...AGENT_CAPABILITIES.t3code.sessionModes],
     modelHint: 'A provider/model ID offered by your T3 Code connection.',
-    defaultModel: 'The default model configured in T3 Code.',
+    defaultModel: 'Uses the model configured in T3 Code. Choose a specific model to set its thinking level before the session starts.',
     cli: null,
   },
 }

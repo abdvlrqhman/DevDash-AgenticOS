@@ -1,14 +1,15 @@
 import { Fragment, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { NativeSelect } from '@/components/app/native-select'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { FieldDescription } from '@/components/ui/field'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { HARNESS, type Harness } from './harness'
-import { groupModels, isDefaultModel, modelLabel, type ModelInfo } from './models'
+import { effortLabel, groupModels, isDefaultModel, modelLabel, type ModelInfo } from './models'
 
 /**
  * The model choices inside a dropdown: the agent's own default (naming the model it is), then each family; a family
@@ -95,5 +96,21 @@ export function ModelField({ id, harness, models, value, onChange, onCommit, cus
         {custom ? HARNESS[harness].modelHint : isDefaultModel(value) ? HARNESS[harness].defaultModel : picked?.description ? `${picked.description}${follows ? '. Always its newest version.' : ''}` : note}
       </FieldDescription>
     </>
+  )
+}
+
+export function ThinkingLevelField({ id, levels, value, onChange }: {
+  id: string; levels: string[]; value: string | null; onChange: (value: string | null) => void
+}) {
+  if (!levels.length && !value) return null
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>Thinking level</FieldLabel>
+      <NativeSelect id={id} value={value ?? ''} onChange={(e) => onChange(e.target.value || null)}>
+        <option value="">Default</option>
+        {value && !levels.includes(value) && <option value={value} disabled>{effortLabel(value)} (saved)</option>}
+        {levels.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
+      </NativeSelect>
+    </Field>
   )
 }
