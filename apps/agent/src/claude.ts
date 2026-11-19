@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { CLAUDE_BIN, loadSdk, type PermissionMode, type PermissionResult, type Query, type SDKUserMessage } from './sdk.ts'
 import { hasSession, listSessions, tmux } from './tmux.ts'
-import { getPorts } from './tailscale.ts'
+import { getPorts, resume as resumeTailnet } from './tailscale.ts'
 import { startForwarder, writeSshHelper } from './tailnet-session.ts'
 import * as storage from './storage.ts'
 import { guestMay } from './guest.ts'
@@ -108,11 +108,14 @@ type TailnetSetup = { env: Record<string, string>; mcpServers?: Record<string, u
 /**
  * When "Reach my tailnet" is on: build the env that routes the session's shell tools through the owner's SOCKS/HTTP
  * proxy, write the ssh ProxyCommand helper onto its PATH, and — for each tailnet MCP — start a local forwarder and
- * point the MCP at it. Never sets HTTPS_PROXY: Claude's own Anthropic API calls (HTTPS) must stay direct, or the
- * SDK's traffic would tunnel through the proxy and break. Returns null when routing is off.
+ * point the MCP at it. Claude's own Anthropic API calls stay direct (no HTTPS_PROXY, and NO_PROXY for its hosts), or
+ * they'd tunnel through the proxy and fail whenever it's down. Returns null when routing is off.
  */
+const noProxy = [process.env.NO_PROXY ?? process.env.no_proxy, 'localhost', '127.0.0.1', '.anthropic.com', 'anthropic.com', '.claude.ai', 'claude.ai', '.claude.com', 'claude.com']
+  .filter(Boolean).join(',')
 export async function setupTailnet(l: Launch): Promise<TailnetSetup | null> {
   if (!l.reachTailnet) { teardownTailnet(l.id); return null }
+  await resumeTailnet().catch((err: Error) => console.error(`[${l.id.slice(0, 8)}] tailnet resume:`, err.message))
   const { socksPort, httpPort } = await getPorts()
   const binDir = join(homedir(), '.cache', 'devdash', 'tailnet', l.id)
   await writeSshHelper(binDir, socksPort)
@@ -122,6 +125,9 @@ export async function setupTailnet(l: Launch): Promise<TailnetSetup | null> {
     all_proxy: `socks5://127.0.0.1:${socksPort}`,
     HTTP_PROXY: `http://127.0.0.1:${httpPort}`,
     http_proxy: `http://127.0.0.1:${httpPort}`,
+    // Claude Code sends its HTTPS calls through HTTP_PROXY when there's no HTTPS_PROXY (tested): its own hosts stay direct.
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
     DEVDASH_TAILNET_SOCKS: String(socksPort),
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
   }

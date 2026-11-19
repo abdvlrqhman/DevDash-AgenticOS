@@ -314,3 +314,5 @@ startJanitor(async () => ((await rpc('worktrees.inUse', {})) as { paths?: string
 startTeamFiles()
 // My skills reach every Claude profile (skills.ts): links made or fixed at start, and on every change.
 void skills.syncProfiles().catch((err: Error) => console.error('skills:', err.message))
+// The member's tailnet node comes back after the server restarts (tailscale.ts resume), if they're connected.
+void tailscale.resume().catch((err: Error) => console.error('tailscale:', err.message))
