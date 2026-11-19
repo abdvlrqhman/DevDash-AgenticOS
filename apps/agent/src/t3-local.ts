@@ -100,10 +100,10 @@ export async function memberFetch(raw: string, init: MemberRequest): Promise<Res
 /** Only the stateless text and model catalog operations of a locally spawned OpenCode server. */
 export function openCodeMemberFetch(url: URL, init: MemberRequest): Promise<Response> {
   if (!['/api/experimental/generate/text', '/api/model'].includes(url.pathname) || url.search || url.hash) throw new Error('Unsupported supervisor operation.')
-  return ownedFetch(url, init)
+  return ownedFetch(url, init, true)
 }
 
-async function ownedFetch(url: URL, init: MemberRequest): Promise<Response> {
+async function ownedFetch(url: URL, init: MemberRequest, deferredAccept = false): Promise<Response> {
   const endpoint = new URL('/mcp', url).href
   await assertMemberEndpoint(endpoint)
   if (init.signal?.aborted) throw init.signal.reason
@@ -123,7 +123,12 @@ async function ownedFetch(url: URL, init: MemberRequest): Promise<Response> {
     const failed = (error: Error) => finish(error)
     socket.once('error', failed)
     init.signal?.addEventListener('abort', aborted, { once: true })
-    socket.once('connect', () => { void assertMemberConnection(socket).then(() => finish(null), (error: Error) => finish(error)) })
+    socket.once('connect', () => {
+      // OpenCode's Linux listener defers accept until the first byte. One empty HTTP line lets the
+      // kernel establish the reverse tuple; ownership is still checked before any headers or body.
+      if (deferredAccept) socket.write('\r\n')
+      void assertMemberConnection(socket).then(() => finish(null), (error: Error) => finish(error))
+    })
     if (init.signal?.aborted) aborted()
     // Returning the socket here would let http write credentials before asynchronous ownership verification.
     return undefined

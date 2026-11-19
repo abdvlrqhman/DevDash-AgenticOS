@@ -45,15 +45,15 @@ export const profilesQuery = queryOptions({
   staleTime: 30_000,
 })
 /** Slash commands and models: a Claude profile's, or another agent's (OpenCode lists every provider's models). */
-export const commandsQuery = (profile: string, harness: Harness = 'claude', model?: string) => queryOptions({
-  queryKey: ['claude', 'commands', harness, profile, ...(model ? [model] : [])],
-  queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile, harness, model } })),
+export const commandsQuery = (profile: string, harness: Harness = 'claude', model?: string, supervisor = false) => queryOptions({
+  queryKey: ['claude', 'commands', harness, profile, ...(supervisor ? [{ supervisor }] : []), ...(model ? [model] : [])],
+  queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile, harness, model, supervisor: supervisor ? 'true' : undefined } })),
   staleTime: 60_000,
 })
 
 /** T3's short catalog can omit a saved or typed model. Only look it up once the ID settles. */
-export function useOfferedModels(profile: string, harness: Harness, model: string | null, enabled: boolean) {
-  const catalog = useQuery({ ...commandsQuery(profile, harness), enabled })
+export function useOfferedModels(profile: string, harness: Harness, model: string | null, enabled: boolean, supervisor = false) {
+  const catalog = useQuery({ ...commandsQuery(profile, harness, undefined, supervisor), enabled })
   const models = catalog.data?.models as ModelInfo[] | undefined
   const id = model?.trim()
   const missing = enabled && harness === 't3code' && id && id.length <= 160 && /^[^/]+\/.+/.test(id)
@@ -65,7 +65,7 @@ export function useOfferedModels(profile: string, harness: Harness, model: strin
     return () => clearTimeout(timer)
   }, [missing])
   const include = missing === settled ? missing : undefined
-  const extra = useQuery({ ...commandsQuery(profile, harness, include), enabled: !!include })
+  const extra = useQuery({ ...commandsQuery(profile, harness, include, supervisor), enabled: !!include })
   const row = include && (extra.data?.models as ModelInfo[] | undefined)?.find((m) => m.value === include)
   return row && models ? [...models, row] : models
 }

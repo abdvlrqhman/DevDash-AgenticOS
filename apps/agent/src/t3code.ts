@@ -1,6 +1,7 @@
 // T3 Code's own MCP integration. Credentials belong to the DevDash member; the configured T3 server runs the tools.
 import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
+import { supervisorModels } from './t3-supervisor.ts'
 import { T3Client, configPath, readConfig } from './t3-client.ts'
 
 type Model = { id: string; label?: string | null; options?: { id: string; values: (string | boolean)[] }[] | null }
@@ -64,21 +65,25 @@ export async function supervisorTarget(value: string, effort?: string) {
   const selected = provider?.models.find((m) => m.id === model)
   const bin = supervisorBins(capabilities.providers).get(instanceId)
   if (!bin || !selected || !/^[^/]+\/.+/.test(model)) throw new Error('Choose an available T3 OpenCode supervisor model.')
-  if (effort && !effortOption(selected)?.levels.includes(effort)) throw new Error('This T3 Code supervisor model does not offer that thinking level.')
   const { instanceId: providerID, model: id } = selection(model)
   return { bin, ref: { providerID, id, ...(effort ? { variant: effort } : {}) } }
 }
-export async function modelChoices(search?: string) {
+export async function modelChoices(search?: string, supervisor = false) {
   const { capabilities } = await inspect(5000, search)
-  const bins = supervisorBins(capabilities.providers)
-  // The service catalog does not identify which model a new project will use for Default.
-  return [
-    { value: '', displayName: 'Default', description: "T3 Code's own default" },
-    ...capabilities.providers.flatMap((p) => p.models.map((m) => {
+  const bins = supervisor ? supervisorBins(capabilities.providers) : new Map<string, string>()
+  const catalogs = new Map(await Promise.all([...new Set(bins.values())].map(async (bin) => [bin, await supervisorModels(bin)] as const)))
+  const rows = capabilities.providers.flatMap((p) => {
+    const native = catalogs.get(bins.get(p.providerInstanceId) ?? '')
+    return p.models.flatMap((m) => {
       const value = modelId(p.providerInstanceId, m.id)
-      return { value, displayName: m.label || m.id, description: value, group: p.providerInstanceId, ...(bins.has(p.providerInstanceId) && /^[^/]+\/.+/.test(m.id) ? { supportsSupervisor: true } : {}), supportedEffortLevels: effortOption(m)?.levels ?? [] }
-    })),
-  ]
+      const match = native?.find((n) => modelId(n.providerID, n.id) === m.id)
+      if (supervisor && !match) return []
+      return [{ value, displayName: m.label || m.id, description: value, group: p.providerInstanceId,
+        ...(supervisor && { supportsSupervisor: true }), supportedEffortLevels: match?.variants ?? effortOption(m)?.levels ?? [] }]
+    })
+  })
+  // T3 does not identify the model chosen for Default. The supervisor always requires an explicit model.
+  return supervisor ? rows : [{ value: '', displayName: 'Default', description: "T3 Code's own default" }, ...rows]
 }
 let cached: { key: string; at: number; value: Awaited<ReturnType<typeof probeInfo>> } | undefined
 let probing: { key: string; value: Promise<Awaited<ReturnType<typeof probeInfo>>> } | undefined

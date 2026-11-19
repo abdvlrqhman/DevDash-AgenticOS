@@ -54,7 +54,7 @@ In **Hamasa → Settings and access**, choose **T3 Code** and confirm **Full acc
 
 In **Autopilot → Settings**, turn on **Include T3 Code sessions** to apply your rules to your full-access T3 Chat sessions. Existing Autopilot settings leave T3 enrollment off until you select it. When T3 asks for a native approval or an answer, open the linked T3 conversation to respond.
 
-The **Supervisor** model is a separate choice. A supervisor reads transcripts and returns decisions with tools disabled. Choose **T3 Code**, then an eligible model and its offered thinking level. The eligible list depends on the member’s provider configuration. A member can use one provider for the session and another for its supervisor.
+The **Supervisor** model is a separate choice. A supervisor reads transcripts and returns decisions with tools disabled. Choose **T3 Code**, then an eligible model and its offered thinking level. DevDash looks for a local T3 OpenCode instance with an absolute executable path in its provider settings. It lists models found in both T3 and OpenCode’s native model catalog, with the thinking levels the native model accepts. Supervisor decisions use OpenCode’s stateless text-generation endpoint. Hamasa and enrolled chats can use any connected T3 provider, including Codex and Antigravity.
 
 Ordinary T3 Chat uses the connections configured in T3. DevDash reserves its workflow commands for Hamasa and enrolled Autopilot turns. Terminal view, attachments, Drive provisioning, tailnet forwarding, Claude fast/remote/advisor features and restricted team roles remain unavailable. Token costs and context percentages are available in T3 Code.
 

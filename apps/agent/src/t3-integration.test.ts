@@ -4,11 +4,12 @@ import { execFile } from 'node:child_process'
 import { createServer as unixServer } from 'node:net'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdtempSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Launch } from './claude.ts'
+import type { Capabilities } from './t3code.ts'
 
 // Exercise the real member harness and its child ACP bridge against an HTTP MCP server.
 // No provider process, production token or production conversation is used.
@@ -27,6 +28,7 @@ const waiters = new Set<() => void>()
 const live = new Set<string>()
 let initialized = 0, deleted = 0
 let defaultModel = 'one'
+let supervisorProviders: Capabilities['providers'] | undefined
 let stalledDiscovery = false
 let discoveryHold: { entered: () => void; released: Promise<void> } | undefined
 let delayed: { name: string; threadId: string; entered: () => void; released: Promise<void> } | undefined
@@ -84,7 +86,7 @@ const http = createServer(async (req, res) => {
       if (args.search === defaultModel) result.providers[0]!.models = [{ id: defaultModel, options: [{ id: 'thinking_level', default: 'low', values: ['low', 'adaptive'] }] }]
       else Object.assign(result.providers[0]!, { omittedModels: 1 })
     }
-    data = result
+    data = supervisorProviders ? { ...result, providers: supervisorProviders } : result
     if (discoveryHold) { const pause = discoveryHold; discoveryHold = undefined; pause.entered(); await pause.released }
   }
   else if (name === 't3_project_list') data = { projects: [{ id: 'project', workspaceRoot: home }], nextCursor: null }
@@ -203,6 +205,74 @@ test('T3 discovery only lists connected providers and their models', async () =>
   const launches = calls.filter((c) => c.name === 't3_thread_launch').length
   await assert.rejects(H.send(invalid, [{ type: 'text', text: 'quick' }], randomUUID()), /not available from a connected/)
   assert.equal(calls.filter((c) => c.name === 't3_thread_launch').length, launches, 'reject disconnected initial models before creating a conversation')
+})
+
+test('T3 supervisors use the selected member OpenCode model and variant for tool-free text', async () => {
+  const original = readFileSync(config, 'utf8')
+  const folder = mkdtempSync(join(home, 'supervisor-'))
+  const binary = join(folder, 'opencode.mjs')
+  const capture = join(folder, 'requests.jsonl')
+  const openServer = join(folder, 'disable-auth')
+  const nativeModel = { providerID: 'account', id: 'chosen', modelID: 'Upstream-Chosen', enabled: true, variants: [{ id: 'high' }] }
+  writeFileSync(binary, `#!${process.execPath}
+import { createServer } from 'node:http'
+import { appendFileSync, existsSync } from 'node:fs'
+const server = createServer(async (req, res) => {
+  const auth = Buffer.from('opencode:' + process.env.OPENCODE_PASSWORD).toString('base64')
+  if (!existsSync(${JSON.stringify(openServer)}) && (!process.env.OPENCODE_PASSWORD || req.headers.authorization !== 'Basic ' + auth)) {
+    res.writeHead(401).end()
+    return
+  }
+  let text = ''
+  for await (const chunk of req) text += chunk
+  const body = text ? JSON.parse(text) : null
+  appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ method: req.method, url: req.url, body }) + '\\n')
+  res.setHeader('content-type', 'application/json')
+  if (req.url === '/api/model') res.end(JSON.stringify({ data: [${JSON.stringify(nativeModel)}] }))
+  else if (req.url === '/api/experimental/generate/text') res.end(JSON.stringify({ data: { text: 'decision' } }))
+  else res.writeHead(404).end()
+}).listen(0, '127.0.0.1', () => console.log(JSON.stringify({ url: 'http://127.0.0.1:' + server.address().port })))
+process.stdin.resume()
+process.stdin.on('end', () => server.close())
+`, { mode: 0o700 })
+  const models = [{ id: 'account/chosen', options: [{ id: 'variant', values: ['high', 'stale'] }] }]
+  const providers = [
+    { providerInstanceId: 'local', driverKind: 'opencode' },
+    { providerInstanceId: 'custom', driverKind: 'opencode' },
+    { providerInstanceId: 'other', driverKind: 'codex' },
+  ]
+  supervisorProviders = providers.map((p) => ({ ...p, canRunChildTask: true, displayName: p.providerInstanceId, models }))
+  const simple = { driver: 'opencode', enabled: true, config: { binaryPath: binary } }
+  const settings = { providerInstances: { local: simple, custom: { ...simple, config: { ...simple.config, env: { ACCOUNT: 'another' } } }, other: simple } }
+  mkdirSync(join(folder, 'userdata'))
+  writeFileSync(join(folder, 'userdata/settings.json'), JSON.stringify(settings))
+  writeFileSync(config, JSON.stringify({ ...JSON.parse(original), baseDir: folder }))
+  const messages = () => readFileSync(capture, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { url: string; body: unknown; method: string })
+  try {
+    const { models: entries } = await H.commandsAndModels('t3code', 'default', undefined, true)
+    assert.deepEqual(entries.map((m) => [m.value, m.supportsSupervisor, m.supportedEffortLevels]), [['local/account/chosen', true, ['high']]])
+    const start = calls.length
+    const complete = (model: string, effort?: string) => H.complete('t3code', 'default', 'judge this transcript', { system: 'Return the decision.', model, effort })
+    for (const unsupported of ['custom/account/chosen', 'other/account/chosen', 'local/account/missing']) {
+      await assert.rejects(complete(unsupported), /supervisor model/i)
+    }
+    await assert.rejects(complete('local/account/chosen', 'invalid'), /thinking level/i)
+    assert.equal(await complete('local/account/chosen', 'high'), 'decision')
+    const generate = messages().filter((m) => m.url === '/api/experimental/generate/text')
+    assert.deepEqual(generate, [{ method: 'POST', url: '/api/experimental/generate/text',
+      body: { prompt: 'Return the decision.\n\njudge this transcript', model: { providerID: 'account', id: 'chosen', variant: 'high' } } }])
+    // T3 can retain a variant in its catalog after OpenCode removes it. Never request a default in its place.
+    await assert.rejects(complete('local/account/chosen', 'stale'), /variant|thinking|level/i)
+    // An executable that ignores its configured password must never receive the private transcript.
+    writeFileSync(openServer, '')
+    await assert.rejects(complete('local/account/chosen', 'high'))
+    assert.equal(messages().filter((m) => m.url === '/api/experimental/generate/text').length, 1)
+    assert.ok(messages().every((m) => m.url === '/api/model' || m.url === '/api/experimental/generate/text'))
+    assert.ok(calls.slice(start).every((c) => c.name === 'orchestrator_capabilities'), 'no tool-bearing T3 thread was started')
+  } finally {
+    supervisorProviders = undefined
+    writeFileSync(config, original)
+  }
 })
 
 test('T3 real bridge streams growing activity once, returns success and keeps transcript/tool results', async () => {

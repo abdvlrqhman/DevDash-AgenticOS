@@ -1,11 +1,12 @@
-// Registers the background-notification service and boot receiver in the generated Android manifest.
+// Registers the background-notification service and boot receiver in the generated Android manifest, and the
+// microphone permission voice mode needs (the web view asks for it at runtime; Android refuses an undeclared one).
 // usage (CI, after `tauri android init`): node android/patch-manifest.mjs <path to app/src/main/AndroidManifest.xml>
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const [file] = process.argv.slice(2)
 let m = readFileSync(file, 'utf8')
 if (!m.includes('<application') || !m.includes('</application>')) throw new Error(`no <application> in ${file}`)
-const perms = ['FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_REMOTE_MESSAGING', 'POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED']
+const perms = ['FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_REMOTE_MESSAGING', 'POST_NOTIFICATIONS', 'RECEIVE_BOOT_COMPLETED', 'RECORD_AUDIO', 'MODIFY_AUDIO_SETTINGS']
   .filter((p) => !m.includes(`"android.permission.${p}"`))
   .map((p) => `<uses-permission android:name="android.permission.${p}" />`)
 m = m.replace('<application', `${perms.join('\n    ')}\n    <application`)

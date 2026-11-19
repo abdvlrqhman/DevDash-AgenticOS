@@ -32,12 +32,35 @@ export const ASSISTANT_TOOLS = [
       model: { type: 'string' },
       effort: { type: 'string', description: 'T3 Code thinking level offered by the selected model.' },
       permission_mode: { type: 'string', enum: ['default', 'acceptEdits', 'bypassPermissions', 'plan'] },
+      follow: { type: 'string', description: 'Follow it from the start (see session_follow): the goal in one line. When they asked you for this work.' },
     }, ['prompt']),
   },
   {
     name: 'session_send',
     description: "Send a message to one of the person's sessions (or a shared one they can write in), as them: a follow-up, a correction, \"run the tests\". It's queued if the session is busy.",
     inputSchema: obj({ id, text: { type: 'string' } }, ['id', 'text']),
+  },
+  {
+    name: 'session_follow',
+    description: "Follow a session for the person until its work is done: DevDash wakes you in this chat when it finishes a turn, asks something or fails, and you continue it or tell them. Only when they ask you to (or for a session you start for work they asked for).",
+    inputSchema: obj({ id, goal: { type: 'string', description: 'What should be true when it is done, in one line: "panel polished and a PR open".' } }, ['id', 'goal']),
+  },
+  { name: 'session_unfollow', description: 'Stop following a session: its goal is reached, or they asked.', inputSchema: obj({ id }, ['id']) },
+  {
+    name: 'follow_reply',
+    description: "Only after DevDash woke you about a followed session: continue it on your own with the next step the person already agreed, within their autopilot rules. Refused when autopilot is off, for red, after 5 replies, when a person took over or it goes in circles: then tell them instead.",
+    inputSchema: obj({
+      id, text: { type: 'string', description: 'The message to the session.' },
+      tier: { type: 'string', enum: ['green', 'yellow'] }, why: { type: 'string', description: 'The rule, or what they agreed in this chat.' },
+    }, ['id', 'text', 'tier', 'why']),
+  },
+  {
+    name: 'follow_answer',
+    description: "Only after DevDash woke you about a followed session that asks a question: answer it for the person, within their autopilot rules (never a permission prompt; never a red question). Same limits as follow_reply.",
+    inputSchema: obj({
+      id, answers: { type: 'object', description: '{"<the question, exactly>": "<the chosen option\'s label, or your answer>"}', additionalProperties: { type: 'string' } },
+      tier: { type: 'string', enum: ['green', 'yellow'] }, why: { type: 'string' },
+    }, ['id', 'answers', 'tier', 'why']),
   },
   {
     name: 'session_stop',

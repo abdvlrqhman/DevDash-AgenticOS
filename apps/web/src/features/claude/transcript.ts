@@ -1,6 +1,7 @@
 // Turns Claude messages (transcript history from the SDK and live SDK events share the same shape) into display
 // blocks. Tool results attach to their tool call; subagent messages nest under the Task/Agent call that spawned them.
 // Pure and DOM-free so it can be tested with node:test.
+import { plainReply, VOICE_TAG_RE } from '../voice/reply.ts'
 
 type Content = { type: string; [k: string]: unknown }
 type Origin = { kind?: string; subkind?: string; from?: string; name?: string; server?: string; body?: string }
@@ -119,7 +120,7 @@ export function buildTranscript(raws: Raw[]): Block[] {
       content.forEach((b, j) => {
         const k = `${key}:${j}`
         const list = into(r.parent_tool_use_id)
-        if (b.type === 'text' && String(b.text ?? '').trim()) list.push({ kind: 'text', key: k, text: String(b.text), ...(r.cwd ? { cwd: r.cwd } : {}) })
+        if (b.type === 'text' && plainReply(String(b.text ?? '')).trim()) list.push({ kind: 'text', key: k, text: String(b.text), ...(r.cwd ? { cwd: r.cwd } : {}) })
         else if (b.type === 'thinking' && String(b.thinking ?? '').trim()) list.push({ kind: 'thinking', key: k, text: String(b.thinking) })
         else if (b.type === 'tool_use' || b.type === 'server_tool_use' || b.type === 'mcp_tool_use') {
           const name = b.type === 'mcp_tool_use' ? `mcp__${String(b.server_name ?? 'mcp')}__${String(b.name)}` : String(b.name)
@@ -159,8 +160,8 @@ export function buildTranscript(raws: Raw[]): Block[] {
         return
       }
       // Reminders Claude Code appends for the model aren't the person's words, nor the page the personal agent's panel
-      // says they had open (AssistantPanel).
-      const said = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/^\s*<devdash-page\b[^>]*\/>\s*/, '').trim()
+      // says they had open (AssistantPanel), nor voice mode's mark on what they said out loud.
+      const said = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/^\s*<devdash-page\b[^>]*\/>\s*/, '').replace(VOICE_TAG_RE, '').trim()
       if (!said && !images.length && !files.length) return
       const machine = injected(r, said || text, key, images)
       if (machine) return void top.push(machine)

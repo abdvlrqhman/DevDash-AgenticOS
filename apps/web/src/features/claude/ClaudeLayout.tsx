@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { byFolder, relativeTime, sessionsQuery, type Session } from './data'
 import { useArchiveSession } from './ArchiveSession'
 import { NewSession, SessionsPage } from './SessionsPage'
+import { FollowGlyph } from '../assistant/Following'
 
 /**
  * Claude on wide screens: the session list stays on the left while a session is open on the right
@@ -115,6 +116,7 @@ function SessionsPane({ active }: { active?: string }) {
                             {s.status === 'waiting' ? 'Needs you' : s.status === 'working' ? 'Working' : relativeTime(s.lastActivityAt)}{s.mode === 'cli' ? ', in CLI' : ''} · {agentName(s.harness)}
                           </span>
                         </span>
+                        <FollowGlyph id={s.id} className="mt-1" />
                         {s.owner.id !== me.id && <UserAvatar user={s.owner} className="size-6" textClassName="text-[10px]" />}
                       </Link>
                     </li>

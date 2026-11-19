@@ -6,7 +6,8 @@ import type { NotificationKind } from '../notifications/service.ts'
 import { Create as ProjectCreate } from '../projects/routes.ts'
 import type { ProjectsService } from '../projects/service.ts'
 import type { BuiltInSkill, Review, SkillSummary } from '../skills/routes.ts'
-import { AGENT_NAME, PAGE_TAG } from './prompt.ts'
+import { AGENT_NAME, PAGE_TAG, VOICE_TAG } from './prompt.ts'
+import type { FollowService } from './follow.ts'
 import type { AssistantService } from './service.ts'
 
 type Ctx = { sessionId?: string | null; args?: Record<string, unknown> }
@@ -14,7 +15,7 @@ type Block = { type?: string; text?: string; name?: string; input?: Record<strin
 type Msg = { type?: string; message?: { content?: string | Block[] } }
 
 const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t)
-const PAGE = new RegExp(`^<${PAGE_TAG}\\b[^>]*/>\\s*`)
+const PAGE = new RegExp(`^<${PAGE_TAG}\\b[^>]*/>\\s*(<${VOICE_TAG}\\b[^>]*/>\\s*)?`)
 // DevDash's notes for the agent inside a message (a teammate's note, autopilot's rules): not what anyone said.
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 
@@ -44,8 +45,8 @@ export function condense(messages: Msg[], max = 40) {
  * The tools only a member's personal agent gets (packages/claude-plugin/mcp/assistant.mjs), on top of the DevDash tools
  * every session has. They act as that member, with exactly their access: the session's owner is who they act for.
  */
-export function registerAssistantMcp({ agents, claude, assistant, projects, notify }: {
-  agents: AgentsService; claude: ClaudeService; assistant: AssistantService; projects: ProjectsService
+export function registerAssistantMcp({ agents, claude, assistant, projects, notify, follow }: {
+  agents: AgentsService; claude: ClaudeService; assistant: AssistantService; projects: ProjectsService; follow?: FollowService
   notify: (userId: number, kind: NotificationKind, n: { title: string; body?: string; url?: string; tag?: string }) => Promise<void>
 }) {
   const ctx = (username: string, params: unknown) => {
@@ -109,12 +110,16 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
       model, effort, permissionMode: mode, mode: 'chat',
       project, worktree: project ? c.args.worktree !== false : undefined,
     })
-    return { id: s.id, title: s.title, project: s.project?.slug ?? null, folder: s.cwd, url: `/sessions/${s.id}` }
+    // Followed from its first message: its whole run reports back here.
+    const goal = str(c.args.follow)
+    const following = goal && follow && claude.typedByOwner(c.sessionId) ? (() => { try { return follow.follow(c.user, s.id, goal) } catch (err) { return (err as Error).message } })() : undefined
+    return { id: s.id, title: s.title, project: s.project?.slug ?? null, folder: s.cwd, url: `/sessions/${s.id}`, ...(following ? { following } : {}) }
   })
   on('session_send', async (c) => {
     const id = need(c.args.id, 'the session id')
     if (assistant.ofSession(c.user.username, id)) throw new AppError(400, 'bad_args', 'That is one of your own conversations; answer here instead.')
     const first = c.user.name.split(' ')[0]
+    if (follow?.wakeTurnFor(c.user, c.sessionId, id)) throw new AppError(400, 'use_follow_reply', `${first} didn't write this turn: continue a followed session with follow_reply (tier and why), or tell them.`)
     const text = need(c.args.text, 'the message').trim()
     // A slash command goes as it is: Claude Code only runs it when it starts the message, and DevDash runs /model and
     // /effort itself (claude.command).
@@ -124,7 +129,8 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
       await claude.send(c.user, id, text, [])
       return `Sent the command ${text.split(/\s/)[0]}. Check on it with session_read; it's at /sessions/${id}.`
     }
-    await claude.send(c.user, id, `(From ${AGENT_NAME}, ${first}'s personal agent) ${text}`, [])
+    const uuid = await claude.send(c.user, id, `(From ${AGENT_NAME}, ${first}'s personal agent) ${text}`, [])
+    follow?.sent(c.user, id, uuid)
     return `Sent. Check on it with session_read; it's at /sessions/${id}.`
   })
   on('session_stop', async (c) => {

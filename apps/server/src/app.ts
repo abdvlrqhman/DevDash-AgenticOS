@@ -13,6 +13,9 @@ import { registerMcp } from './modules/mcp/rpc.ts'
 import { registerAssistantMcp } from './modules/assistant/mcp.ts'
 import { assistantRoutes } from './modules/assistant/routes.ts'
 import { assistantService } from './modules/assistant/service.ts'
+import { followService } from './modules/assistant/follow.ts'
+import { voiceRoutes } from './modules/voice/routes.ts'
+import { voiceService } from './modules/voice/service.ts'
 import { registerAutopilotMcp } from './modules/autopilot/mcp.ts'
 import { autopilotRoutes } from './modules/autopilot/routes.ts'
 import { autopilotService } from './modules/autopilot/service.ts'
@@ -106,8 +109,13 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     db, hub, claude, notify: notifications.notify, tailnetConnected: (userId) => !!tailnet?.isConnected(userId), driveConnected: (userId) => !!storage.forLaunch(userId),
   })
 
+  // Voice mode for the personal agent: the member's own providers and keys, the conversation over a WebSocket.
+  const voice = voiceService({ db, masterKey: config.masterKey, claude, assistant })
+
   // Autopilot: a member's sessions decide routine things by their rules, and a supervisor keeps their stalled ones moving.
   const autopilot = autopilotService({ db, hub, claude, notify: notifications.notify, team: () => team?.service?.autopilotPort() })
+  // Hamasa follows sessions the member asked it to, woken when they finish, ask or fail.
+  const follow = followService({ db, hub, agents, claude, assistant, autopilot, notify: notifications.notify })
 
   // "Give to an agent": a Chat session in the task's project (its own worktree by default), linked to the task, with the
   // member's default agent.
@@ -197,12 +205,14 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     .route('/api/auth', authRoutes(auth, mw, ip, (u) => void provisioning.ensure(u)))
     .route('/api/members', membersRoutes(auth, mw, ip, config.origin, (id) => {
       vault.memberRemoved(id)
+      voice.memberRemoved(id)
       avatars.remove(id)
       void storage.memberRemoved(id).catch((err) => console.error('storage: forgetting a removed member:', err))
     }, avatars))
     .route('/api/terminals', terminalsRoutes(terms, auth, mw, provisioning, ip))
     .route('/api/claude', claudeRoutes(claude, mw))
-    .route('/api/assistant', assistantRoutes(assistant, mw))
+    .route('/api/assistant', assistantRoutes(assistant, mw, follow))
+    .route('/api/voice', voiceRoutes(voice, mw))
     .route('/api/autopilot', autopilotRoutes(autopilot, mw))
     .route('/api/notifications', notificationsRoutes(notifications, apns, ntfy, mw))
     .route('/api/services', servicesRoutes(services, mw))
@@ -232,7 +242,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   // Items a team role creates through its session are attributed to the role, not the account the team runs as.
   registerMcp({ db, agents, projects, tasks, notes, services, authorRole: (u, s) => team?.service?.roleOf(u, s)?.r.name ?? null })
   agents.onRpc('mcp.notify', (username, params) => claude.notifyFrom(username, params))
-  registerAssistantMcp({ agents, claude, assistant, projects, notify: notifications.notify })
+  registerAssistantMcp({ agents, claude, assistant, projects, notify: notifications.notify, follow })
   registerAutopilotMcp({ agents, autopilot })
   reviews.registerMcp()
   deploys.registerMcp()
@@ -240,7 +250,8 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   projects.start()
   trash.start()
   autopilot.start()
-  return { app, auth, provisioning, terms, agents, claude, services, projects, tasks, notes, hub, previews }
+  follow.start()
+  return { app, auth, provisioning, terms, agents, claude, services, projects, tasks, notes, hub, previews, voice }
 }
 
 export type AppType = ReturnType<typeof createApp>['app']

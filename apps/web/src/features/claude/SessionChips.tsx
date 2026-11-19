@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { BadgeCheck, Copy, ExternalLink, Network, Smartphone, Zap } from 'lucide-react'
+import { BadgeCheck, Copy, ExternalLink, Eye, Network, Smartphone, Zap } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,9 @@ import { openExternal } from '@/lib/shell'
 import { cn } from '@/lib/utils'
 import { agentName } from './harness'
 import type { Session } from './data'
+import { useFollowed, useUnfollow } from '../assistant/Following'
+import { followLabel } from '../assistant/follow-label'
+import { AGENT_NAME } from '../assistant/store'
 
 // Why fast mode isn't serving, from Claude Code's fast_mode_disabled_reason.
 const FAST_REASON: Record<string, string> = {
@@ -37,6 +40,30 @@ const Chip = ({ children, tone, label }: { children: ReactNode; tone?: 'attentio
     )}>{children}</button>
   </PopoverTrigger>
 )
+
+/** "Hamasa is following": what it's after, what it may do, and Unfollow. */
+function FollowChip({ id }: { id: string }) {
+  const f = useFollowed(id)
+  const unfollow = useUnfollow()
+  if (!f) return null
+  return (
+    <Popover>
+      <Chip label={`${AGENT_NAME} is following this session`} tone={f.state === 'waiting_you' ? 'attention' : 'live'}>
+        <Eye className="size-3.5" /><span className="max-sm:hidden">{AGENT_NAME} is following</span><span className="sm:hidden">{AGENT_NAME}</span>
+        <span className="text-muted-foreground tabular-nums">· {followLabel(f)}</span>
+      </Chip>
+      <PopoverContent align="start" className="w-72 text-sm">
+        <p className="font-medium">{AGENT_NAME} is following this session</p>
+        <p className="mt-1 text-xs text-muted-foreground">Goal: {f.goal}</p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          When it finishes, asks or fails, {AGENT_NAME} reads it and continues it within your autopilot rules (up to {f.maxReplies} times
+          until you write), or tells you in your chat. It never answers a permission prompt for you.
+        </p>
+        <Button size="sm" variant="outline" className="mt-3" disabled={unfollow.isPending} onClick={() => unfollow.mutate(id)}>Stop following</Button>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 const TASK_KIND: Record<string, string> = { local_bash: 'Shell', bash: 'Shell', monitor: 'Monitor', local_agent: 'Subagent', workflow: 'Workflow' }
 
@@ -100,6 +127,7 @@ export function SessionChips({ s, isOwner, canSend, working, onUpdate, onCompact
     : s.fast && s.fast.state !== 'on' ? (s.fast.reason && FAST_REASON[s.fast.reason]) ?? 'Fast mode is not available right now.' : null
   return (
     <>
+      <FollowChip id={s.id} />
       {s.origin?.kind === 'proposal' && (
         <Popover>
           <Chip label={`From ${s.origin.role}'s approval`}><BadgeCheck className="size-3.5" /><span className="max-sm:hidden">From {s.origin.role}'s approval</span><span className="sm:hidden">Approval</span></Chip>

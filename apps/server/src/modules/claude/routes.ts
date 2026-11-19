@@ -145,9 +145,9 @@ export function claudeRoutes(claude: ClaudeService, mw: ReturnType<typeof authMi
       const { mode, cols, rows } = c.req.valid('json')
       return c.json({ session: await claude.switchMode(c.get('user'), c.req.param('id'), mode, cols, rows) })
     })
-    .get('/commands', query(z.object({ profile: z.string().max(21).default('default'), harness: Harness.default('claude'), model: ModelId.optional() })), async (c) => {
-      const { profile, harness, model } = c.req.valid('query')
-      return c.json(await claude.commands(c.get('user'), profile, harness, model))
+    .get('/commands', query(z.object({ profile: z.string().max(21).default('default'), harness: Harness.default('claude'), model: ModelId.optional(), supervisor: z.literal('true').optional() })), async (c) => {
+      const { profile, harness, model, supervisor } = c.req.valid('query')
+      return c.json(await claude.commands(c.get('user'), profile, harness, model, supervisor === 'true'))
     })
     .get('/profiles', query(z.object({ refresh: z.enum(['true', 'false']).optional() })), async (c) =>
       c.json(await claude.profiles(c.get('user'), c.req.valid('query').refresh === 'true')))

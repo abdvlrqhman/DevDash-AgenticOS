@@ -54,7 +54,7 @@ function mentionAt(text: string, caret: number) {
 
 type Item = { key: string; label: string; hint?: string; icon?: ReactNode; apply: () => void }
 
-export function Composer({ sessionId, profile, harness = 'claude', name, working, disabledReason, footer, onSend, onStop }: {
+export function Composer({ sessionId, profile, harness = 'claude', name, working, disabledReason, footer, tools, onSend, onStop }: {
   sessionId: string
   profile: string
   /** The session's agent: its slash commands are its own. */
@@ -65,6 +65,8 @@ export function Composer({ sessionId, profile, harness = 'claude', name, working
   disabledReason?: ReactNode
   /** Small status row under the message box (context used, fast mode, Remote Control). */
   footer?: ReactNode
+  /** More buttons beside Attach, on the left (voice mode's mic). */
+  tools?: ReactNode
   onSend: (text: string, images: Img[], files: Doc[], uploads: Upload[]) => Promise<unknown>
   onStop: () => void
 }) {
@@ -332,6 +334,7 @@ export function Composer({ sessionId, profile, harness = 'claude', name, working
           <Button size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-muted-foreground" aria-label="Attach files" title="Attach images, PDFs or any file" onClick={() => picker.current?.click()}><Paperclip /></Button>
           <input ref={picker} type="file" multiple hidden onChange={(e) => { if (e.target.files) void add(e.target.files); e.target.value = '' }} />
         </>}
+        {tools}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">{footer}</div>
         {/* Stop is always there while Claude works; Send joins it once something is typed (it waits for Claude). They look
             different on purpose (outlined, not ink), since Stop appears exactly where Send was. */}

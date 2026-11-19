@@ -243,7 +243,7 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
 
   const harness = harnessOf(v)
   const t3 = harness === 't3code'
-  const offered = useOfferedModels(v.profile, harness, v.model, agentProfiles.includes(v.profile))
+  const offered = useOfferedModels(v.profile, harness, v.model, agentProfiles.includes(v.profile), t3)
   const modelList: ModelInfo[] = t3 ? (offered ?? []).filter((m) => m.supportsSupervisor)
     : offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
   const picked = modelList.find((m) => m.value === v.model)

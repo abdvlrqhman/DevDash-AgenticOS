@@ -62,7 +62,7 @@ export function ServerPage() {
               </> : <Calm>No backup yet. One runs every night at 03:30 UTC.</Calm>}
             </Block>
 
-            <Block title="Software" action={d.canAct && <span className="flex flex-wrap justify-end gap-2"><UpdateButton sdk={d.software.claudeSdk} agent="claude" /><UpdateButton sdk={d.software.opencode} agent="opencode" /></span>}>
+            <Block title="Software" action={d.canAct && <span className="flex flex-wrap justify-end gap-2"><UpdateButton sdk={d.software.claudeSdk} agent="claude" /><UpdateButton sdk={d.software.opencode} agent="opencode" /><UpdateButton sdk={d.software.browser} agent="browser" /></span>}>
               <Panel>
                 <Line label="DevDash" value={<><span className="tabular-nums">{d.software.devdash}</span>{d.software.release && <span className="text-muted-foreground">, <span className="font-mono text-[13px]">{d.software.release.id.slice(0, 7)}</span></span>}</>} />
                 {d.software.release && <Line label="Deployed" value={relativeTime(d.software.release.since)} />}
@@ -70,9 +70,11 @@ export function ServerPage() {
                 <Line label="Updates" value={<UpdateState sdk={d.software.claudeSdk} />} />
                 <Line label="OpenCode" value={d.software.opencode.version ? <span className="tabular-nums">{d.software.opencode.version}</span> : <UpdateState sdk={d.software.opencode} agent="opencode" />} />
                 {d.software.opencode.installed && <Line label="Updates" value={<UpdateState sdk={d.software.opencode} agent="opencode" />} />}
-                {d.canAct && (d.software.opencode.failed || d.software.claudeSdk.failed) && (
+                <Line label="Team browser" value={d.software.browser.installed ? <span className="tabular-nums">neko {d.software.browser.installed}</span> : <UpdateState sdk={d.software.browser} agent="browser" />} />
+                {d.software.browser.installed && <Line label="Updates" value={<UpdateState sdk={d.software.browser} agent="browser" />} />}
+                {d.canAct && (d.software.opencode.failed || d.software.claudeSdk.failed || d.software.browser.failed) && (
                   <p className="px-3 pb-2 text-xs text-pretty text-muted-foreground">
-                    Why it failed is in its log on the server: <code className="font-mono">journalctl -u devdash-{d.software.opencode.failed ? 'opencode' : 'claude'}-update</code>. Install again when it's fixed.
+                    Why it failed is in its log on the server: <code className="font-mono">journalctl -u devdash-{d.software.browser.failed ? 'browser' : d.software.opencode.failed ? 'opencode' : 'claude'}-update</code>. Install again when it's fixed.
                   </p>
                 )}
                 <Line label="Node.js" value={<span className="tabular-nums">{d.software.node}</span>} />
@@ -182,12 +184,14 @@ const newer = (a: string, b: string) => {
   return false
 }
 
-// Claude Code comes from the Agent SDK package (deploy/claude-update.sh), OpenCode from its own (deploy/opencode-update.sh);
-// admins install and update them for everyone from here.
+// Claude Code comes from the Agent SDK package (deploy/claude-update.sh), OpenCode from its own (deploy/opencode-update.sh),
+// the team browser from neko's image (the root helper's browser-update); admins install and update them for everyone here.
+type Updatable = 'claude' | 'opencode' | 'browser'
+const NAMES: Record<Updatable, string> = { claude: 'Claude Code', opencode: 'OpenCode', browser: 'the team browser' }
 type Sdk = { installed: string | null; latest: string | null; updating: boolean; failed?: boolean }
 const updateAvailable = (sdk: Sdk) => !!sdk.latest && !!sdk.installed && newer(sdk.latest, sdk.installed)
 
-function UpdateState({ sdk, agent = 'claude' }: { sdk: Sdk; agent?: 'claude' | 'opencode' }) {
+function UpdateState({ sdk, agent = 'claude' }: { sdk: Sdk; agent?: Updatable }) {
   if (sdk.updating) return <span className="flex items-center gap-1.5"><Spinner />{sdk.installed ? 'Updating…' : 'Installing…'}</span>
   // Why is in the job's log on the server; the button stays, to try again.
   if (sdk.failed) return <span className="text-destructive" title={`On the server: journalctl -u devdash-${agent}-update`}>{sdk.installed ? 'The update failed' : 'The install failed'}</span>
@@ -195,15 +199,17 @@ function UpdateState({ sdk, agent = 'claude' }: { sdk: Sdk; agent?: 'claude' | '
   return <span className="text-muted-foreground">{!sdk.installed ? 'Not installed' : sdk.latest ? `Up to date, ${agent === 'claude' ? 'SDK ' : ''}${sdk.installed}` : 'Could not check'}</span>
 }
 
-function UpdateButton({ sdk, agent }: { sdk: Sdk; agent: 'claude' | 'opencode' }) {
+function UpdateButton({ sdk, agent }: { sdk: Sdk; agent: Updatable }) {
   const qc = useQueryClient()
-  const name = agent === 'claude' ? 'Claude Code' : 'OpenCode'
+  const name = NAMES[agent]
   // A fresh server has neither agent yet: both install from here.
   const install = !sdk.installed
   const update = useMutation({
-    mutationFn: () => unwrap(agent === 'claude' ? api.api.status['claude-update'].$post() : api.api.status['opencode-update'].$post()),
+    mutationFn: () => unwrap(api.api.status[`${agent}-update`].$post()),
     onSuccess: () => {
-      toast.success(`${install ? 'Installing' : 'Updating'} ${name}. It takes a minute or two; running sessions keep their version until they restart.`)
+      toast.success(agent === 'browser'
+        ? `${install ? 'Downloading' : 'Updating'} the team browser. It takes a few minutes; if it's open, it switches over the next time it starts.`
+        : `${install ? 'Installing' : 'Updating'} ${name}. It takes a minute or two; running sessions keep their version until they restart.`)
       void qc.invalidateQueries({ queryKey: ['status'] })
     },
     onError: (e) => toast.error(e.message),

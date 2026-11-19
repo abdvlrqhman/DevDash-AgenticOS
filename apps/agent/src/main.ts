@@ -131,7 +131,7 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   // Another agent's subagents are in the transcript itself, nested under their Task step.
   'claude.subagent': (r) => (acp(r) ? { found: false, agentType: null, description: null, messages: [] } : claude.subagent(launchOf(r), str(r.toolUseId, 'toolUseId'))),
   'claude.task.stop': async (r) => (await claude.stopTask(str(r.id, 'id'), str(r.taskId, 'taskId')), { ok: true }),
-  'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile'), typeof r.model === 'string' ? r.model : undefined) : claude.commandsAndModels(str(r.profile, 'profile'))),
+  'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile'), typeof r.model === 'string' ? r.model : undefined, r.supervisor === true) : claude.commandsAndModels(str(r.profile, 'profile'))),
   'claude.title': (r) => (acp(r) ? harness : claude).title(launchOf(r)),
   'claude.rename': async (r) => (await (acp(r) ? harness : claude).rename(launchOf(r), str(r.title, 'title')), { ok: true }),
   'claude.profiles': async (r) => {

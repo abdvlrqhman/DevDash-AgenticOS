@@ -840,20 +840,21 @@ export function refreshT3() {
   for (const key of modelCache.keys()) if (key.startsWith('t3code:')) modelCache.delete(key)
 }
 /** Commands and models for a profile of an agent: its models from every provider the profile has connected. */
-export async function commandsAndModels(harness: string, profile: string, selected?: string) {
+export async function commandsAndModels(harness: string, profile: string, selected?: string, supervisor = false) {
   if (!PROFILE_RE.test(profile)) throw new Error('invalid profile')
   const agent = agentOf(harness)
-  const key = `${harness}:${profile}`
+  const forSupervisor = harness === 't3code' && supervisor
+  const key = `${harness}:${profile}${forSupervisor ? ':supervisor' : ''}`
   let hit = modelCache.get(key)
   if (!hit || Date.now() - hit.at > (harness === 't3code' ? 15_000 : 5 * 60_000)) {
-    const models = agent.models(profile)
+    const models = forSupervisor ? t3code.modelChoices(undefined, true) : agent.models(profile)
     hit = { at: Date.now(), models }
     modelCache.set(key, hit)
     void models.catch(() => { if (modelCache.get(key)?.models === models) modelCache.delete(key) })
   }
   let models = await hit.models
   if (harness === 't3code' && selected && /^[^/]+\/.+/.test(selected) && !models.some((m) => m.value === selected)) {
-    const matches = await t3code.modelChoices(t3code.selection(selected).model)
+    const matches = await t3code.modelChoices(t3code.selection(selected).model, forSupervisor)
     const exact = matches.find((m) => m.value === selected)
     if (exact) models = [...models, exact]
   }

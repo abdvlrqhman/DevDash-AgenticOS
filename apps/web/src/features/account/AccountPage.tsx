@@ -1,6 +1,7 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, LogOut } from 'lucide-react'
+import { ArrowLeft, Download, LogOut } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
 import { toast } from '@/lib/toast'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { useSignOut } from '@/components/app/shell'
@@ -17,6 +18,8 @@ import { NtfyPanel } from '../notifications/Ntfy'
 import { AvatarCropDialog } from './AvatarCrop'
 import { NotificationsPanel } from '../notifications/Notifications'
 import { GitHubConnection } from '../work/GitHub'
+import { voiceReturn } from '../voice/VoiceMode'
+import { VoiceSettings } from '../voice/VoiceSettings'
 
 /**
  * A settings group: what it is on the left (wide screens), its controls on a panel to the right; stacked on phones.
@@ -86,6 +89,13 @@ function Profile() {
   )
 }
 
+/** Back to the session or Hamasa that opened Voice settings, and the section scrolled into view when linked to. */
+function VoiceBack() {
+  const back = voiceReturn()
+  useEffect(() => { if (location.hash === '#voice') document.getElementById('voice')?.scrollIntoView({ block: 'start' }) }, [])
+  return back ? <Link to={back.path} className="mt-2 inline-flex items-center gap-1 text-foreground underline underline-offset-2"><ArrowLeft className="size-3.5" />Back to {back.label}</Link> : null
+}
+
 export function AccountPage() {
   const me = useQuery(meQuery).data!
   const signOut = useSignOut()
@@ -112,6 +122,9 @@ export function AccountPage() {
             <ServerPasswordForm />
           </Panel>
         )}
+        <div id="voice" className="scroll-mt-4"><Panel title="Voice" description={<>Talk to Hamasa and to your own sessions: speech recognition, the voice, your keys, languages and cost. <VoiceBack /></>}>
+          <VoiceSettings />
+        </Panel></div>
         <Panel title="Appearance">
           <ToggleGroup type="single" spacing={1} value={theme} onValueChange={(v) => v && setTheme(v as ThemePref)} aria-label="Appearance"
             className="w-full rounded-full bg-background p-1 sm:w-fit">
