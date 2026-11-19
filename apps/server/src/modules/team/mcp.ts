@@ -16,6 +16,7 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     if (!found) throw new AppError(403, 'not_a_role', 'These tools work only in a team role\'s own sessions.')
     return { ...found, args: c.args ?? {} }
   }
+  const slugOf = (a: Record<string, unknown>) => (typeof a.project === 'string' && a.project.trim() ? a.project : undefined)
   const text = (v: unknown, what: string) => {
     if (typeof v !== 'string' || !v.trim()) throw new AppError(400, 'bad_args', `Give the ${what}.`)
     return v
@@ -27,7 +28,8 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     const sessionId = ((params ?? {}) as Ctx).sessionId ?? null
     const found = team.roleOf(username, sessionId)
     if (found) return { role: found.r.name, project: found.p.slug }
-    return team.sessionAuthor(username, sessionId) ? { session: true } : null
+    // A member's session in a Team-on project, or their personal agent (in no project: it names one each time).
+    return team.sessionAuthor(username, sessionId) || team.personalAgent(username, sessionId) ? { session: true } : null
   })
   const messageInput = (a: Record<string, unknown>): MessageInput => {
     const kind = String(a.kind ?? (a.thread ? 'reply' : 'fyi'))
@@ -46,7 +48,7 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     const c = (params ?? {}) as Ctx
     const input = messageInput(c.args ?? {})
     const found = team.roleOf(username, c.sessionId ?? null)
-    return sent(found ? team.roleMessage(found.r.id, c.sessionId!, input) : team.sessionMessage(username, c.sessionId ?? '', input))
+    return sent(found ? team.roleMessage(found.r.id, c.sessionId!, input) : team.sessionMessage(username, c.sessionId ?? '', input, slugOf(c.args ?? {})))
   })
   // Managing roles and data sources: a person's own sessions only. A role is a member of the team, not its manager.
   const personSession = (username: string, params: unknown) => {
@@ -54,13 +56,17 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     if (team.roleOf(username, c.sessionId ?? null)) throw new AppError(403, 'role', 'Roles can\'t change the team\'s setup (roles, data sources). Suggest it to people in your report.')
     return { sessionId: c.sessionId ?? '', args: c.args ?? {} }
   }
-  agents.onRpc('mcp.team_roles', (username, params) => team.sessionRoles(username, personSession(username, params).sessionId))
+  agents.onRpc('mcp.team_roles', (username, params) => {
+    const c = personSession(username, params)
+    return team.sessionRoles(username, c.sessionId, slugOf(c.args))
+  })
   agents.onRpc('mcp.team_role_create', (username, params) => {
     const c = personSession(username, params)
     return team.sessionCreateRole(username, c.sessionId, {
       name: text(c.args.name, 'role name'), summary: typeof c.args.summary === 'string' ? c.args.summary : '',
       instructions: typeof c.args.instructions === 'string' ? c.args.instructions : undefined,
       model: typeof c.args.model === 'string' ? c.args.model : null, schedule: Array.isArray(c.args.schedule) ? c.args.schedule : undefined,
+      project: slugOf(c.args),
     })
   })
   agents.onRpc('mcp.team_role_update', (username, params) => {
@@ -93,7 +99,10 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     path: opt(a.path), baseUrl: opt(a.base_url), url: opt(a.url), secretName: opt(a.key_name),
     secretIn: a.key_in === 'query' || a.key_in === 'header' ? a.key_in : undefined,
   })
-  agents.onRpc('mcp.team_source_list', (username, params) => team.sessionSources(username, personSession(username, params).sessionId))
+  agents.onRpc('mcp.team_source_list', (username, params) => {
+    const c = personSession(username, params)
+    return team.sessionSources(username, c.sessionId, slugOf(c.args))
+  })
   agents.onRpc('mcp.team_source_add', (username, params) => {
     const c = personSession(username, params)
     const a = c.args
@@ -101,22 +110,22 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     return team.sessionAddSource(username, c.sessionId, {
       name: text(a.name, 'source name').trim().slice(0, 60), kind: a.kind as SourceKind, description: (opt(a.description) ?? '').slice(0, 500),
       config: sourceConfig(a), secret: opt(a.key) ?? null,
-    })
+    }, slugOf(a))
   })
   agents.onRpc('mcp.team_source_update', (username, params) => {
     const c = personSession(username, params)
     const a = c.args
     return team.sessionUpdateSource(username, c.sessionId, sourceRef(a), {
       name: opt(a.name)?.slice(0, 60), description: opt(a.description)?.slice(0, 500), config: sourceConfig(a), secret: opt(a.key) || undefined,
-    })
+    }, slugOf(a))
   })
   agents.onRpc('mcp.team_source_remove', (username, params) => {
     const c = personSession(username, params)
-    return team.sessionRemoveSource(username, c.sessionId, sourceRef(c.args))
+    return team.sessionRemoveSource(username, c.sessionId, sourceRef(c.args), slugOf(c.args))
   })
   agents.onRpc('mcp.team_source_test', (username, params) => {
     const c = personSession(username, params)
-    return team.sessionTestSource(username, c.sessionId, sourceRef(c.args))
+    return team.sessionTestSource(username, c.sessionId, sourceRef(c.args), slugOf(c.args))
   })
   // Full team management from a member's own session (same authority as the Team tab). `project` picks the project;
   // without it, the session's own. The service rejects a role's session and a project without Team on.
@@ -124,7 +133,6 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     const c = (params ?? {}) as Ctx
     return { sessionId: c.sessionId ?? '', args: c.args ?? {} }
   }
-  const slugOf = (a: Record<string, unknown>) => (typeof a.project === 'string' && a.project.trim() ? a.project : undefined)
   const threadId = (a: Record<string, unknown>) => {
     if (!Number.isInteger(a.id)) throw new AppError(400, 'bad_args', 'Give the thread id.')
     return a.id as number

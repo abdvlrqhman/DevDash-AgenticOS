@@ -137,6 +137,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     return { harness, profile: profileFor(u, harness), ...(harness === 'claude' ? { model: claudeModel } : {}) }
   }
 
+  const notTeam = () => new AppError(403, 'not_team', 'This session is not in a project with Team on. Name one in "project" (Team is turned on in a project\'s Team tab).')
   /** The project with Team on, and the member its roles run as. */
   function on(slug: string) {
     const p = projects.bySlug(slug)
@@ -1325,20 +1326,29 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       return readSource(x, what)
     },
 
-    /** Team-on projects' Claude sessions (not roles) can message roles; this says whether a session may, and as whom. */
-    sessionAuthor(username: string, sessionId: string | null) {
+    /**
+     * A member's own Claude session (not a role's) acting on a Team-on project: `slug`'s, else the session's own. Says
+     * whether it may, and as whom. Null when it may not.
+     */
+    sessionAuthor(username: string, sessionId: string | null, slug?: string) {
       if (!sessionId) return null
       const s = repo.session(sessionId)
       const owner = s && userById(s.owner_id)
-      if (!s?.project_id || !owner || owner.username !== username || !repo.project(s.project_id) || repo.roleBySession(sessionId)) return null
-      return { projectId: s.project_id, author: { kind: 'session' as const, sessionId, title: s.title, owner } }
+      if (!s || !owner || owner.username !== username || repo.roleBySession(sessionId)) return null
+      const projectId = slug?.trim() ? (db.prepare('select id from projects where slug = ?').get(slug.trim()) as { id: number } | undefined)?.id : s.project_id
+      if (!projectId || !repo.project(projectId)) return null
+      return { projectId, author: { kind: 'session' as const, sessionId, title: s.title, owner } }
+    },
+    /** The member's personal agent (Hamasa): in no project itself, it manages every project's team by name. */
+    personalAgent(username: string, sessionId: string | null) {
+      return !!sessionId && !!db.prepare("select 1 from claude_sessions s join users u on u.id = s.owner_id where s.id = ? and u.username = ? and s.origin_kind = 'assistant'").get(sessionId, username)
     },
     // ---- Managing roles from a person's own Claude session ("make us a Finance role"). Never from a role's session. ----
 
     /** The project's roles for a session, as Markdown, with what each one does and when it works. */
-    sessionRoles(username: string, sessionId: string) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    sessionRoles(username: string, sessionId: string, slug?: string) {
+      const who = this.sessionAuthor(username, sessionId, slug)
+      if (!who) throw notTeam()
       const t = repo.project(who.projectId)!
       const roles = repo.roles(who.projectId)
       if (!roles.length) return 'No roles yet. Create one with team_role_create.'
@@ -1350,9 +1360,9 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     },
 
     /** Creates a role as the session's owner (the same as on the Team tab). Without instructions, Generate writes them. */
-    async sessionCreateRole(username: string, sessionId: string, input: { name: string; summary?: string; instructions?: string; model?: string | null; schedule?: unknown[] }) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    async sessionCreateRole(username: string, sessionId: string, input: { name: string; summary?: string; instructions?: string; model?: string | null; schedule?: unknown[]; project?: string }) {
+      const who = this.sessionAuthor(username, sessionId, input.project)
+      if (!who) throw notTeam()
       const p = db.prepare('select slug, name from projects where id = ?').get(who.projectId) as { slug: string; name: string }
       if (repo.roles(who.projectId).some((r) => r.name.toLowerCase() === input.name.trim().toLowerCase())) {
         throw new AppError(409, 'taken', `There is already a role called ${input.name}. Change it with team_role_update.`)
@@ -1403,18 +1413,18 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     // ---- Data sources from a person's own Claude session ("connect our database for the team"). Never from a role's. ----
 
     /** The project's sources for a session: where each reads from and whether its key is set (never the key). */
-    sessionSources(username: string, sessionId: string) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    sessionSources(username: string, sessionId: string, slug?: string) {
+      const who = this.sessionAuthor(username, sessionId, slug)
+      if (!who) throw notTeam()
       const list = repo.sources(who.projectId)
       if (!list.length) return 'No data sources yet. Add one with team_source_add.'
       return list.map((x) => `- #${x.id} ${x.name} (${x.kind}): ${where(x)}${needsKey(x) ? '; NO KEY YET' : x.secret ? '; key set' : ''}${x.description ? `\n  ${x.description}` : ''}`).join('\n')
     },
 
     /** Adds a source as the session's owner (the same as on the Team tab), with or without its key. */
-    sessionAddSource(username: string, sessionId: string, input: SourceInput) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    sessionAddSource(username: string, sessionId: string, input: SourceInput, slug?: string) {
+      const who = this.sessionAuthor(username, sessionId, slug)
+      if (!who) throw notTeam()
       const p = db.prepare('select slug, name from projects where id = ?').get(who.projectId) as { slug: string; name: string }
       const owner = who.author.owner
       const id = this.addSource(owner, p.slug, input, { keyLater: true })
@@ -1424,9 +1434,9 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     },
 
     /** Changes a source from a person's session: its name, description, where it reads from, or its key. */
-    sessionUpdateSource(username: string, sessionId: string, ref: string | number, input: { name?: string; description?: string; config?: SourceConfig; secret?: string | null }) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    sessionUpdateSource(username: string, sessionId: string, ref: string | number, input: { name?: string; description?: string; config?: SourceConfig; secret?: string | null }, slug?: string) {
+      const who = this.sessionAuthor(username, sessionId, slug)
+      if (!who) throw notTeam()
       const x = sourceRef(who.projectId, ref)
       const name = input.name?.trim() || x.name
       if (name.toLowerCase() !== x.name.toLowerCase() && repo.sourceByName(who.projectId, name)) throw new AppError(409, 'taken', `There is already a source called ${name}.`)
@@ -1439,26 +1449,26 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       return [`Updated ${y.name}.`, needsKey(y) ? keyLater(y, who.author.owner.name) : ''].filter(Boolean).join(' ')
     },
 
-    sessionRemoveSource(username: string, sessionId: string, ref: string | number) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    sessionRemoveSource(username: string, sessionId: string, ref: string | number, slug?: string) {
+      const who = this.sessionAuthor(username, sessionId, slug)
+      if (!who) throw notTeam()
       const x = sourceRef(who.projectId, ref)
       this.removeSource(x.id)
       return `Removed ${x.name}. Roles no longer see it.`
     },
 
     /** A first look at a source, as a role would get it, to check it works. */
-    async sessionTestSource(username: string, sessionId: string, ref: string | number) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    async sessionTestSource(username: string, sessionId: string, ref: string | number, slug?: string) {
+      const who = this.sessionAuthor(username, sessionId, slug)
+      if (!who) throw notTeam()
       const x = sourceRef(who.projectId, ref)
       if (needsKey(x)) return keyLater(x, who.author.owner.name)
       return (await this.testSource(x.id)).preview
     },
 
-    sessionMessage(username: string, sessionId: string, input: MessageInput) {
-      const who = this.sessionAuthor(username, sessionId)
-      if (!who) throw new AppError(403, 'not_team', 'This session is not in a project with Team on.')
+    sessionMessage(username: string, sessionId: string, input: MessageInput, slug?: string) {
+      const who = this.sessionAuthor(username, sessionId, slug)
+      if (!who) throw notTeam()
       return message(who.projectId, who.author, input)
     },
 

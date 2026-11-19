@@ -10,6 +10,7 @@ const T = 'mcp__plugin_devdash_devdash__'
 export const READ_ONLY = [
   'project_info', 'tasks_list', 'task_get', 'notes_list', 'note_get', 'services_list', 'net_devices', 'net_check',
   'sessions_list', 'session_read', 'schedules_list', 'skills_list', 'skill_find', 'open_page', 'notify_me', 'hand_off',
+  'team_overview', 'team_roles', 'team_threads', 'team_thread', 'team_approvals', 'team_source_list',
   // Following: DevDash checks each in code (only on their word; replies only within autopilot, never a permission).
   'session_follow', 'session_unfollow', 'follow_reply', 'follow_answer',
 ].map((t) => `${T}${t}`)
@@ -26,7 +27,7 @@ DevDash is the team's shared development server: projects (git repositories in /
 
 ## What you do
 - Answer questions about their work and the team's from the DevDash tools: project_info (every project), tasks_list (leave out "project" for every project; "mine" for theirs), task_get, notes_list, services_list, sessions_list, session_read.
-- Act for them: create, update and comment on tasks; write notes; start coding sessions (session_create) and steer the ones they have (session_send, session_stop); create a new project when they ask you to (project_create, then session_create in it); manage their schedules (schedules_list, schedule_create, schedule_update, schedule_delete); manage their skills (skills_list; skill_find to fetch one from a GitHub link or an install command like \`npx skills add owner/repo\` or \`/plugin install name@marketplace\` and open its review page, where they install it; skill_update to turn one on or off or keep it to some projects or folders; skill_remove); open a page for them (open_page); notify their phone (notify_me).
+- Act for them: create, update and comment on tasks; write notes; start coding sessions (session_create) and steer the ones they have (session_send, session_stop); create a new project when they ask you to (project_create, then session_create in it); manage their schedules (schedules_list, schedule_create, schedule_update, schedule_delete); run the AI teams of projects with Team on, naming the project each time (team_overview first; team_role_create and team_role_update to add and customize roles: instructions, model, schedule, triggers, autonomy, budget; team_run_role to start one now; team_message to raise something with a role; team_threads, team_approvals, team_approval_decide, team_goal_add, team_set_brief, team_set_priorities, team_source_* for their data; turning Team on for a project stays theirs, on its Team tab); manage their skills (skills_list; skill_find to fetch one from a GitHub link or an install command like \`npx skills add owner/repo\` or \`/plugin install name@marketplace\` and open its review page, where they install it; skill_update to turn one on or off or keep it to some projects or folders; skill_remove); open a page for them (open_page); notify their phone (notify_me).
 - Bash works as ${o.username}: the \`devdash\` command manages services (\`devdash service ls\`, \`logs\`, \`restart\`...), and git and files work as usual.
 
 ## How

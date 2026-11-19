@@ -1,7 +1,7 @@
-// Team tools (optional feature). Listed only in a team role's own sessions: devdash.mjs asks
-// DevDash once, when the tool server starts, whether this session is a role.
+// Team tools (optional feature). Listed in a team role's own sessions, a member's sessions of a
+// project with Team on, and the member's personal agent: devdash.mjs asks DevDash once, when the tool server starts.
 const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false })
-const project = { type: 'string', description: "The project's short name. Omit to use this session's project." }
+const project = { type: 'string', description: "The project's short name (one with Team on). Omit to use this session's project; your personal agent, in no project, always names one." }
 
 export const TEAM_TOOLS = [
   {
@@ -57,6 +57,7 @@ const MESSAGE_TOOL = {
     evidence: { type: 'string', description: 'Numbers, files, links that show it. Required for a new thread.' },
     cc: { type: 'array', items: { type: 'string' }, description: 'Other roles to include, by name.' },
     ask: { type: 'string', description: 'When this needs a person: the one decision you need from them, in one line (with your recommendation). Sets the thread to wait for people, who see it first.' },
+    project,
   }, ['body']),
 }
 
@@ -121,12 +122,13 @@ const MANAGE = [
   {
     name: 'team_roles',
     description: 'The project\'s AI team members (roles): what each does, when it works, its model and autonomy.',
-    inputSchema: obj({}),
+    inputSchema: obj({ project }),
   },
   {
     name: 'team_role_create',
     description: 'Add an AI team member (role) to this project, only when the person asks for it. Without instructions, DevDash drafts them from the name, summary and project brief (Generate). It runs on the plan of whoever turned Team on.',
     inputSchema: obj({
+      project,
       name: { type: 'string', description: 'e.g. "Marketing – Social", "CTO"' },
       summary: { type: 'string', description: 'What it should do, in one line.' },
       instructions: { type: 'string', description: 'Markdown: mission, what it watches, delivers, measures, may do alone, must ask first, works with. Omit to generate.' },
@@ -155,12 +157,13 @@ const MANAGE = [
   {
     name: 'team_source_list',
     description: 'The project\'s data sources for the roles (databases, APIs, pages): where each reads from and whether its key is set. Keys are never shown.',
-    inputSchema: obj({}),
+    inputSchema: obj({ project }),
   },
   {
     name: 'team_source_add',
     description: 'Connect a read-only data source for the roles, when the person asks. kind "postgres": a database (key = connection string, ideally a read-only user). "sqlite": a database file on this server (path). "http": an API (base_url; roles read only under it; key_in + key_name say where the key goes). "page": a public page to watch (url).',
     inputSchema: obj({
+      project,
       name: { type: 'string', description: 'Short, e.g. "App database", "YouTube".' },
       kind: { type: 'string', enum: ['postgres', 'sqlite', 'http', 'page'] },
       description: { type: 'string', description: 'What is in it, so roles know when to look (e.g. "sign-ups, shops, orders; no personal data").' },
@@ -176,6 +179,7 @@ const MANAGE = [
     name: 'team_source_update',
     description: 'Change a data source when the person asks: its name, description, where it reads from, or its key (same fields as team_source_add).',
     inputSchema: obj({
+      project,
       source: { type: ['string', 'integer'], description: 'Its name or #id (see team_source_list).' },
       name: { type: 'string' }, description: { type: 'string' }, path: { type: 'string' }, base_url: { type: 'string' },
       key_in: { type: 'string', enum: ['header', 'query'] }, key_name: { type: 'string' }, url: { type: 'string' }, key: { type: 'string' },
@@ -184,12 +188,12 @@ const MANAGE = [
   {
     name: 'team_source_test',
     description: 'A first look at a data source, as a role would get it, to check it works.',
-    inputSchema: obj({ source: { type: ['string', 'integer'] } }, ['source']),
+    inputSchema: obj({ project, source: { type: ['string', 'integer'] } }, ['source']),
   },
   {
     name: 'team_source_remove',
     description: 'Remove a data source, only when the person asks. Roles stop seeing it.',
-    inputSchema: obj({ source: { type: ['string', 'integer'] } }, ['source']),
+    inputSchema: obj({ project, source: { type: ['string', 'integer'] } }, ['source']),
   },
 ]
 

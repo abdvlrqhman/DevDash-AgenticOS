@@ -391,6 +391,30 @@ test('a person\'s Claude session can create and change roles when asked; a role\
   assert.throws(() => team.sessionRoles('yara', shiftSession), /not in a project with Team on/)
 })
 
+test("the personal agent, in no project, gets the team tools and runs any Team-on project's team by name", async (t) => {
+  const { team, claude, yara, db } = setup()
+  t.after(() => team.stop())
+  team.enable(yara, 'shop')
+  const s = await claude.create(yara, { prompt: 'Hi', images: [], cwd: '/home/yara', profile: 'default', model: null, effort: null, permissionMode: 'default', mode: 'chat' })
+  const plain = s.id
+  db.prepare('update claude_sessions set project_id = null where id = ?').run(plain) // the fixture puts every folder in shop
+  assert.equal(team.personalAgent('yara', plain), false, 'a session outside projects gets no team tools')
+  assert.equal(team.sessionAuthor('yara', plain), null)
+  db.prepare("update claude_sessions set origin_kind = 'assistant', listed = 0 where id = ?").run(plain)
+  assert.equal(team.personalAgent('yara', plain), true)
+  assert.equal(team.personalAgent('omar', plain), false, "someone else's agent")
+
+  assert.throws(() => team.sessionRoles('yara', plain), /Name one in "project"/)
+  assert.match(await team.sessionCreateRole('yara', plain, { name: 'Growth', summary: 'Users and signups', instructions: '## Mission\n- Grow', project: 'shop' }), /Created #\d+ Growth/)
+  assert.match(team.sessionRoles('yara', plain, 'shop'), /Growth: Users and signups/)
+  team.sessionUpdateRole('yara', plain, { role: 'growth', project: 'shop', model: 'haiku', autonomy: 'operator' })
+  const g = team.overview('shop').roles.find((r) => r.name === 'Growth')!
+  assert.deepEqual([g.model, g.autonomy], ['haiku', 'operator'])
+  assert.match(String(await team.sessionRunShift('yara', plain, 'shop', 'growth')), /Growth/)
+  const msg = team.sessionMessage('yara', plain, { to: 'growth', title: 'Signups dipped', kind: 'fyi', body: 'Down 20% this week.', evidence: 'dashboard' }, 'shop')
+  assert.equal(team.thread(msg.thread).thread.title, 'Signups dipped')
+})
+
 test('a person\'s Claude session connects data sources (the key can come later, from the person); a role\'s can\'t', async (t) => {
   const { team, claude, notified, yara, replies } = setup()
   t.after(() => team.stop())
