@@ -55,7 +55,7 @@ const CLOSED_LINE: Record<CloseAs, string> = {
 
 /** Who writes in a thread: a person, a role, or any Claude session in the project. */
 export type Author =
-  | { kind: 'person'; user: User }
+  | { kind: 'person'; user: User; via?: string } // via: their personal agent (Hamasa), writing for them
   | { kind: 'role'; roleId: number; sessionId?: string }
   | { kind: 'session'; sessionId: string; title: string; owner: User }
 export type MessageInput = { thread?: number; to?: string; cc?: string[]; title?: string; kind: MessageKind; body: string; evidence?: string; ask?: string }
@@ -460,7 +460,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     return roles.find((r) => r.name.toLowerCase() === n) ?? roles.find((r) => r.name.toLowerCase().startsWith(n)) ?? roles.find((r) => r.name.toLowerCase().includes(n))
   }
   const authorLabel = (a: Author) =>
-    a.kind === 'person' ? a.user.name : a.kind === 'role' ? repo.role(a.roleId)!.name : `Claude session "${clipText(a.title, 60)}" (${a.owner.name})`
+    a.kind === 'person' ? (a.via ? `${a.user.name} (via ${a.via})` : a.user.name) : a.kind === 'role' ? repo.role(a.roleId)!.name : `Claude session "${clipText(a.title, 60)}" (${a.owner.name})`
 
   /** Posts to a thread (or opens one): routes it to the right role, wakes whoever must act, and keeps roles from looping. */
   function message(projectId: number, a: Author, input: MessageInput) {
@@ -1467,8 +1467,13 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     },
 
     sessionMessage(username: string, sessionId: string, input: MessageInput, slug?: string) {
-      const who = this.sessionAuthor(username, sessionId, slug)
+      // A reply finds its project by the thread, so the personal agent (in no project) needn't name it.
+      const inThread = !slug && input.thread ? repo.thread(input.thread) : undefined
+      const where = slug ?? (inThread ? (db.prepare('select slug from projects where id = ?').get(inThread.project_id) as { slug: string } | undefined)?.slug : undefined)
+      const who = this.sessionAuthor(username, sessionId, where)
       if (!who) throw notTeam()
+      // The personal agent writes as the member, like them on the Team tab: it wakes the owner and can answer an ask.
+      if (this.personalAgent(username, sessionId)) return message(who.projectId, { kind: 'person', user: who.author.owner, via: 'Hamasa' }, input)
       return message(who.projectId, who.author, input)
     },
 
@@ -1517,12 +1522,17 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     },
     /** A member lists the project's threads (open, waiting, closed or all), shaped short. */
     sessionThreads(username: string, sessionId: string, slug: string | undefined, status: 'open' | 'waiting' | 'closed' | 'all' = 'all') {
-      const r = this.threads(this.sessionActor(username, sessionId, slug).slug, { status })
-      return {
-        counts: r.counts,
-        threads: r.threads.map((t) => ({ id: t.id, title: t.title, status: t.status, needsPeople: t.needsPeople, priority: t.priority, ask: t.ask, owner: t.owner?.name ?? null, messages: t.messages, lastAt: t.lastAt })),
+      const shape = (project: string) => {
+        const r = this.threads(project, { status })
+        return {
+          project, counts: r.counts,
+          threads: r.threads.map((t) => ({ id: t.id, title: t.title, status: t.status, needsPeople: t.needsPeople, priority: t.priority, ask: t.ask, owner: t.owner?.name ?? null, messages: t.messages, lastAt: t.lastAt })),
+        }
       }
+      return shape(this.sessionActor(username, sessionId, slug).slug)
     },
+    /** The projects with Team on (not archived), by short name. */
+    teamProjects: () => repo.projects().map((x) => x.slug),
     /** A member reads one thread, as the web does. */
     sessionThread(username: string, sessionId: string, id: number) {
       this.sessionMember(username, sessionId)

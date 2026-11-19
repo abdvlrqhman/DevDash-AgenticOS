@@ -413,6 +413,22 @@ test("the personal agent, in no project, gets the team tools and runs any Team-o
   assert.match(String(await team.sessionRunShift('yara', plain, 'shop', 'growth')), /Growth/)
   const msg = team.sessionMessage('yara', plain, { to: 'growth', title: 'Signups dipped', kind: 'fyi', body: 'Down 20% this week.', evidence: 'dashboard' }, 'shop')
   assert.equal(team.thread(msg.thread).thread.title, 'Signups dipped')
+  assert.deepEqual(team.teamProjects(), ['shop'], 'its inbox spans every Team-on project')
+
+  // Like a member on the Team tab: a role asks, it answers by thread alone (no project), as the person, via Hamasa.
+  await team.sessionCreateRole('yara', plain, { name: 'Support', summary: 'Users', instructions: '## Mission\n- Help', project: 'shop' })
+  const sup = team.overview('shop').roles.find((r) => r.name === 'Support')! // idle: Growth is mid-shift, so busy
+  const open = team.sessionMessage('yara', plain, { to: 'support', title: 'Refund asks', kind: 'fyi', body: '3 today.', evidence: 'inbox' }, 'shop')
+  const asked = team.roleMessage(sup.id, 'x', { thread: open.thread, kind: 'question', body: 'Refund all three?', ask: 'Refund all three orders?' })
+  assert.equal(team.thread(asked.thread).thread.needsPeople, true)
+  const shifts = team.role(sup.id).shifts.length
+  team.sessionMessage('yara', plain, { thread: open.thread, kind: 'reply', body: 'Yes, refund them.' })
+  const th = team.thread(open.thread)
+  assert.equal(th.thread.needsPeople, false, 'it answers the ask, as the person would')
+  assert.equal(th.thread.ask, null)
+  assert.deepEqual([th.messages.at(-1)!.author, th.messages.at(-1)!.person], ['Yara (via Hamasa)', true])
+  await new Promise((ok) => setTimeout(ok, 50)) // the shift starts in the background
+  assert.ok(team.role(sup.id).shifts.length > shifts, 'it wakes the role that owns the thread')
 })
 
 test('a person\'s Claude session connects data sources (the key can come later, from the person); a role\'s can\'t', async (t) => {

@@ -47,7 +47,7 @@ export const TEAM_TOOLS = [
 // Any Claude session in a project with Team on can raise something with a role; roles also use it to talk to each other.
 const MESSAGE_TOOL = {
   name: 'team_message',
-  description: 'Tell a team role (an AI team member of this project, e.g. "Marketing", "CTO") about something it should know or act on: money, users, metrics, a broken release. Opens a thread (to + title) or adds to one (thread). Give the numbers and links as evidence. kind: "fyi", "question", "request", or "alert" (only when something is wrong and can\'t wait: it wakes the role and people\'s phones). Not for code details.',
+  description: 'Tell a team role (an AI team member of this project, e.g. "Marketing", "CTO") about something it should know or act on: money, users, metrics, a broken release. Opens a thread (to + title) or adds to one (thread: the project comes from it). Your personal agent writes as the person it works for: it wakes the owner of the thread and can answer its ask. Give the numbers and links as evidence. kind: "fyi", "question", "request", or "alert" (only when something is wrong and can\'t wait: it wakes the role and people\'s phones). Not for code details.',
   inputSchema: obj({
     to: { type: 'string', description: 'The role that should own it, by name. Omit to give it to the team lead.' },
     title: { type: 'string', description: 'For a new thread: the issue in a few words.' },
@@ -217,7 +217,7 @@ const MEMBER = [
   },
   {
     name: 'team_threads',
-    description: 'The project\'s threads between the roles and people: open, waiting for people, closed, or all (default). Read one with team_thread.',
+    description: 'The project\'s threads between the roles and people: open, waiting for people, closed, or all (default). Read one with team_thread. Your personal agent, without project, gets every Team-on project\'s threads at once.',
     inputSchema: obj({ project, status: { type: 'string', enum: ['open', 'waiting', 'closed', 'all'] } }),
   },
   {
