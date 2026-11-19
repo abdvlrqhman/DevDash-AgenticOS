@@ -113,7 +113,7 @@ function T3CodeSection({ agent, refresh, refreshing, error }: { agent: Agent | u
         <Button size="sm" variant="outline" disabled={refreshing} onClick={refresh}><RotateCw className={refreshing ? 'animate-spin' : ''} />Refresh connection</Button>
       </div>
       <ErrorAlert error={error} />
-      <p className="text-sm text-pretty text-muted-foreground">Connect only a T3 Code instance running as your own Linux account. This connection supports text Chat with explicit Full access; DevDash approval prompts, Plan mode, guests and autopilot are unavailable.</p>
+      <p className="text-sm text-pretty text-muted-foreground">Connect a T3 Code instance running as your Linux account. Chat and Hamasa use Full access. You can include your T3 chats in Autopilot from its settings.</p>
     </Group>
   )
 }

@@ -17,11 +17,12 @@ import type { PermissionResult } from './sdk.ts'
 import { hasSession, tmux } from './tmux.ts'
 import * as opencode from './opencode.ts'
 import * as t3code from './t3code.ts'
+import { supervisorText } from './t3-supervisor.ts'
 import { agentCapabilities } from '../../../packages/agents/capabilities.ts'
 import { fileURLToPath } from 'node:url'
 import { sessionSkills } from './skill-scope.ts'
 
-type ModelChoice = { value: string; displayName: string; description?: string; group?: string; supportedEffortLevels?: string[]; resolvedModel?: string }
+type ModelChoice = { value: string; displayName: string; description?: string; group?: string; supportedEffortLevels?: string[]; resolvedModel?: string; supportsSupervisor?: boolean }
 
 /** What DevDash needs to know about one ACP agent. */
 type Agent = {
@@ -89,7 +90,7 @@ type Chat = {
   /** A child session's (subagent's) own transcriber, nested under the Task step that started it. */
   children: Map<string, Transcriber>
   status: Status; pending: Map<string, Pending>; guest: Guest | null; lastActive: number
-  queue: { content: unknown[]; uuid: string; guest: boolean }[]; turn: boolean; lastTaken: number
+  queue: { content: unknown[]; uuid: string; guest: boolean; workflow?: { kind: 'hamasa' | 'autopilot'; instructions?: string | null } }[]; turn: boolean; lastTaken: number
   /** The session's total cost so far (the agent reports it), its context, and its config options (model, mode). */
   cost: number | null; model: string | null; config: Config[]; fresh: boolean; mcpNames: string[]
   replay: Record<string, unknown>[] | null
@@ -560,6 +561,27 @@ async function question(c: Chat, p: Record<string, unknown>) {
   return { action: 'accept', content: formAnswer(qs, answers, schema) }
 }
 
+// The T3 MCP launch API has no per-thread tool registration. The provider can use its shell to call
+// this turn's private wrapper. The DevDash MCP catalog and its server-side session checks authorize each call.
+function workflowTools(l: Launch, workflow: NonNullable<Chat['queue'][number]['workflow']>) {
+  const socket = process.env.DEVDASH_AGENT_SOCKET
+  if (!socket) throw new Error('DevDash workflow tools need the member agent socket.')
+  const path = join(homedir(), '.cache', 'devdash', 'sessions', l.id, `tools-${randomUUID()}`)
+  const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'"
+  const script = [
+    '#!/bin/sh', 'set -eu', `cd ${quote(l.cwd)}`,
+    `export DEVDASH_AGENT_SOCKET=${quote(socket)} DEVDASH_SESSION_ID=${quote(l.id)}`,
+    `exec ${quote(process.execPath)} ${quote(join(PLUGIN_DIR, 'mcp/devdash.mjs'))} --workflow ${workflow.kind} "$@"`, '',
+  ].join('\n')
+  writeFileSync(path, script, { mode: 0o700, flag: 'wx' })
+  const command = quote(path)
+  const context = [
+    workflow.instructions,
+    `Use your shell to access the following DevDash tools for this turn. Run ${command} list to see their names. Run ${command} describe NAME for its parameters. Run ${command} call NAME with a JSON object on standard input, for example: printf '%s' '{}' | ${command} call ${workflow.kind === 'hamasa' ? 'sessions_list' : 'autopilot_rules'}. Use this command for DevDash actions named in the instructions.`,
+  ].filter(Boolean).join('\n\n')
+  return { path, context }
+}
+
 async function runTurns(c: Chat) {
   if (c.turn) return
   c.turn = true
@@ -569,9 +591,11 @@ async function runTurns(c: Chat) {
       c.lastTaken = Date.now()
       setStatus(c, c.launch.id, 'working')
       const started = Date.now()
+      let helper: ReturnType<typeof workflowTools> | undefined
       try {
+        if (next.workflow) helper = workflowTools(c.launch, next.workflow)
         const prompt = next.guest ? notACommand(toPrompt(next.content)) : toPrompt(next.content)
-        const r = await c.rpc.request<{ stopReason: string; usage?: Usage }>('session/prompt', { sessionId: c.sessionId, prompt })
+        const r = await c.rpc.request<{ stopReason: string; usage?: Usage }>('session/prompt', { sessionId: c.sessionId, prompt, ...(helper && { workflowContext: helper.context }) })
         for (const t of c.children.values()) t.flush()
         c.t.end({ stopReason: r.stopReason, durationMs: Date.now() - started, costUsd: c.cost, usage: r.usage, fresh: c.fresh })
       } catch (err) {
@@ -579,7 +603,7 @@ async function runTurns(c: Chat) {
         const msg = (err as Error).message
         const auth = /auth/i.test(msg) ? ` Connect the model's provider on the Agent setup page.` : ''
         c.t.end({ stopReason: 'error', durationMs: Date.now() - started, costUsd: c.cost, error: `${msg}${auth}`.slice(0, 500), fresh: c.fresh })
-      }
+      } finally { if (helper) rmSync(helper.path, { force: true }) }
       c.children.clear()
     }
   } finally {
@@ -617,7 +641,7 @@ function serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
   return next
 }
 
-export const send = (l: Launch, content: unknown[], uuid: string, guest: Guest | null = null) => serial(l.id, async () => {
+export const send = (l: Launch, content: unknown[], uuid: string, guest: Guest | null = null, t3Autopilot = false) => serial(l.id, async () => {
   if (l.harness === 't3code' && guest) throw new Error('T3 Code guest turns are not supported. Only the owner or a teammate with full access can send.')
   if (l.harness === 't3code' && content.some((b) => (b as { type?: string }).type !== 'text')) throw new Error('This T3 Code connection currently supports text messages only.')
   if (await hasSession(cliSession(l.id))) throw new Error('This session is open in the CLI. Switch to Chat to send from here.')
@@ -628,7 +652,12 @@ export const send = (l: Launch, content: unknown[], uuid: string, guest: Guest |
   // A command is kept as Claude Code keeps one, so the conversation shows it as a command, not as words to the model.
   const command = guest ? null : commandText(content, c.commands)
   keep(l.id, [{ type: 'user', uuid, parent_tool_use_id: null, message: { role: 'user', content: command ?? content } }])
-  c.queue.push({ content, uuid, guest: !!guest })
+  let workflow: Chat['queue'][number]['workflow']
+  if (l.harness === 't3code' && !guest) {
+    if (l.originKind === 'assistant') workflow = { kind: 'hamasa', instructions: l.instructions }
+    else if (t3Autopilot) workflow = { kind: 'autopilot' }
+  }
+  c.queue.push({ content, uuid, guest: !!guest, workflow })
   c.lastActive = Date.now()
   setStatus(c, l.id, 'working')
   void runTurns(c)
@@ -854,10 +883,14 @@ export async function agents() {
  * One answer to one prompt, for small jobs DevDash does with an agent (a digest, drafted instructions): every tool
  * denied, no MCP, and the session it needed deleted afterwards so it never shows in the member's own lists.
  */
-export async function complete(harness: string, profile: string, prompt: string, o: { model?: string; system?: string } = {}) {
+export async function complete(harness: string, profile: string, prompt: string, o: { model?: string; system?: string; effort?: string } = {}) {
   if (!PROFILE_RE.test(profile)) throw new Error('invalid profile')
   const agent = agentOf(harness)
-  if (harness === 't3code') throw new Error('T3 Code does not support tool-free background completions through this connection.')
+  if (harness === 't3code') {
+    if (profile !== 'default' || !o.model) throw new Error('Choose a T3 Code supervisor model from your connected account.')
+    const { bin, ref } = await t3code.supervisorTarget(o.model, o.effort)
+    return supervisorText(bin, ref, [o.system, prompt].filter(Boolean).join('\n\n'))
+  }
   const dir = join(homedir(), '.cache', 'devdash', 'complete')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const rulesFile = join(dir, `${randomUUID()}.md`)

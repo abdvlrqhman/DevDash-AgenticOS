@@ -683,14 +683,14 @@ test('T3 Code only supports explicit Full access and cannot silently persist app
 })
 
 
-test('T3 Code refuses stored unsupported connections, tool policies and tool-free completion requests', async () => {
+test('T3 Code refuses stored unsupported connections, tool policies and unspecified supervisor models', async () => {
   const { claude, db, sent, ann } = setup()
   db.prepare("update claude_sessions set harness = 't3code', drive = 0, tool_policy = ? where id = 's1'").run(JSON.stringify({ tools: ['Read'] }))
   await assert.rejects(claude.send(ann, 's1', 'hi', []), /cannot enforce DevDash tool policies/)
   db.prepare("update claude_sessions set tool_policy = null, reach_tailnet = 1 where id = 's1'").run()
   await assert.rejects(claude.send(ann, 's1', 'hi', []), /manages its own connections/)
   assert.throws(() => claude.configure('s1', { title: 'Changed', toolPolicy: { tools: ['Read'] } }), /cannot enforce DevDash tool policies/)
-  await assert.rejects(claude.complete('ann', 'answer safely', { harness: 't3code' }), /Tool-free background completions are unavailable/)
+  await assert.rejects(claude.complete('ann', 'answer safely', { harness: 't3code' }), /Choose a T3 Code supervisor model/)
   assert.equal(sent.length, 0)
   assert.equal((db.prepare("select title from claude_sessions where id = 's1'").get() as { title: string }).title, 'Fix login')
 })
@@ -713,6 +713,15 @@ test('T3 Code sharing permits watching or named full access and rejects guest se
   assert.equal((await claude.get(bob, 's1')).canSend, true)
   claude.setSharing(ann, 's1', { audience: 'everyone' })
   assert.equal((await claude.get(bob, 's1')).canSend, false, 'whole-team sharing removes named full access')
+})
+
+test('T3 Hamasa conversations stay owner-only through both sharing APIs', async () => {
+  const { claude, db, ann, bob } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', origin_kind = 'assistant', shared = 0 where id = 's1'").run()
+  assert.throws(() => claude.setSharing(ann, 's1', { audience: 'people', people: [{ id: bob.id, canSend: true, full: true }] }), /private/)
+  await assert.rejects(claude.update(ann, 's1', { shared: true }), /private/)
+  await assert.rejects(claude.get(bob, 's1'), /private/)
+  await assert.rejects(claude.send(bob, 's1', 'List my tasks', []), /private/)
 })
 
 test('T3 Code project sharing defaults become watch-only and explicit guest sharing is refused', async () => {

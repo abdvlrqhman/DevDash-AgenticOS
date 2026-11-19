@@ -9,6 +9,7 @@ export type ModelInfo = {
   /** The model ID a row stands for ('opus' → 'claude-opus-5-5'); 'default' resolves too. */
   resolvedModel?: string
   supportedEffortLevels?: string[]
+  supportsSupervisor?: boolean
   /** The heading it goes under when it isn't a Claude family: another agent's provider (OpenCode's "anthropic", "openrouter"). */
   group?: string
 }

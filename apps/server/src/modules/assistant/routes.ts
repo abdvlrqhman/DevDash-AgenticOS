@@ -5,10 +5,10 @@ import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
 import { agentCapabilities, HARNESSES, PERMISSION_MODES } from '../claude/service.ts'
 import type { AssistantService } from './service.ts'
 
-const Setup = z.object({ harness: z.enum(HARNESSES.filter((h) => agentCapabilities(h).toolPolicies)), profile: z.string().max(21).default('default'), tz: z.string().max(64).optional() })
+const Setup = z.object({ harness: z.enum(HARNESSES.filter((h) => agentCapabilities(h).assistant)), profile: z.string().max(21).default('default'), tz: z.string().max(64).optional(), fullAccess: z.boolean().optional() })
 const Settings = z.object({
   model: z.string().max(160).nullable().optional(),
-  effort: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,39}$/i).nullable().optional(),
+  effort: z.string().min(1).max(160).nullable().optional(),
   permissionMode: z.enum(PERMISSION_MODES).optional(),
   fastMode: z.boolean().optional(),
   reachTailnet: z.boolean().optional(),

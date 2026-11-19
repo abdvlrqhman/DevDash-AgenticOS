@@ -94,6 +94,16 @@ type MemberRequest = { method: string; headers: Record<string, string>; body?: s
 export async function memberFetch(raw: string, init: MemberRequest): Promise<Response> {
   const url = new URL(raw)
   if (url.search || url.hash || !(url.pathname === '/mcp' || url.pathname.startsWith('/oauth/mcp/'))) throw new Error('Unsupported local T3 Code endpoint.')
+  return ownedFetch(url, init)
+}
+
+/** Only the stateless text and model catalog operations of a locally spawned OpenCode server. */
+export function openCodeMemberFetch(url: URL, init: MemberRequest): Promise<Response> {
+  if (!['/api/experimental/generate/text', '/api/model'].includes(url.pathname) || url.search || url.hash) throw new Error('Unsupported supervisor operation.')
+  return ownedFetch(url, init)
+}
+
+async function ownedFetch(url: URL, init: MemberRequest): Promise<Response> {
   const endpoint = new URL('/mcp', url).href
   await assertMemberEndpoint(endpoint)
   if (init.signal?.aborted) throw init.signal.reason

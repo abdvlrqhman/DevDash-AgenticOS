@@ -11,6 +11,7 @@ export type AgentCapabilities = {
   guests: boolean
   toolPolicies: boolean
   completions: boolean
+  assistant: boolean
   autopilot: boolean
   devdashConnections: boolean
   automaticResume: boolean
@@ -23,7 +24,7 @@ export type AgentCapabilities = {
   sessionModes: readonly PermissionMode[]
 }
 const local = {
-  profiles: true, terminal: true, attachments: true, guests: true, toolPolicies: true, completions: true, autopilot: true,
+  profiles: true, terminal: true, attachments: true, guests: true, toolPolicies: true, completions: true, assistant: true, autopilot: true,
   devdashConnections: true, automaticResume: true, mutablePermissions: true, atomicSelection: false, defaultModelSwitch: true,
   acceptedModes: ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'],
 } as const
@@ -32,7 +33,7 @@ export const AGENT_CAPABILITIES: Record<Harness, AgentCapabilities> = {
   opencode: { ...local, label: 'OpenCode', name: 'OpenCode', sessionModes: ['bypassPermissions', 'acceptEdits', 'plan', 'default'] },
   t3code: {
     label: 'T3 Code', name: 'T3 Code', profiles: false, terminal: false, attachments: false, guests: false,
-    toolPolicies: false, completions: false, autopilot: false, devdashConnections: false, automaticResume: false, mutablePermissions: false,
+    toolPolicies: false, completions: true, assistant: true, autopilot: true, devdashConnections: false, automaticResume: false, mutablePermissions: false,
     atomicSelection: true, defaultModelSwitch: false,
     // The MCP bridge cannot enforce DevDash approval decisions. It may only execute an explicit Full access session.
     acceptedModes: ['bypassPermissions'], sessionModes: ['bypassPermissions'],

@@ -4,11 +4,11 @@ import { localParts } from '../../core/schedule.ts'
 
 export type Settings = {
   quietMin: number; nightCap: number; maxNudges: number; tz: string; pingAt: string; approvals: boolean; promptWaitMin: number
-  svHarness: string; svProfile: string; svModel: string; svDailyCap: number
+  t3Sessions: boolean; svHarness: string; svProfile: string; svModel: string; svEffort: string | null; svDailyCap: number
 }
 export const DEFAULTS: Settings = {
   quietMin: 20, nightCap: 20, maxNudges: 3, tz: 'Europe/Berlin', pingAt: '09:00', approvals: false, promptWaitMin: 2,
-  svHarness: 'claude', svProfile: 'default', svModel: 'sonnet', svDailyCap: 100,
+  t3Sessions: false, svHarness: 'claude', svProfile: 'default', svModel: 'sonnet', svEffort: null, svDailyCap: 100,
 }
 
 /** One of the member's sessions as the sweep sees it. */

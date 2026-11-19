@@ -174,8 +174,8 @@ require a separate local T3 instance and private data directory owned by that sa
   Google, OpenRouter, GitHub Copilot, local models and more. Pick it per session; team roles pick theirs too. DevDash
   drives Claude Code through its Agent SDK and OpenCode over the [Agent Client Protocol](https://agentclientprotocol.com),
   so more ACP agents can follow.
-- **T3 Code (optional).** Connect text Chat sessions to the member’s T3 Code providers and models. Only explicit
-  Full access sessions are supported; Ask, Plan, guests and restricted roles are unavailable. See
+- **T3 Code (optional).** Use the member’s T3 models and thinking levels in Chat and Hamasa. Members can also
+  enroll their full-access T3 chats in Autopilot and select an eligible model for supervisor decisions. See
   [connection setup and supported features](docs/t3-code.md).
 - **Two ways to work.** A chat view with tool steps, diffs, subagents, to-do lists, permission prompts, questions and
   file links that open in a viewer, or the agent's own terminal app (the Claude Code CLI, OpenCode's TUI). Switch a

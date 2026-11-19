@@ -23,7 +23,7 @@ import { AGENT_NAME, pageTag, panelCoversPage, setAssistantOpen, showingSession,
 type State = Awaited<ReturnType<typeof assistantQuery.queryFn & {}>>
 type Schedule = State['schedules'][number]
 type View = 'chat' | 'schedules' | 'settings'
-type AgentInfo = { harness: string; installed: boolean; profiles: { name: string }[] }
+type AgentInfo = { harness: string; installed: boolean; profiles: { name: string; providers?: string[] }[] }
 
 /** The heading of the page the person is on (not the panel's own), for the agent's sense of "this". */
 const pageHeading = () => [...document.querySelectorAll('h1')].find((h) => !h.closest('[data-assistant]'))?.textContent?.trim() || document.title
@@ -117,7 +117,7 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
       <SessionView key={id} id={id} embedded={{
         header,
         name: AGENT_NAME,
-        empty: (send) => <Starters send={send} />,
+        empty: (send) => <Starters send={send} fullAccess={agent.permissionMode === 'bypassPermissions'} />,
         prefix: () => pageTag(`${location.pathname}${location.search}`, pageHeading()),
       }} />
     </div>
@@ -158,12 +158,12 @@ const STARTERS = [
 ]
 
 /** Before the first message: what the agent can do (in a sentence) and a few ways to start. */
-function Starters({ send }: { send: (text: string) => void }) {
+function Starters({ send, fullAccess }: { send: (text: string) => void; fullAccess: boolean }) {
   return (
     <div className="flex flex-col gap-4 py-6">
       <p className="text-sm text-pretty text-muted-foreground">
         {AGENT_NAME} is your own agent across every project you can see. It answers from tasks, notes, sessions and services, starts and steers sessions for you,
-        and runs schedules. It asks before it changes anything.
+        and runs schedules. {fullAccess ? 'Full access lets it act with your Linux account’s permissions.' : 'Your permission mode controls which changes need approval.'}
       </p>
       <div className="flex flex-col gap-1.5">
         {STARTERS.map((s) => (
@@ -187,13 +187,16 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
   const [profile, setProfile] = useState(current?.profile ?? 'default')
   const picked = harness ?? harnessOf(setup.data?.defaults)
   useEffect(() => { if (!current && setup.data && harness === null) setProfile(setup.data.defaults.profile) }, [current, setup.data, harness])
-  const installed = (h: Harness) => h === 'claude' || !!agents?.find((a) => a.harness === h)?.installed
+  const installed = (h: Harness) => {
+    const info = agents?.find((a) => a.harness === h)
+    return h === 'claude' || (!!info?.installed && (h !== 't3code' || info.profiles.some((p) => p.providers?.length)))
+  }
   const profiles = picked === 'claude'
     ? ((setup.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? [])
     : (agents?.find((a) => a.harness === picked)?.profiles ?? []).map((p) => ({ name: p.name, loggedIn: true }))
   const chosen = profiles.find((p) => p.name === profile) ? profile : (profiles[0]?.name ?? 'default')
   const save = useMutation({
-    mutationFn: () => unwrap(api.api.assistant.$put({ json: { harness: picked, profile: chosen, tz: Intl.DateTimeFormat().resolvedOptions().timeZone } })),
+    mutationFn: () => unwrap(api.api.assistant.$put({ json: { harness: picked, profile: chosen, ...(picked === 't3code' && { fullAccess: true }), tz: Intl.DateTimeFormat().resolvedOptions().timeZone } })),
     onSuccess: (r) => { qc.setQueryData(assistantQuery.queryKey, r); onDone() },
   })
   const restarts = !!current && (current.harness !== picked || current.profile !== chosen)
@@ -204,17 +207,17 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
         {!current && (
           <p className="text-sm text-pretty text-muted-foreground">
             {AGENT_NAME} is your own agent, beside every page. It works for you across every project you can see: it answers questions, manages your tasks,
-            notes and schedules, starts sessions and keeps an eye on them, and asks before it changes anything. Pick what it runs on.
+            notes and schedules, and keeps an eye on your sessions. Pick what it runs on.
           </p>
         )}
         {setup.isPending ? <Skeleton className="h-28" /> : (
           <RadioGroup value={picked} onValueChange={(v) => setHarness(v as Harness)} className="gap-2">
-            {HARNESSES.filter((h) => agentCapabilities(h).toolPolicies).map((h) => (
+            {HARNESSES.filter((h) => agentCapabilities(h).assistant).map((h) => (
               <label key={h} className={cn('flex items-start gap-3 rounded-lg border p-3 text-sm has-[[data-state=checked]]:border-primary', !installed(h) && 'opacity-60')}>
                 <RadioGroupItem value={h} disabled={!installed(h)} className="mt-0.5" />
                 <span className="min-w-0">
                   <span className="block font-medium">{HARNESS[h].label}</span>
-                  <span className="block text-muted-foreground">{installed(h) ? HARNESS[h].hint : 'Not installed on this server: an admin installs it on the Server page.'}</span>
+                  <span className="block text-muted-foreground">{installed(h) ? HARNESS[h].hint : h === 't3code' ? 'Connect a provider in your T3 Code instance under Agent setup.' : 'Not installed on this server: an admin installs it on the Server page.'}</span>
                 </span>
               </label>
             ))}
@@ -232,10 +235,11 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
         {profiles.find((p) => p.name === chosen)?.loggedIn === false && (
           <p className="text-sm text-attention-foreground">This account isn't signed in. Sign in under <Link to="/sessions/setup" className="underline" onClick={closeOnPhones}>Agent setup</Link> first.</p>
         )}
+        {picked === 't3code' && <p className="text-sm text-muted-foreground">Hamasa and its enabled schedules run with your Linux account’s full access, including file and shell operations. T3 Code manages its own connections.</p>}
         {restarts && <p className="text-xs text-muted-foreground">This clears the conversation and starts it afresh.</p>}
         <ErrorAlert error={save.error} />
-        {(!current || restarts) && <div><Button type="submit" disabled={save.isPending || setup.isPending}>{current ? 'Switch' : 'Start'}</Button></div>}
-        {current && <Access st={st} />}
+        {(!current || restarts) && <div><Button type="submit" disabled={save.isPending || setup.isPending || !installed(picked)}>{picked === 't3code' ? current ? 'Switch to T3 Code with full access' : 'Start with full access' : current ? 'Switch' : 'Start'}</Button></div>}
+        {current && !restarts && agentCapabilities(current.harness).devdashConnections && <Access st={st} />}
       </form>
     </>
   )

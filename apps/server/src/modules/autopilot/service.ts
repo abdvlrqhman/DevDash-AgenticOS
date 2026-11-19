@@ -10,7 +10,7 @@ import { AppError } from '../../core/http.ts'
 import { validTz } from '../../core/schedule.ts'
 import type { User } from '../auth/repo.ts'
 import { condense } from '../assistant/mcp.ts'
-import { agentName, HARNESSES, harnessOf, agentCapabilities, type ClaudeService, type Harness } from '../claude/service.ts'
+import { agentName, HARNESSES, harnessOf, agentCapabilities, type ClaudeService } from '../claude/service.ts'
 import type { SessionRow } from '../claude/repo.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { convertPrototypeRules, isDuplicate, parsePrototypeLog } from './migrate.ts'
@@ -20,7 +20,7 @@ import { DEFAULTS, describePrompt, judge, limitedUntil, neverApprove, obviousRed
 type Row = {
   user_id: number; enabled: number; rules: string | null; tz: string; ping_at: string; quiet_min: number; night_cap: number; max_nudges: number
   seen_at: number; pinged_on: string | null; paused_until: number | null; updated_at: number; approvals: number; prompt_wait_min: number
-  sv_harness: string; sv_profile: string; sv_model: string; sv_daily_cap: number; sv_model_calls: number; sv_model_calls_since: number
+  t3_sessions: number; sv_effort: string | null; sv_harness: string; sv_profile: string; sv_model: string; sv_daily_cap: number; sv_model_calls: number; sv_model_calls_since: number
 }
 type Memory = { session_id: string; goal: string | null; nudges: number; last_error: string | null; checked_activity: number | null; rules_sent: string | null; relayed_message: number | null }
 type LogRow = {
@@ -114,7 +114,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
   }
   const settingsOf = (r: Row): Settings => ({
     quietMin: r.quiet_min, nightCap: r.night_cap, maxNudges: r.max_nudges, tz: r.tz, pingAt: r.ping_at, approvals: !!r.approvals, promptWaitMin: r.prompt_wait_min,
-    svHarness: r.sv_harness, svProfile: r.sv_profile, svModel: r.sv_model, svDailyCap: r.sv_daily_cap,
+    t3Sessions: !!r.t3_sessions, svEffort: r.sv_effort, svHarness: r.sv_harness, svProfile: r.sv_profile, svModel: r.sv_model, svDailyCap: r.sv_daily_cap,
   })
   const changed = (userId: number) => hub.publish('autopilot', { type: 'changed' }, (u) => u.id === userId)
   hub.authorize('autopilot', () => true) // events go only to the member they're for
@@ -190,7 +190,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       // Projects with an AI team, and whether autopilot answers their role agents' asks for this member. null: no Team.
       team: teamProjects(user.id),
       supervisor: {
-        harness: r.sv_harness, profile: r.sv_profile, model: r.sv_model, dailyCap: r.sv_daily_cap,
+        harness: r.sv_harness, profile: r.sv_profile, model: r.sv_model, effort: r.sv_effort, dailyCap: r.sv_daily_cap,
         modelCallsToday: svModelCallsToday(user.id, r),
       },
     }
@@ -243,20 +243,21 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
   /** Who is sending right now on the supervisor's behalf: its own messages don't resolve "Needs you". */
   const supervising = new Set<string>()
   claude.addPreamble((s, o) => {
-    if (!agentCapabilities(s.harness).autopilot || o.role || s.origin_kind === 'proposal') return []
+    if (!agentCapabilities(s.harness).autopilot || o.role || s.origin_kind === 'proposal' || (s.harness === 't3code' && s.origin_kind === 'assistant')) return []
     if (!supervising.has(s.id)) {
       // The member wrote in it themself: whatever it waited for them on is theirs now.
       if (q.resolveSession.run(Math.floor(now() / 1000), s.id).changes) changed(s.owner_id)
     }
     const a = q.get.get(s.owner_id) as Row | undefined
     const mem = q.memory.get(s.id) as Memory | undefined
-    if (!a?.enabled) {
+    if (!a?.enabled || (s.harness === 't3code' && !a.t3_sessions)) {
       if (mem?.rules_sent && mem.rules_sent !== 'off') {
         q.rulesSent.run(s.id, 'off')
         return [offBlock(s.owner_name)]
       }
       return []
     }
+    if (s.harness === 't3code') o.enableT3Autopilot?.()
     const rules = renderRules(a.rules, s.owner_name)
     const version = hash(rules)
     if (mem?.rules_sent === version) return [reminderBlock(s.owner_name)]
@@ -266,10 +267,10 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
 
   /** What the autopilot tools act on: the member's own session, outside team roles' and proposals', in their own turn. */
   function toolContext(username: string, sessionId: string | null) {
-    const s = sessionId ? (q.session.get(sessionId) as { id: string; harness: string; owner_id: number; cwd: string; title: string; origin_kind: string | null; project_slug: string | null; owner_username: string } | undefined) : undefined
+    const s = sessionId ? (q.session.get(sessionId) as { id: string; harness: string; owner_id: number; cwd: string; title: string; archived: number; origin_kind: string | null; project_slug: string | null; owner_username: string } | undefined) : undefined
     if (!s || s.owner_username !== username) throw new AppError(403, 'not_yours', 'Autopilot works only in your own DevDash sessions.')
     if (!agentCapabilities(s.harness).autopilot) throw new AppError(403, 'not_autopilot', "Autopilot doesn't apply to this agent.")
-    if (s.origin_kind === 'proposal' || claude.ownedActive(username).some((x) => x.id === s.id && x.role)) {
+    if (s.origin_kind === 'proposal' || claude.ownedActive(username, s.id).some((x) => x.role)) {
       throw new AppError(403, 'not_autopilot', "Autopilot doesn't apply in a team role's session: ask as usual.")
     }
     const last = q.lastSender.get(s.id) as { user_id: number } | undefined
@@ -278,14 +279,15 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     }
     const a = row(s.owner_id)
     if (!a.enabled) throw new AppError(409, 'autopilot_off', 'Autopilot is OFF: don\'t decide for them, ask them as usual.')
+    if (s.harness === 't3code' && (s.archived || !last || !a.t3_sessions || s.origin_kind === 'assistant')) throw new AppError(403, 'not_autopilot', 'Autopilot is off for your T3 Code sessions.')
     return { s, a }
   }
 
   // ---- The supervisor ----
 
   /** The member's sessions as the sweep judges them. */
-  function candidates(user: User, r: Row) {
-    return claude.ownedActive(user.username).filter((s) => agentCapabilities(s.harness).autopilot).map((s) => {
+  function candidates(user: User, r: Row, id?: string) {
+    return claude.ownedActive(user.username, id).filter((s) => agentCapabilities(s.harness).autopilot && (s.harness !== 't3code' || r.t3_sessions)).map((s) => {
       const mem = q.memory.get(s.id) as Memory | undefined
       const last = q.lastSender.get(s.id) as { user_id: number } | undefined
       const goal = (q.goal.get(s.id, user.id) as { message_uuid: string } | undefined)?.message_uuid ?? null
@@ -303,8 +305,9 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
   }
 
   /** The supervisor model's read of one session: its conversation's end, what it waits for, and the member's rules. */
-  async function decide(user: User, r: Row, s: SessionRow, pending: Pending[], extra = '') {
+  async function decide(user: User, r: Row, s: SessionRow, pending: Pending[], stillCurrent: () => boolean) {
     const page = await claude.history(user, s.id)
+    if (!stillCurrent()) return null
     const convo = condense(page.messages as Parameters<typeof condense>[0], 24)
       .map((m) => `${m.from === 'person' ? `${user.name.split(' ')[0]}` : 'Agent'}: ${m.text ?? ''}${m.tools ? `\n  [tools: ${m.tools.join('; ')}]` : ''}`).join('\n\n')
     const waiting = pending.map((p) => p.toolName === 'AskUserQuestion'
@@ -313,13 +316,12 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     const prompt = [
       `Session "${s.title}" in ${projectOf(s)}. Status: ${s.status}${s.status_detail ? ` (${clip(s.status_detail, 300)})` : ''}.`,
       waiting ? `Waiting for:\n${waiting}` : 'Waiting for: nothing, it stopped.',
-      extra,
       `Conversation, oldest first:\n\n${clip(convo, 30_000)}`,
     ].filter(Boolean).join('\n\n')
     const sv = settingsOf(r)
     const text = await claude.complete(user.username, prompt, {
       system: supervisorSystem(user.name) + renderRules(r.rules, user.name),
-      model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness) as Harness,
+      model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness), ...(sv.svEffort ? { effort: sv.svEffort } : {}),
     })
     return parseDecision(text)
   }
@@ -424,9 +426,9 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
   function svFallbackOnError(user: User, r: Row, msg: string) {
     if (r.sv_harness === DEFAULTS.svHarness && r.sv_profile === DEFAULTS.svProfile && r.sv_model === DEFAULTS.svModel) return
     if (/profile|model|not.found|unknown|provider|harness|agent/i.test(msg)) {
-      db.prepare('update autopilot set sv_harness = ?, sv_profile = ?, sv_model = ?, updated_at = unixepoch() where user_id = ?')
+      db.prepare('update autopilot set sv_harness = ?, sv_profile = ?, sv_model = ?, sv_effort = null, updated_at = unixepoch() where user_id = ?')
         .run(DEFAULTS.svHarness, DEFAULTS.svProfile, DEFAULTS.svModel, user.id)
-      r.sv_harness = DEFAULTS.svHarness; r.sv_profile = DEFAULTS.svProfile; r.sv_model = DEFAULTS.svModel
+      r.sv_harness = DEFAULTS.svHarness; r.sv_profile = DEFAULTS.svProfile; r.sv_model = DEFAULTS.svModel; r.sv_effort = null
       log(user.id, { tier: 'system', source: 'system', what: 'Supervisor settings reset to the default (the configured model or profile no longer exists)' })
       changed(user.id)
     }
@@ -460,6 +462,11 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     }
     busy.add(s.id)
     try {
+      if (s.harness === 't3code' && s.status === 'waiting') {
+        toInbox(user.id, { sessionId: s.id, kind: 'permission', title: `T3 Code needs your reply: ${s.title}`, detail: 'Open the native T3 conversation to answer its request.' })
+        done.push({ user: user.id, session: s.id, what: 'permission' })
+        return
+      }
       const pending = s.status === 'waiting' ? ((await claude.get(user, s.id)).pending as Pending[]) : []
       const prompt = pending.find((p) => p.toolName !== 'AskUserQuestion')
       const never = prompt && (r.approvals ? neverApprove(prompt) : 'approvals are yours (Autopilot handles approvals is off)')
@@ -489,10 +496,20 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
         done.push({ user: user.id, session: s.id, what: 'needs_you' })
         return
       }
+      // A settings change or teammate turn can happen during either the history read or the model call.
+      const stillCurrent = () => {
+        if (s.harness !== 't3code' && r.sv_harness !== 't3code') return true
+        const latest = active(user.id)
+        if (!latest || latest.r.rules !== r.rules || JSON.stringify(settingsOf(latest.r)) !== JSON.stringify(settingsOf(r))) return false
+        const current = candidates(user, latest.r, s.id)[0]
+        return current?.verdict.act === true && current.c.goal === c.goal && current.c.lastActivity === c.lastActivity && current.c.status === c.status
+      }
+      if (!stillCurrent()) return
       const cap = checkSvCap(user, r)
       if (cap) return cap
       // One prompt at a time: the question or permission it's blocked on now.
-      const d = await decide(user, r, s, prompt ? [prompt] : pending)
+      const d = await decide(user, r, s, prompt ? [prompt] : pending, stillCurrent)
+      if (!stillCurrent()) return
       if (!d) {
         q.remember.run(s.id, c.goal, c.memory.goal === c.goal ? c.memory.nudges : 0, c.memory.lastError, c.lastActivity)
         return
@@ -501,6 +518,16 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       done.push({ user: user.id, session: s.id, what: d.action })
     } catch (err) {
       console.error(`autopilot: ${s.id.slice(0, 8)}:`, (err as Error).message)
+      if (r.sv_harness === 't3code') {
+        if (USAGE_LIMIT_RE.test((err as Error).message)) {
+          pause(user, nowS + 3600, 'The T3 Code supervisor reached its provider usage limit')
+          return 'stop'
+        }
+        toInbox(user.id, { sessionId: s.id, kind: 'stuck', title: `Supervisor could not review ${s.title}`,
+          detail: 'Check the T3 Code connection and supervisor model, then dismiss this item to retry.' })
+        done.push({ user: user.id, session: s.id, what: 'needs_you' })
+        return
+      }
       q.remember.run(s.id, c.goal, c.memory.goal === c.goal ? c.memory.nudges : 0, c.memory.lastError, c.lastActivity)
       if (USAGE_LIMIT_RE.test((err as Error).message)) {
         pause(user, nowS + 3600, 'The Claude usage limit is hit')
@@ -552,14 +579,14 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     const a = active(userId)
     if (!a) return []
     const done: Done[] = []
-    const one = candidates(a.user, a.r).find((x) => x.s.id === sessionId)
+    const one = candidates(a.user, a.r, sessionId)[0]
     if (one) await attend(a.user, a.r, one.s, one.c, one.verdict, done, { checked: false })
     return done
   }
   claude.onPrompt((s) => {
     if (!agentCapabilities(s.harness).autopilot) return
     const a = active(s.owner_id)
-    if (!a) return
+    if (!a || (s.harness === 't3code' && !a.r.t3_sessions)) return
     clearTimeout(timers.get(s.id))
     const t = setTimeout(() => {
       timers.delete(s.id)
@@ -620,7 +647,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
             : `Question from the ${x.role} role in ${x.project}, thread "${x.title}":\n${(x as { ask: string }).ask}\n\nThe thread so far:\n${(x as { recent: string[] }).recent.join('\n\n')}`
           const d = parseTeamDecision(await claude.complete(user.username, prompt, {
             system: teamSystem(user.name) + renderRules(r.rules, user.name),
-            model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness) as Harness,
+            model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness), ...(sv.svEffort ? { effort: sv.svEffort } : {}),
           }), it.of)
           if (!d || d.action === 'needs_you') {
             leave(d?.why || "autopilot couldn't tell what you'd want", d?.message)
@@ -649,7 +676,11 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
    * member's session that wrote there, under the same safeguards. Threads waiting for people stay with Team.
    */
   async function relayThreads(user: User, r: Row, done: { user: number; session: string; what: string }[]) {
-    for (const { s, c, mem } of candidates(user, r)) {
+    for (const initial of candidates(user, r)) {
+      // Earlier relays can outlast a teammate's reply or the member turning T3 enrollment off.
+      const current = initial.s.harness === 't3code' ? candidates(user, row(user.id), initial.s.id)[0] : initial
+      if (!current || (current.s.harness === 't3code' && !active(user.id))) continue
+      const { s, c, mem } = current
       if (c.excluded || c.archived || c.mode !== 'chat' || c.status === 'working') continue
       let replies: { thread_id: number; title: string; message_id: number; body: string; kind: string; author_label: string }[]
       try {
@@ -729,29 +760,44 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       return state(user)
     },
 
-    setSettings(user: User, p: Partial<Settings>) {
+    async setSettings(user: User, p: Partial<Settings>) {
       const r = row(user.id)
       const int = (v: number | undefined, old: number, min: number, max: number) => (v === undefined ? old : Math.max(min, Math.min(max, Math.round(v))))
       if (p.tz !== undefined && !validTz(p.tz)) throw new AppError(400, 'bad_tz', 'Unknown time zone.')
       if (p.pingAt !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(p.pingAt)) throw new AppError(400, 'bad_time', 'The ping time is HH:MM, 24-hour.')
       if (p.svHarness !== undefined && !(HARNESSES as readonly string[]).includes(p.svHarness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
-      if (p.svHarness !== undefined && !agentCapabilities(p.svHarness).completions) throw new AppError(400, 'unsupported_supervisor', 'T3 Code cannot run the supervisor because tool-free background completions are unavailable.')
+      if (p.svHarness !== undefined && !agentCapabilities(p.svHarness).completions) throw new AppError(400, 'unsupported_supervisor', 'This agent cannot run tool-free supervisor decisions.')
       if (p.svProfile !== undefined && !/^[a-z0-9][a-z0-9-]{0,20}$/.test(p.svProfile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
+      const harness = p.svHarness ?? r.sv_harness
+      const profile = p.svProfile ?? (harness === r.sv_harness ? r.sv_profile : 'default')
+      const model = p.svModel?.trim() ?? (harness === r.sv_harness ? r.sv_model : harness === 'claude' ? DEFAULTS.svModel : '')
+      const sameModel = harness === r.sv_harness && profile === r.sv_profile && model === r.sv_model
+      const effort = p.svEffort !== undefined ? p.svEffort : sameModel ? r.sv_effort : null
+      if (harness === 't3code' && profile !== 'default') throw new AppError(400, 'bad_profile', 'T3 Code uses your default member connection.')
+      if (effort && (harness !== 't3code' || !model)) throw new AppError(400, 'bad_effort', 'Choose a T3 Code model for the supervisor thinking level.')
+      if (harness === 't3code' && (p.svHarness !== undefined || p.svProfile !== undefined || p.svModel !== undefined || p.svEffort !== undefined)) {
+        if (!model) throw new AppError(400, 'bad_model', 'Choose a T3 Code model for tool-free supervisor decisions.')
+        const { models } = await claude.commands(user, profile, 't3code', model)
+        const picked = models.find((m) => m.value === model)
+        if (!picked?.supportsSupervisor) throw new AppError(400, 'bad_model', 'This T3 Code model does not support tool-free supervisor decisions.')
+        if (effort && !picked.supportedEffortLevels?.includes(effort)) throw new AppError(400, 'bad_effort', 'This thinking level is unavailable for the supervisor model.')
+        if (JSON.stringify(settingsOf(r)) !== JSON.stringify(settingsOf(row(user.id)))) throw new AppError(409, 'settings_changed', 'Autopilot settings changed while checking the model. Try again.')
+      }
       db.prepare(`update autopilot set tz = ?, ping_at = ?, quiet_min = ?, night_cap = ?, max_nudges = ?, approvals = ?, prompt_wait_min = ?,
-        sv_harness = ?, sv_profile = ?, sv_model = ?, sv_daily_cap = ?, updated_at = unixepoch() where user_id = ?`).run(
+        t3_sessions = ?, sv_effort = ?, sv_harness = ?, sv_profile = ?, sv_model = ?, sv_daily_cap = ?, updated_at = unixepoch() where user_id = ?`).run(
         p.tz ?? r.tz, p.pingAt ?? r.ping_at, int(p.quietMin, r.quiet_min, 5, 24 * 60), int(p.nightCap, r.night_cap, 0, 200), int(p.maxNudges, r.max_nudges, 1, 10),
         p.approvals === undefined ? r.approvals : p.approvals ? 1 : 0, int(p.promptWaitMin, r.prompt_wait_min, 1, 5),
-        p.svHarness ?? r.sv_harness, p.svProfile ?? r.sv_profile,
-        p.svModel !== undefined ? p.svModel.trim().slice(0, 100) : r.sv_model,
+        p.t3Sessions === undefined ? r.t3_sessions : Number(p.t3Sessions), effort, harness, profile, model,
         int(p.svDailyCap, r.sv_daily_cap, 1, 10_000), user.id)
+      if (p.t3Sessions !== undefined && p.t3Sessions !== !!r.t3_sessions) {
+        log(user.id, { tier: 'system', source: 'system', what: `Autopilot for full-access T3 Code sessions: ${p.t3Sessions ? 'on' : 'off'}` })
+      }
       if (p.approvals !== undefined && p.approvals !== !!r.approvals) {
         log(user.id, { tier: 'system', source: 'system', what: `Autopilot handles approvals: ${p.approvals ? 'on' : 'off'}` })
       }
       const svChanged = (p.svHarness !== undefined && p.svHarness !== r.sv_harness) || (p.svProfile !== undefined && p.svProfile !== r.sv_profile) || (p.svModel !== undefined && p.svModel !== r.sv_model)
-      if (svChanged) {
-        const h = p.svHarness ?? r.sv_harness
-        const m = p.svModel ?? r.sv_model
-        log(user.id, { tier: 'system', source: 'system', what: `Supervisor: ${h === 'claude' ? 'Claude Code' : agentName(h)}, ${m}` })
+      if (svChanged || effort !== r.sv_effort) {
+        log(user.id, { tier: 'system', source: 'system', what: `Supervisor: ${harness === 'claude' ? 'Claude Code' : agentName(harness)}, ${model || 'default'}${effort ? `, ${effort}` : ''}` })
       }
       changed(user.id)
       return state(user)
@@ -799,8 +845,14 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     },
     /** For the tool list: autopilot's tools are listed in a member's own sessions, not in team roles'. */
     toolsHere(username: string, sessionId: string | null) {
-      const s = sessionId ? (q.session.get(sessionId) as { owner_username: string; harness: string; origin_kind: string | null } | undefined) : undefined
-      return !!s && agentCapabilities(s.harness).autopilot && s.owner_username === username && s.origin_kind !== 'proposal' && !claude.ownedActive(username).some((x) => x.id === sessionId && x.role)
+      const s = sessionId ? (q.session.get(sessionId) as { owner_id: number; owner_username: string; harness: string; archived: number; origin_kind: string | null } | undefined) : undefined
+      if (!s || s.owner_username !== username) return false
+      if (s.harness === 't3code') {
+        const a = q.get.get(s.owner_id) as Row | undefined
+        const sender = q.lastSender.get(sessionId) as { user_id: number } | undefined
+        if (s.archived || s.origin_kind === 'assistant' || !a?.enabled || !a.t3_sessions || sender?.user_id !== s.owner_id) return false
+      }
+      return agentCapabilities(s.harness).autopilot && s.origin_kind !== 'proposal' && !claude.ownedActive(username, s.id).some((x) => x.role)
     },
 
     /**

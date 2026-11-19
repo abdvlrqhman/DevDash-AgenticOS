@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
+import { createServer as unixServer } from 'node:net'
+import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -510,6 +513,72 @@ test('T3 sends only the member message, without copying DevDash rules or persona
   assert.equal(sent.args.message, 'quick')
   assert.ok(!String(sent.args.message).includes('PRIVATE_SESSION_RULES'))
   await H.stop(l.id)
+})
+
+test('Hamasa and Autopilot invoke only their workflow tools with the current member session', async () => {
+  const run = promisify(execFile)
+  const l = launch()
+  const native = `thread-${threads.size + 1}`
+  const socket = join(home, "member's agent.sock")
+  const requests: { method: string; params: { sessionId: string; cwd: string; args: Record<string, unknown> } }[] = []
+  const server = unixServer((s) => s.on('data', (buf) => {
+    const req = JSON.parse(String(buf))
+    requests.push(req)
+    const reply = req.method === 'mcp.assistant_here' ? { name: 'Test' } : req.method === 'mcp.autopilot_here' ? true : 'From the member socket'
+    s.end(JSON.stringify({ result: reply }) + '\n')
+  })).listen(socket)
+  await new Promise<void>((r) => server.once('listening', r))
+  const originalSocket = process.env.DEVDASH_AGENT_SOCKET
+  process.env.DEVDASH_AGENT_SOCKET = socket
+  try {
+    for (const assistant of [true, false]) {
+      const pause = delayNext('t3_thread_send', native)
+      const done = eventAfter(events.length, isResult(l.id))
+      const launch = { ...l, originKind: assistant ? 'assistant' : null, instructions: 'A personal agent instruction.' }
+      await H.send(launch, [{ type: 'text', text: 'What is open?' }], randomUUID(), null, !assistant)
+      await pause.entered
+      const dir = join(home, '.cache', 'devdash', 'sessions', l.id)
+      const helper = join(dir, readdirSync(dir).find((f) => f.startsWith('tools-'))!)
+      try {
+        const sent = String(calls.filter((c) => c.name === 't3_thread_send').at(-1)!.args.message)
+        assert.match(sent, /What is open\?$/)
+        assert.equal(sent.includes('A personal agent instruction.'), assistant)
+        assert.ok(sent.includes(helper) && !sent.includes(socket))
+        assert.equal(statSync(helper).mode & 0o777, 0o700)
+        const list = (await run(helper, ['list'])).stdout.trim().split('\n')
+        const name = assistant ? 'sessions_list' : 'autopilot_rules'
+        assert.ok(list.includes(name))
+        assert.ok(!list.includes(assistant ? 'autopilot_log' : 'session_create'))
+        const cmd = run(helper, ['call', name])
+        cmd.child.stdin!.end('{"mine":true}')
+        assert.match((await cmd).stdout, /From the member socket/)
+        assert.deepEqual(requests.at(-1), { op: 'rpc', method: 'mcp.' + name, params: { sessionId: l.id, cwd: home, args: { mine: true } } })
+        const rejected = run(helper, ['call', 'unlisted'])
+        rejected.child.stdin!.end('{}')
+        await assert.rejects(rejected, /Unknown workflow tool/)
+      } finally { pause.release() }
+      await done
+      assert.ok(!existsSync(helper))
+    }
+    assert.equal((await turn(l, 'plain follow-up')).result, 'Done')
+    assert.equal(calls.filter((c) => c.name === 't3_thread_send').at(-1)!.args.message, 'plain follow-up')
+
+    // Rebuild from the fake native conversation to exercise the replay path. An ordinary native user's
+    // lookalike note must survive verbatim, but the bridge's own per-turn workflow block stays private.
+    await H.stop(l.id)
+    rmSync(join(home, '.local/share/devdash/sessions', l.id + '.jsonl'))
+    const t = threads.get(native)!, marker = randomUUID()
+    const literal = `[DevDash workflow ${marker}]\nquoted by the native user\n[/DevDash workflow ${marker}]\n\nplain text`
+    t.items.push({ itemId: 'native-user', position: t.items.length, runId: randomUUID(), type: 'user_message', createdBy: 'user', text: literal, title: null, status: 'completed' })
+    await turn({ ...l, nativeId: native, started: true }, 'resume')
+    const prompts = H.history(l).messages.filter((m) => m.type === 'user').map(contentText)
+    assert.deepEqual(prompts, ['What is open?', 'What is open?', 'plain follow-up', literal, 'resume'])
+  } finally {
+    await H.stop(l.id)
+    if (originalSocket === undefined) delete process.env.DEVDASH_AGENT_SOCKET
+    else process.env.DEVDASH_AGENT_SOCKET = originalSocket
+    await new Promise<void>((r) => server.close(() => r()))
+  }
 })
 
 test('T3 refuses an already active native conversation and never stops its external run', async () => {

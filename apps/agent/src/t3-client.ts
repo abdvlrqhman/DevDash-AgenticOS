@@ -2,17 +2,17 @@
 // never to the shared DevDash server or another user's T3 data directory.
 import { lstatSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { memberFetch, validateMemberUrl } from './t3-local.ts'
 
-export type T3Config = { url: string; token: string }
+export type T3Config = { url: string; token: string; baseDir?: string }
 export const configPath = () => process.env.DEVDASH_T3_CONFIG ?? join(homedir(), '.config', 'devdash', 't3code.json')
 
 export function validateConfig(value: unknown): T3Config {
   const c = value as Partial<T3Config> | null
   const url = validateMemberUrl(typeof c?.url === 'string' ? c.url : '')
   if (typeof c?.token !== 'string' || !c.token.trim() || /[\r\n]/.test(c.token)) throw new Error('T3 Code needs a bearer token.')
-  return { url: url.toString(), token: c.token.trim() }
+  return { url: url.toString(), token: c.token.trim(), ...(typeof c.baseDir === 'string' && isAbsolute(c.baseDir) ? { baseDir: c.baseDir } : {}) }
 }
 
 export function readConfig(): T3Config {

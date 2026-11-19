@@ -99,10 +99,14 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     const same = harness === d.harness
     const mode = str(c.args.permission_mode) ?? d.permission_mode
     if (!(PERMISSION_MODES as readonly string[]).includes(mode)) throw new AppError(400, 'bad_args', `permission_mode is one of: ${PERMISSION_MODES.join(', ')}.`)
+    const model = str(c.args.model) ?? (same ? d.model : null)
+    const effort = harness === 't3code'
+      ? str(c.args.effort) ?? (same && model === d.model ? d.effort : null)
+      : same ? d.effort : null
     const project = str(c.args.project)
     const s = await claude.create(c.user, {
       prompt, images: [], cwd: str(c.args.folder) ?? '~', harness, profile: str(c.args.profile) ?? (same ? d.profile : 'default'),
-      model: str(c.args.model) ?? (same ? d.model : null), effort: same ? d.effort : null, permissionMode: mode, mode: 'chat',
+      model, effort, permissionMode: mode, mode: 'chat',
       project, worktree: project ? c.args.worktree !== false : undefined,
     })
     return { id: s.id, title: s.title, project: s.project?.slug ?? null, folder: s.cwd, url: `/sessions/${s.id}` }
@@ -229,11 +233,7 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     return `Opened ${path} wherever ${c.user.name.split(' ')[0]} has DevDash open.`
   })
   // A schedule's run doesn't reach them itself: it hands over to their chat, so there's one place and one notification.
-  on('hand_off', async (c) => {
-    const s = assistant.scheduleOf(c.user, c.sessionId)
-    if (!s) throw new AppError(400, 'bad_args', "hand_off is for a schedule's run; here you're already talking to them.")
-    return assistant.handOff(c.user, s.title, clip(need(c.args.note, 'the note: what you found, and what to tell or ask them'), 2000))
-  })
+  on('hand_off', (c) => assistant.handOff(c.user, c.sessionId, clip(need(c.args.note, 'the note: what you found, and what to tell or ask them'), 2000)))
   on('notify_me', async (c) => {
     if (assistant.scheduleOf(c.user, c.sessionId)) throw new AppError(400, 'use_hand_off', 'From a schedule, use hand_off: you tell them in their chat, and that notifies them.')
     const title = clip(need(c.args.title, 'a title'), 120)

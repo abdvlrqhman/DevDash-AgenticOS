@@ -77,9 +77,20 @@ const NET_TOOLS = [
 ]
 const netTools = () => call('mcp.net_here', { ...context, args: {} }).then((r) => (r?.available ? NET_TOOLS : []), () => [])
 
+const workflow = process.argv[2] === '--workflow' ? process.argv[3] : undefined
+async function listTools() {
+  if (workflow === undefined) {
+    const [team, deploy, net, assistant, autopilot] = await Promise.all([teamTools(call, context), deployTools(), netTools(), assistantTools(call, context), autopilotTools(call, context)])
+    return [...TOOLS, ...deploy, ...net, ...team, ...assistant, ...autopilot]
+  }
+  if (workflow === 'autopilot') return autopilotTools(call, context)
+  if (workflow !== 'hamasa') throw new Error('Unknown DevDash workflow.')
+  const assistant = await assistantTools(call, context)
+  if (!assistant.length) throw new Error('Hamasa tools require an active personal agent session.')
+  return [...TOOLS, ...assistant]
+}
 let listed
-const tools = () => (listed ??= Promise.all([teamTools(call, context), deployTools(), netTools(), assistantTools(call, context), autopilotTools(call, context)])
-  .then(([team, deploy, net, assistant, autopilot]) => [...TOOLS, ...deploy, ...net, ...team, ...assistant, ...autopilot]))
+const tools = () => (listed ??= listTools())
 
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n')
 
@@ -106,28 +117,59 @@ async function handle(m) {
   }
 }
 
-const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
-let pending = 0
-let closed = false
-const maybeExit = () => { if (closed && !pending) process.exit(0) }
-rl.on('line', async (line) => {
-  if (!line.trim()) return
-  let m
-  try {
-    m = JSON.parse(line)
-  } catch {
-    return send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })
+// A member-owned T3 thread calls the same tool catalog using its shell, with a turn-specific wrapper.
+async function workflowCommand(action, name) {
+  const available = await tools()
+  if (action === 'list') return available.map((t) => t.name).join('\n')
+  const tool = available.find((t) => t.name === name)
+  if (!tool) throw new Error(`Unknown workflow tool: ${name}`)
+  if (action === 'describe') return JSON.stringify(tool, null, 2)
+  if (action !== 'call') throw new Error('Use list, describe NAME, or call NAME with JSON arguments on stdin.')
+  let raw = ''
+  if (!process.stdin.isTTY) {
+    process.stdin.setEncoding('utf8')
+    for await (const chunk of process.stdin) {
+      raw += chunk
+      if (raw.length > 1024 * 1024) throw new Error('DevDash tool arguments are too large.')
+    }
   }
-  if (m.id === undefined || m.id === null) return // a notification (e.g. notifications/initialized): no reply
-  pending++
+  const args = JSON.parse(raw.trim() || '{}')
+  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Expected a JSON object.')
+  const result = await handle({ method: 'tools/call', params: { name, arguments: args } })
+  const text = result.content.map((item) => item.text).join('\n')
+  if (result.isError) throw new Error(text)
+  return text
+}
+
+if (process.argv[2] === '--workflow') {
   try {
-    send({ jsonrpc: '2.0', id: m.id, result: await handle(m) })
-  } catch (err) {
-    send({ jsonrpc: '2.0', id: m.id, error: { code: err.code ?? -32603, message: err.message } })
-  } finally {
-    pending--
-    maybeExit()
-  }
-})
-// Claude closes stdin to stop the server: answer what's in flight first.
-rl.on('close', () => { closed = true; maybeExit() })
+    if (!workflow) throw new Error('Missing DevDash workflow.')
+    console.log(await workflowCommand(process.argv[4], process.argv[5]))
+  } catch (err) { console.error(err.message); process.exitCode = 1 }
+} else {
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
+  let pending = 0
+  let closed = false
+  const maybeExit = () => { if (closed && !pending) process.exit(0) }
+  rl.on('line', async (line) => {
+    if (!line.trim()) return
+    let m
+    try {
+      m = JSON.parse(line)
+    } catch {
+      return send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })
+    }
+    if (m.id === undefined || m.id === null) return // a notification (e.g. notifications/initialized): no reply
+    pending++
+    try {
+      send({ jsonrpc: '2.0', id: m.id, result: await handle(m) })
+    } catch (err) {
+      send({ jsonrpc: '2.0', id: m.id, error: { code: err.code ?? -32603, message: err.message } })
+    } finally {
+      pending--
+      maybeExit()
+    }
+  })
+  // Claude closes stdin to stop the server: answer what's in flight first.
+  rl.on('close', () => { closed = true; maybeExit() })
+}

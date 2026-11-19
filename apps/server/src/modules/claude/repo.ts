@@ -129,7 +129,11 @@ export function claudeRepo(db: Db) {
     /** Other people's private sessions in a project: how many, by whom. */
     hiddenInProject: (projectId: number, userId: number, archived: boolean) =>
       (s.hiddenInProject.all(projectId, archived ? 1 : 0, userId) as { name: string; n: number }[]).map(({ name, n }) => ({ name, n })),
-    ownedActive: (username: string) => s.ownedActive.all(username) as SessionRow[],
+    ownedActive: (username: string, id?: string): SessionRow[] => {
+      if (id === undefined) return s.ownedActive.all(username) as SessionRow[]
+      const session = s.byId.get(id) as SessionRow | undefined
+      return session && session.owner_username === username && !session.archived ? [session] : []
+    },
     insert: (r: Pick<SessionRow, 'id' | 'owner_id' | 'profile' | 'title' | 'cwd' | 'mode' | 'model' | 'effort' | 'permission_mode'> & { harness?: string }) =>
       void s.insert.run(r.id, r.owner_id, r.harness ?? 'claude', r.profile, r.title, r.cwd, r.mode, r.model, r.effort, r.permission_mode),
     setStatus: (id: string, status: SessionStatus, detail: string | null, mode: 'chat' | 'cli') => void s.status.run(status, detail, mode, id),

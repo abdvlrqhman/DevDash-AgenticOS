@@ -48,7 +48,15 @@ T3 0.1.9 requires the `orchestration:read`, `orchestration:operate`, `settings:w
 - Owners and teammates given full access may send. Watch-only sharing works. Guests and restricted roles cannot execute T3 sessions.
 - A DevDash restart does not queue a second “Continue” prompt into an active T3 conversation. Reopening the conversation resumes its existing history.
 
-The bridge does not support terminal view, attachments, DevDash MCP tools, Drive provisioning, tailnet forwarding, Claude fast/remote/advisor features, restricted team roles, Hamasa, supervisors or tool-free background completions. Unsupported workflows fail before execution. DevDash’s session rules are not copied into T3. Token costs and context percentages are available in T3 Code.
+## Hamasa and Autopilot
+
+In **Hamasa → Settings and access**, choose **T3 Code** and confirm **Full access**. Use the model menu in Hamasa’s chat to choose a provider, model and thinking level. Its schedules inherit those settings and each runs in its own private conversation. Hamasa can use its DevDash tools through a temporary command available during its turn.
+
+In **Autopilot → Settings**, turn on **Include T3 Code sessions** to apply your rules to your full-access T3 Chat sessions. Existing Autopilot settings leave T3 enrollment off until you select it. When T3 asks for a native approval or an answer, open the linked T3 conversation to respond.
+
+The **Supervisor** model is a separate choice. A supervisor reads transcripts and returns decisions with tools disabled. Choose **T3 Code**, then an eligible model and its offered thinking level. The eligible list depends on the member’s provider configuration. A member can use one provider for the session and another for its supervisor.
+
+Ordinary T3 Chat uses the connections configured in T3. DevDash reserves its workflow commands for Hamasa and enrolled Autopilot turns. Terminal view, attachments, Drive provisioning, tailnet forwarding, Claude fast/remote/advisor features and restricted team roles remain unavailable. Token costs and context percentages are available in T3 Code.
 
 ## Verification
 

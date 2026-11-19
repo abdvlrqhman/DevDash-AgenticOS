@@ -27,6 +27,7 @@ function setup() {
     onRpc: (m: string, fn: (username: string, params: unknown) => unknown) => void rpcs.set(m, fn),
     request: async (_u: string, req: Record<string, unknown>) => {
       sent.push(req)
+      if (req.op === 'claude.commands') return { commands: [], models: [{ value: 'codex/sol', supportedEffortLevels: ['low', 'ultra'] }, { value: 'other/mini', supportedEffortLevels: ['low'] }] }
       return req.op === 'claude.pending' ? { pending: [] } : req.op === 'git.init' ? { defaultBranch: 'main' } : { ok: true }
     },
   } as unknown as AgentsService
@@ -91,11 +92,74 @@ test("picking the agent starts its conversation: unlisted, the member's own, wit
   assert.equal(assistant.state(ann).sessionId, null)
 })
 
-test('T3 Code cannot run Hamasa and rejecting it preserves the current agent and conversation', async () => {
-  const { assistant, ann } = setup()
-  const current = await assistant.setup(ann, { harness: 'claude', profile: 'default' })
-  await assert.rejects(assistant.setup(ann, { harness: 't3code', profile: 'default' }), /Hamasa requires DevDash tool policies/)
-  assert.deepEqual(assistant.state(ann), current)
+test('T3 Hamasa uses the owner’s settings and workflows with explicit Full access', async () => {
+  const { assistant, ann, bob, claude, session, rpc, sent, db, hub, notify } = setup()
+  const before = await assistant.setup(ann, { harness: 'claude', profile: 'default' })
+  await assert.rejects(assistant.setup(ann, { harness: 't3code', profile: 'default' }), /Select Full access/)
+  await assert.rejects(assistant.setup(ann, { harness: 't3code', profile: 'work', fullAccess: true }), /Unknown profile/)
+  assert.deepEqual(assistant.state(ann), before)
+  await claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: 'codex/sol', effort: 'ultra', permission_mode: 'bypassPermissions', open_in: 'chat' })
+  const t3 = await assistant.setup(ann, { harness: 't3code', profile: 'default', fullAccess: true })
+  assert.equal(session(before.sessionId!).archived, 1)
+  assert.equal(t3.agent!.drive, false)
+  const chat = t3.sessionId!
+  const s = session(chat)
+  assert.deepEqual([s.harness, s.model, s.effort, s.permission_mode, s.origin_kind, s.tool_policy, s.listed, s.shared, s.drive],
+    ['t3code', 'codex/sol', 'ultra', 'bypassPermissions', 'assistant', null, 0, 0, 0])
+  assert.match(String(s.instructions), /You are Hamasa, Ann's personal agent/)
+  assert.equal(assistant.state(bob).agent, null)
+  await assert.rejects(rpc('bob', 'sessions_list', chat), /only|personal/i)
+  await assert.rejects(assistant.settings(ann, { reachTailnet: true }), /T3 Code/)
+  await assert.rejects(assistant.settings(ann, { permissionMode: 'default' }), /Full access/)
+  await assert.rejects(assistant.settings(ann, { effort: 'invalid' }), /thinking level/)
+  assert.equal(assistant.state(ann).agent!.effort, 'ultra')
+  await claude.send(ann, chat, 'Hello', [])
+  const launch = sent.findLast((r) => r.op === 'claude.send')!.launch as Record<string, unknown>
+  assert.deepEqual([launch.harness, launch.model, launch.effort, launch.toolPolicy, launch.originKind], ['t3code', 'codex/sol', 'ultra', null, 'assistant'])
+
+  const now = Date.now()
+  assistant.createSchedule(ann, { title: 'Check tasks', prompt: 'List tasks.', run_at: Math.floor(now / 1000) + 10 })
+  await assistant.tick(now + 11000)
+  const scheduled = sent.findLast((r) => r.op === 'claude.send')!.launch as Record<string, unknown>
+  assert.notEqual(scheduled.id, chat)
+  assert.deepEqual([scheduled.harness, scheduled.effort, scheduled.permissionMode, scheduled.toolPolicy], ['t3code', 'ultra', 'bypassPermissions', null])
+  assert.equal(session(String(scheduled.id)).origin_role, 'schedule')
+  assert.equal(assistant.ofSession(ann.username, String(scheduled.id))?.id, ann.id)
+  await assistant.settings(ann, { model: 'other/mini' })
+  assert.equal(assistant.state(ann).agent!.effort, null)
+  assert.equal(session(String(scheduled.id)).effort, null)
+  const restarted = assistantService({ db, hub, claude, notify })
+  assert.equal(restarted.state(ann).sessionId, chat)
+  assert.equal(session(chat).tool_policy, null)
+  const fresh = await assistant.fresh(ann)
+  assert.notEqual(fresh.sessionId, chat)
+  assert.equal(assistant.ofSession(ann.username, chat), null)
+  assert.equal(assistant.ofSession(ann.username, fresh.sessionId)?.id, ann.id)
+  const switched = await assistant.setup(ann, { harness: 'opencode', profile: 'default' })
+  assert.equal(assistant.ofSession(ann.username, fresh.sessionId), null)
+  assert.equal(assistant.ofSession(ann.username, String(scheduled.id)), null)
+  assert.deepEqual([switched.agent!.permissionMode, switched.agent!.model, switched.agent!.effort], ['default', null, null])
+})
+
+test('a due schedule follows an in-flight switch away from full-access T3', async () => {
+  const { assistant, ann, sent } = setup()
+  await assistant.setup(ann, { harness: 't3code', profile: 'default', fullAccess: true })
+  const now = Date.now()
+  assistant.createSchedule(ann, { title: 'Check tasks', prompt: 'List tasks.', run_at: Math.floor(now / 1000) + 10 })
+  await Promise.all([assistant.setup(ann, { harness: 'claude', profile: 'default' }), assistant.tick(now + 11000)])
+  const launch = sent.findLast((r) => r.op === 'claude.send')!.launch as Record<string, unknown>
+  assert.deepEqual([launch.harness, launch.permissionMode], ['claude', 'default'])
+})
+
+test('Hamasa starts T3 sessions with the thinking level of the selected model', async () => {
+  const { assistant, ann, claude, rpc, session } = setup()
+  const { sessionId } = await assistant.setup(ann, { harness: 'claude', profile: 'default' })
+  await claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: 'codex/sol', effort: 'ultra', permission_mode: 'bypassPermissions', open_in: 'chat' })
+  const start = (selection: Record<string, string>) => rpc('ann', 'session_create', sessionId, { prompt: 'Read the project summary', ...selection }) as Promise<{ id: string }>
+  assert.equal(session((await start({})).id).effort, 'ultra')
+  assert.equal(session((await start({ model: 'other/mini' })).id).effort, null)
+  assert.equal(session((await start({ model: 'other/mini', effort: 'low' })).id).effort, 'low')
+  await assert.rejects(start({ model: 'other/mini', effort: 'ultra' }), /thinking level/)
 })
 
 test("the agent's tools work only in the member's own agent, and act as them", async () => {

@@ -22,7 +22,7 @@ export const harnessOf = harnessId
 /** Another agent as the member's agent sees it: installed or not, and its profiles with the providers each connected. */
 export type AgentInfo = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[]; error?: string }
 const STATUSES = new Set<SessionStatus>(['working', 'waiting', 'idle', 'stopped', 'error'])
-type CatalogModel = { value: string; displayName: string; supportedEffortLevels?: string[] }
+type CatalogModel = { supportsSupervisor?: boolean; value: string; displayName: string; supportedEffortLevels?: string[] }
 const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,20}$/
 
 export type Image = { mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string }
@@ -177,6 +177,7 @@ export const memoryHealth = (agents: AgentsService, username: string, timeoutMs 
 const baseLaunch = (s: SessionRow) => ({
   id: s.id, harness: s.harness, nativeId: s.native_id, cwd: s.cwd, profile: s.profile, model: s.model, effort: s.effort, permissionMode: s.permission_mode, started: !!s.started,
   fast: !!s.fast_mode, advisor: s.advisor_model, remote: !!s.remote_control, title: s.title,
+  ...(s.origin_kind === 'assistant' ? { originKind: 'assistant' } : {}),
   instructions: s.instructions, toolPolicy: s.tool_policy ? (JSON.parse(s.tool_policy) as { tools?: string[]; allow?: string[] }) : null,
   // The agent fills in the actual proxy ports locally (it is the member); here we only say whether to route and where.
   reachTailnet: !!s.reach_tailnet, tailnetMcps: parseTailnetMcps(s), guestCaps: capsOf(s),
@@ -196,7 +197,7 @@ export type SessionExtras = {
 }
 
 /** Text blocks a feature puts before the owner's own message (see addPreamble); `role`: a team role's session. */
-export type Preamble = (s: SessionRow, o: { role: boolean }) => { type: string; text: string }[]
+export type Preamble = (s: SessionRow, o: { role: boolean; enableT3Autopilot?: () => void }) => { type: string; text: string }[]
 
 /** What a feature that starts sessions says about them on a project's page (a team role's chat or one of its shifts). */
 export type SessionLabel = { kind: 'role' | 'shift'; role: { id: number; name: string } }
@@ -321,7 +322,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   // Every launch also says whether the owner's Drive is connected: the agent sets up the remote and tells Claude about it.
   const launch = (s: SessionRow) => ({ ...baseLaunch(s), storage: s.drive === 0 ? null : storageFor?.(s.owner_id) ?? null, ownerName: s.owner_name })
   // The owner, everyone while it's shared with the team, or the members it's shared with by name.
-  const canView = (u: Pick<User, 'id'>, s: SessionRow) => s.owner_id === u.id || s.shared === 1 || repo.isViewer(s.id, u.id)
+  const privateHamasa = (s: SessionRow) => s.harness === 't3code' && s.origin_kind === 'assistant'
+  const canView = (u: Pick<User, 'id'>, s: SessionRow) => s.owner_id === u.id || (!privateHamasa(s) && (s.shared === 1 || repo.isViewer(s.id, u.id)))
   // A failing turn can report twice (its result, then the process exiting): one error alert per session per minute.
   const lastError = new Map<string, number>()
   // Per session: the id of the last message of the answer being written (the saved numbers go after it).
@@ -777,9 +779,10 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     typedTurn.set(s.id, (typedTurn.get(s.id) ?? true) && typed && user.id === s.owner_id)
     const message = { role: 'user', content: content(`${text}${note}`.trim(), images, docs) }
     const guest = guestOf(user, s)
+    let t3Autopilot = false
     const before = user.id === s.owner_id ? [...preambles].flatMap((fn) => {
       try {
-        return fn(s, { role: !!roleLabel(s) })
+        return fn(s, { role: !!roleLabel(s), enableT3Autopilot: () => { t3Autopilot = true } })
       } catch (err) {
         console.error('session preamble:', err)
         return []
@@ -787,6 +790,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     }) : []
     await agents.request(s.owner_username, {
       op: 'claude.send', launch: launch(s), uuid, guest,
+      ...(s.harness === 't3code' && t3Autopilot ? { t3Autopilot: true } : {}),
       content: guest ? [guestNote(guest, s), ...message.content] : [...before, ...message.content],
     })
     if (!s.started) repo.patch(s.id, { started: 1 })
@@ -1072,6 +1076,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     setSharing(user: User, id: string, input: Sharing) {
       const s = find(user, id)
       requireOwner(user, s)
+      if (privateHamasa(s) && input.audience !== 'private') throw new AppError(400, 'private_assistant', 'Your T3 Hamasa conversation stays private.')
       const others = db.prepare('select id from users where disabled_at is null and id != ?').all(s.owner_id) as { id: number }[]
       const known = new Set(others.map((u) => u.id))
       const picked = input.audience === 'people' ? (input.people ?? []).filter((p) => p.id !== s.owner_id) : []
@@ -1144,6 +1149,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const ownerOnly = p.title !== undefined || p.shared !== undefined || p.sharedCanSend !== undefined || p.archived !== undefined
         || p.remoteControl !== undefined || p.reachTailnet !== undefined || p.tailnetMcp !== undefined || p.tailnetMcps !== undefined
         || p.drive !== undefined
+      if (privateHamasa(s) && (p.shared || p.sharedCanSend)) throw new AppError(400, 'private_assistant', 'Your T3 Hamasa conversation stays private.')
       if (ownerOnly) requireOwner(user, s)
       else requireSend(user, s)
       const capabilities = agentCapabilities(s.harness)
@@ -1266,7 +1272,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     },
 
     /** A member's sessions that aren't archived, for features that watch them, each saying whether it's a team role's. */
-    ownedActive: (username: string) => repo.ownedActive(username).map((s) => ({ ...s, role: !!roleLabel(s) })),
+    ownedActive: (username: string, id?: string) => repo.ownedActive(username, id).map((s) => ({ ...s, role: !!roleLabel(s) })),
 
     /** Tells `fn` whenever a Claude turn ends in any session. Returns a function that stops it. */
     onTurnEnd(fn: (t: TurnEnd) => void) {
@@ -1285,10 +1291,11 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
      * One answer from an agent, run as `username` on one of their profiles: no tools, no session left behind. Claude Code
      * unless `harness` names another (a role that runs on OpenCode, a member whose agent is OpenCode).
      */
-    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; system?: string; harness?: Harness } = {}) => {
-      if (!agentCapabilities(o.harness).completions) throw new AppError(400, 'unsupported_completion', 'T3 Code is available for Chat sessions. Tool-free background completions are unavailable through this connection.')
+    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; effort?: string | null; system?: string; harness?: Harness } = {}) => {
+      if (o.harness === 't3code' && (!o.model || (o.profile && o.profile !== 'default'))) throw new AppError(400, 'bad_supervisor', 'Choose a T3 Code supervisor model on the default connection.')
+      if (!agentCapabilities(o.harness).completions) throw new AppError(400, 'unsupported_completion', 'This agent cannot run tool-free background completions.')
       return (await agents.request<{ text: string }>(username, {
-        op: 'claude.complete', profile: o.profile ?? 'default', prompt, model: o.model, system: o.system, ...(o.harness && o.harness !== 'claude' ? { harness: o.harness } : {}),
+        op: 'claude.complete', profile: o.profile ?? 'default', prompt, model: o.model, system: o.system, ...(o.effort ? { effort: o.effort } : {}), ...(o.harness && o.harness !== 'claude' ? { harness: o.harness } : {}),
       }, 180_000)).text
     },
 

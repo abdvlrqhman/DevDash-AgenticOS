@@ -101,7 +101,12 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   // The member's cloud storage remote (apps/agent/src/storage.ts): set up when they connect, removed when they disconnect.
   'storage.configure': async (r) => ({ changed: await storage.configure(r.storage as storage.Storage) }),
   'storage.remove': async (r) => ({ changed: await storage.remove(str(r.remote, 'remote'), str(r.tokenUrl, 'tokenUrl')) }),
-  'claude.send': async (r) => (await (acp(r) ? harness : claude).send(launchOf(r), r.content as unknown[], str(r.uuid, 'uuid'), guestFrom(r.guest)), { ok: true }),
+  'claude.send': async (r) => {
+    const l = launchOf(r), content = r.content as unknown[], uuid = str(r.uuid, 'uuid'), guest = guestFrom(r.guest)
+    if (acp(r)) await harness.send(l, content, uuid, guest, r.t3Autopilot === true)
+    else await claude.send(l, content, uuid, guest)
+    return { ok: true }
+  },
   'claude.answer': (r) => (running(str(r.id, 'id')).answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never, { owner: (r.by as { owner?: unknown } | undefined)?.owner === true }), { ok: true }),
   'claude.interrupt': async (r) => (await running(str(r.id, 'id')).interrupt(str(r.id, 'id')), { ok: true }),
   'claude.set': async (r) => (await running(str(r.id, 'id')).setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
@@ -112,7 +117,7 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   },
   'claude.remote': (r) => (acp(r) ? { url: null } : claude.remote(launchOf(r), r.enabled === true)),
   'claude.complete': async (r) => {
-    const o = { model: typeof r.model === 'string' ? r.model : undefined, system: typeof r.system === 'string' ? r.system : undefined }
+    const o = { model: typeof r.model === 'string' ? r.model : undefined, effort: typeof r.effort === 'string' ? r.effort : undefined, system: typeof r.system === 'string' ? r.system : undefined }
     return { text: harness.isAcp(r.harness) ? await harness.complete(r.harness, str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) : await claude.complete(str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) }
   },
   'claude.files': async (r) => ({ paths: await mentions.search(str(r.cwd, 'cwd'), typeof r.q === 'string' ? r.q : '') }),
