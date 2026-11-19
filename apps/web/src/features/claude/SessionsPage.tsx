@@ -200,12 +200,16 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
   useEffect(() => { if (open) { setPrompt(initialPrompt); setCwd(initialCwd ?? sessionFolder()); setProject(initialProject ?? ''); setSharing(null) } }, [open, initialPrompt, initialCwd, initialProject])
 
   const agent = HARNESS[harness]
-  const other = (setup.data?.agents as { harness: string; installed: boolean; profiles: { name: string }[]; error?: string }[] | undefined)?.find((a) => a.harness === harness)
+  const other = (setup.data?.agents as { harness: string; installed: boolean; profiles: { name: string; providers: string[] }[]; error?: string }[] | undefined)?.find((a) => a.harness === harness)
   // Claude profiles say whether they're signed in; OpenCode's always work (its free models need no sign-in).
   const profiles = harness === 'claude' ? (setup.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? []
     : (other?.profiles ?? []).map((p) => ({ name: p.name, loggedIn: true }))
   const chosen = profiles.find((p) => p.name === profile)
-  const missing = harness !== 'claude' && setup.isSuccess && (!other?.installed || other.error) ? other ?? { error: 'This agent is unavailable.' } : undefined
+  let missing: string | undefined
+  if (harness !== 'claude' && setup.isSuccess) {
+    if (other?.error || !other?.installed) missing = other?.error || (harness === 't3code' ? 'T3 Code is not connected.' : 'This agent is unavailable.')
+    else if (harness === 't3code' && !other.profiles.some((p) => p.providers.length)) missing = 'Connect a model provider in T3 Code, then refresh the connection in Agent setup.'
+  }
   // The models this agent offers (Claude Code's with their versions; OpenCode's from every provider you connected).
   const offered = useOfferedModels(profile, harness, model, open && !missing && (!profiles.length || !!chosen))
   const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
@@ -226,9 +230,10 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
       navigate({ to: '/sessions/$id', params: { id: session.id } })
     },
   })
+  const canStart = !create.isPending && !missing && supportedMode && (!customModel || !!model.trim())
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (!create.isPending && supportedMode) create.mutate()
+    if (canStart) create.mutate()
   }
 
   return (
@@ -268,10 +273,10 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
           )}
           <Choice id="ns-agent" label="Agent" value={harness} onChange={(v) => { const next = HARNESS[v as Harness]; setHarness(v as Harness); setProfile('default'); setModel(''); setEffort(null); setCustomModel(false); if (!next.cli) setOpenIn('chat'); if (!next.modes.includes(perm)) setPerm('bypassPermissions') }}
             options={HARNESSES.map((h) => ({ value: h, label: HARNESS[h].label }))} description={agent.hint} />
-          {!agent.toolPolicies && <Alert><AlertDescription>This connection runs with your Linux account’s full access. DevDash approval prompts, Plan mode, guest permissions and autopilot are unavailable.</AlertDescription></Alert>}
+          {!agent.toolPolicies && <Alert><AlertDescription>This connection runs with your Linux account’s full access. To include T3 chats in Autopilot, enable them in Autopilot settings.</AlertDescription></Alert>}
           {missing && (
             <Alert variant="destructive">
-              <AlertDescription>{harness === 't3code' ? <>{missing.error || 'T3 Code is not connected.'} <Link to="/sessions/setup" className="underline" onClick={onClose}>Check the connection</Link>.</> : <>{agent.label} isn't installed on this server yet. An admin can install it from the <Link to="/server" className="underline" onClick={onClose}>Server page</Link>.</>}</AlertDescription>
+              <AlertDescription>{harness === 't3code' ? <>{missing} <Link to="/sessions/setup" className="underline" onClick={onClose}>Check the connection</Link>.</> : <>{agent.label} isn't installed on this server yet. An admin can install it from the <Link to="/server" className="underline" onClick={onClose}>Server page</Link>.</>}</AlertDescription>
             </Alert>
           )}
           {harness === 'opencode' && !missing && offered?.length === 0 && (
@@ -304,7 +309,7 @@ export function NewSession({ open, onClose, initialPrompt = '', initialCwd, init
             options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]}
             description={openIn === 'cli' ? `${agent.cli}. You can switch to Chat any time.` : `A chat view of ${agent.label}. You can switch to the CLI any time.`} />}
           <ErrorAlert error={create.error} />
-          <Button type="submit" size="lg" className="h-10" disabled={create.isPending || !!missing || !supportedMode || (customModel && !model.trim())}>
+          <Button type="submit" size="lg" className="h-10" disabled={!canStart}>
             {create.isPending && <Spinner />}Start session
           </Button>
         </FieldGroup>

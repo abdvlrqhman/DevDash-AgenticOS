@@ -83,6 +83,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     inboxAdd: db.prepare('insert into autopilot_inbox (user_id, session_id, thread_id, kind, title, detail, created_at, url) values (?, ?, ?, ?, ?, ?, ?, ?) returning id'),
     inboxUrl: db.prepare('select id from autopilot_inbox where user_id = ? and url = ? and title = ? and resolved_at is null'),
     teamOn: db.prepare('select project_id from autopilot_team where user_id = ?'),
+    projectOn: db.prepare('select 1 from autopilot_team where user_id = ? and project_id = ?'),
     teamDone: db.prepare('select 1 from autopilot_team_done where user_id = ? and item = ?'),
     markTeamDone: db.prepare('insert or ignore into autopilot_team_done (user_id, item, at) values (?, ?, ?)'),
     resolveSession: db.prepare('update autopilot_inbox set resolved_at = ? where session_id = ? and resolved_at is null'),
@@ -504,9 +505,8 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       // A settings change or teammate turn can happen during either the history read or the model call.
       const stillCurrent = () => {
         if (s.harness !== 't3code' && r.sv_harness !== 't3code') return true
-        const latest = active(user.id)
-        if (!latest || latest.r.rules !== r.rules || JSON.stringify(settingsOf(latest.r)) !== JSON.stringify(settingsOf(r))) return false
-        const current = candidates(user, latest.r, s.id)[0]
+        if (!sameSettings(user.id, r)) return false
+        const current = candidates(user, r, s.id)[0]
         return current?.verdict.act === true && current.c.goal === c.goal && current.c.lastActivity === c.lastActivity && current.c.status === c.status
       }
       if (!stillCurrent()) return
@@ -550,6 +550,11 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     if (!r?.enabled || (r.paused_until && r.paused_until > Math.floor(now() / 1000))) return null
     const user = q.user.get(userId) as User | undefined
     return user ? { r, user } : null
+  }
+
+  function sameSettings(userId: number, previous: Row) {
+    const current = active(userId)?.r
+    return !!current && current.rules === previous.rules && JSON.stringify(settingsOf(current)) === JSON.stringify(settingsOf(previous))
   }
 
   let sweeping = false
@@ -615,12 +620,15 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     const room = { checked: false }
     const fresh = (at: number) => nowS - at < TEAM_WAIT_MIN * 60
     for (const projectId of projects) {
+      const stillEnabled = () => sameSettings(user.id, r) && !!q.projectOn.get(user.id, projectId)
+      if (!stillEnabled()) continue
       const w = t.waiting(projectId)
       const items = [
         ...w.proposals.map((x) => ({ of: 'proposal' as const, key: `proposal:${x.id}`, at: x.createdAt, x })),
         ...w.asks.filter((x) => x.ask).map((x) => ({ of: 'ask' as const, key: `ask:${x.id}:${x.lastMessage}`, at: x.updatedAt, x })),
       ]
       for (const it of items) {
+        if (!stillEnabled()) break
         if (fresh(it.at) || q.teamDone.get(user.id, it.key)) continue
         if ((q.sentSince.get(user.id, nightStart(now(), r.tz, r.ping_at)) as { n: number }).n >= r.night_cap) return
         const x = it.x
@@ -632,19 +640,27 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
           log(user.id, { tier: 'red', source: 'supervisor', project: x.project, what: `Left for you: ${clip(what, 300)}`, why })
           done.push({ user: user.id, session: it.key, what: 'needs_you' })
         }
-        q.markTeamDone.run(user.id, it.key, nowS) // once, whatever happens next
+        const claim = () => !!q.markTeamDone.run(user.id, it.key, nowS).changes
+        const stillPending = () => {
+          if (!stillEnabled()) return false
+          const waiting = t.waiting(projectId)
+          return it.of === 'proposal' ? waiting.proposals.some((p) => p.id === it.x.id)
+            : waiting.asks.some((a) => a.id === it.x.id && !!a.ask && a.lastMessage === it.x.lastMessage)
+        }
         const text = it.of === 'proposal' ? `${x.title}\n${(x as { why: string }).why}` : `${x.title}\n${(x as { ask: string }).ask}`
         // "Other" proposals are a person's call by Team's own design; red words never reach a model.
         const red = it.of === 'proposal' && (x as { kind: string }).kind === 'other' ? "it's a decision Team leaves to a person" : redQuestion(text)
         if (red) {
-          leave(red)
+          if (claim()) leave(red)
           continue
         }
         if (!room.checked) {
           room.checked = true
           if (!(await hasRoom(user, r))) return
         }
+        if (!stillPending()) continue
         if (checkSvCap(user, r)) return
+        let claimed = false
         try {
           const sv = settingsOf(r)
           const prompt = it.of === 'proposal'
@@ -654,6 +670,9 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
             system: teamSystem(user.name) + renderRules(r.rules, user.name),
             model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness), ...(sv.svEffort ? { effort: sv.svEffort } : {}),
           }), it.of)
+          // A teammate can answer, the member can opt out, or the review settings can change during inference.
+          if (!stillPending() || !claim()) continue
+          claimed = true
           if (!d || d.action === 'needs_you') {
             leave(d?.why || "autopilot couldn't tell what you'd want", d?.message)
             continue
@@ -669,6 +688,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
           }
           done.push({ user: user.id, session: it.key, what: d.action })
         } catch (err) {
+          if (!claimed && (!stillPending() || !claim())) continue
           console.error(`autopilot team ${it.key}:`, (err as Error).message)
           leave(`autopilot couldn't act on it: ${clip((err as Error).message, 150)}`)
         }
@@ -687,6 +707,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       if (!current || (current.s.harness === 't3code' && !active(user.id))) continue
       const { s, c, mem } = current
       if (c.excluded || c.archived || c.mode !== 'chat' || c.status === 'working') continue
+      if (s.harness === 't3code' && c.status === 'waiting') continue
       let replies: { thread_id: number; title: string; message_id: number; body: string; kind: string; author_label: string }[]
       try {
         replies = q.threadReplies.all(s.id) as typeof replies

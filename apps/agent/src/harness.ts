@@ -416,6 +416,8 @@ function update(c: Chat, p: Record<string, unknown>) {
     case 'session_info_update': {
       if (typeof u.title === 'string' && u.title.trim() && !c.replay) emit({ ev: 'claude.title', id, title: u.title.trim().slice(0, 120) })
       const meta = (u._meta ?? {}) as Record<string, { error?: { message?: string }; status?: string } | null | undefined>
+      const t3Status = meta['devdash/t3-status']?.status
+      if (!c.replay && c.launch.harness === 't3code' && (t3Status === 'working' || t3Status === 'waiting')) setStatus(c, id, t3Status)
       if ('opencode/retry' in meta && !c.replay) {
         const r = meta['opencode/retry']
         setStatus(c, id, 'working', r ? `Retrying: ${r.error?.message ?? 'the model call failed'}`.slice(0, 300) : undefined)
@@ -659,7 +661,7 @@ export const send = (l: Launch, content: unknown[], uuid: string, guest: Guest |
   }
   c.queue.push({ content, uuid, guest: !!guest, workflow })
   c.lastActive = Date.now()
-  setStatus(c, l.id, 'working')
+  if (!(c.launch.harness === 't3code' && c.status === 'waiting')) setStatus(c, l.id, 'working')
   void runTurns(c)
 })
 

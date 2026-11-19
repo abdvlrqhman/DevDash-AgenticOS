@@ -141,8 +141,8 @@ const http = createServer(async (req, res) => {
       const item = t.items.find((i) => i.itemId === `assistant-${current.runId}`)!
       item.text = t.behavior === 'stream' ? (t.reads < 3 ? 'Hel' : 'Hello') : t.behavior === 'cancel' ? 'Working' : ['long', 'longstall'].includes(t.behavior) ? 'L'.repeat(60010) : t.behavior === 'waiting' ? (t.reads < 3 ? '' : 'Approved') : 'Done'
       if (t.behavior === 'transient') { current.status = t.reads < 2 ? 'running' : 'completed'; t.status = t.reads < 2 ? 'waiting' : 'completed'; item.text = 'Final reply'; if (current.status === 'completed') item.status = 'completed' }
-      if (t.behavior === 'waiting') { current.status = t.reads < 3 ? 'waiting' : 'completed'; t.status = current.status }
-      if (['quick', 'long'].includes(t.behavior) || (['stream', 'waiting'].includes(t.behavior) && t.reads >= 3)) {
+      if (t.behavior === 'waiting') { current.status = t.reads < 3 ? 'waiting' : 'running'; t.status = current.status }
+      if (['quick', 'long'].includes(t.behavior) || (t.behavior === 'stream' && t.reads >= 3) || (t.behavior === 'waiting' && t.reads >= 4)) {
         current.status = 'completed'; t.status = 'completed'; item.status = 'completed'
         if (t.behavior === 'stream') t.items.push({ itemId: `tool-${current.runId}`, position: t.items.length, runId: current.runId, type: 'command_execution', createdBy: 'agent', title: 'echo checked', text: 'checked', status: 'completed' })
       }
@@ -176,9 +176,9 @@ const launch = (): Launch => {
 }
 const isResult = (id: string) => (e: Record<string, unknown>) => e.id === id && e.ev === 'claude.msg' && (e.msg as { type?: string }).type === 'result'
 async function turn(l: Launch, text: string) {
-  const result = eventAfter(events.length, isResult(l.id))
+  const start = events.length
   await H.send(l, [{ type: 'text', text }], randomUUID())
-  return (await result).msg as Record<string, unknown>
+  return (await eventAfter(start, isResult(l.id))).msg as Record<string, unknown>
 }
 const contentText = (message: unknown) => ((message as { message?: { content?: { type: string; text?: string }[] } }).message?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
 test.after(async () => {
@@ -238,12 +238,13 @@ process.stdin.on('end', () => server.close())
   const models = [{ id: 'account/chosen', options: [{ id: 'variant', values: ['high', 'stale'] }] }]
   const providers = [
     { providerInstanceId: 'local', driverKind: 'opencode' },
+    { providerInstanceId: 'broken', driverKind: 'opencode' },
     { providerInstanceId: 'custom', driverKind: 'opencode' },
     { providerInstanceId: 'other', driverKind: 'codex' },
   ]
   supervisorProviders = providers.map((p) => ({ ...p, canRunChildTask: true, displayName: p.providerInstanceId, models }))
   const simple = { driver: 'opencode', enabled: true, config: { binaryPath: binary } }
-  const settings = { providerInstances: { local: simple, custom: { ...simple, config: { ...simple.config, env: { ACCOUNT: 'another' } } }, other: simple } }
+  const settings = { providerInstances: { local: simple, broken: { ...simple, config: { binaryPath: '/bin/false' } }, custom: { ...simple, config: { ...simple.config, env: { ACCOUNT: 'another' } } }, other: simple } }
   mkdirSync(join(folder, 'userdata'))
   writeFileSync(join(folder, 'userdata/settings.json'), JSON.stringify(settings))
   writeFileSync(config, JSON.stringify({ ...JSON.parse(original), baseDir: folder }))
@@ -452,13 +453,17 @@ test('T3 full text pages are joined and waiting notices point to T3 without bein
   assert.equal(done.result, 'Approved')
   const notices = events.slice(start).filter((e) => e.id === l.id && e.ev === 'claude.msg' && (e.msg as { type?: string }).type === 'assistant').map((e) => contentText(e.msg)).filter((text) => text.includes('needs an answer'))
   assert.equal(notices.length, 1)
+  assert.deepEqual(events.slice(start).filter((e) => e.id === l.id && e.ev === 'claude.status').map((e) => e.status), ['working', 'waiting', 'working', 'idle'])
+  assert.equal(H.pendingFor(l.id).length, 0)
   assert.match(notices[0]!, /https:\/\/t3.example\/thread/)
   await H.stop(l.id)
 })
 
 test('T3 transient waiting without a pending request does not replace the real final reply', async () => {
   const l = launch()
+  const start = events.length
   const done = await turn(l, 'transient-wait')
+  assert.ok(!events.slice(start).some((e) => e.id === l.id && e.ev === 'claude.status' && e.status === 'waiting'))
   assert.equal(done.result, 'Final reply')
   const history = H.history(l).messages.map(contentText).join('\n')
   assert.ok(!history.includes('needs an approval or answer'))
@@ -591,9 +596,11 @@ test('Hamasa and Autopilot invoke only their workflow tools with the current mem
   const native = `thread-${threads.size + 1}`
   const socket = join(home, "member's agent.sock")
   const requests: { method: string; params: { sessionId: string; cwd: string; args: Record<string, unknown> } }[] = []
+  let brokenReply: 'invalid' | 'disconnect' | undefined
   const server = unixServer((s) => s.on('data', (buf) => {
     const req = JSON.parse(String(buf))
     requests.push(req)
+    if (brokenReply && req.method === 'mcp.sessions_list') return s.end(brokenReply === 'invalid' ? 'invalid JSON\n' : '')
     const reply = req.method === 'mcp.assistant_here' ? { name: 'Test' } : req.method === 'mcp.autopilot_here' ? true : req.method === 'mcp.team_role' ? { session: true } : 'From the member socket'
     s.end(JSON.stringify({ result: reply }) + '\n')
   })).listen(socket)
@@ -624,6 +631,14 @@ test('Hamasa and Autopilot invoke only their workflow tools with the current mem
         cmd.child.stdin!.end('{"mine":true}')
         assert.match((await cmd).stdout, /From the member socket/)
         assert.deepEqual(requests.at(-1), { op: 'rpc', method: 'mcp.' + name, params: { sessionId: l.id, cwd: home, args: { mine: true } } })
+        if (assistant) {
+          for (brokenReply of ['invalid', 'disconnect'] as const) {
+            const broken = run(helper, ['call', name])
+            broken.child.stdin!.end('{}')
+            await assert.rejects(broken, brokenReply === 'invalid' ? /unreadable response/ : /disconnected before answering/)
+          }
+          brokenReply = undefined
+        }
         const rejected = run(helper, ['call', 'unlisted'])
         rejected.child.stdin!.end('{}')
         await assert.rejects(rejected, /Unknown workflow tool/)

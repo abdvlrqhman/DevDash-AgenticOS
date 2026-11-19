@@ -107,7 +107,7 @@ function T3CodeSection({ agent, refresh, refreshing, error }: { agent: Agent | u
         <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={connected ? 'live' : 'idle'} /></span>
         <span className="min-w-0 flex-1">
           <span className="block font-medium">{connected ? 'Connected' : 'Not connected'}</span>
-          <span className="block text-pretty text-muted-foreground">{agent?.error || (connected ? providers.join(', ') || 'T3 Code is ready.' : 'Configure a T3 Code connection for your account on this server, then check again.')}</span>
+          <span className="block text-pretty text-muted-foreground">{agent?.error || (connected ? providers.join(', ') || 'Connect a model provider in T3 Code, then refresh the connection.' : 'Configure a T3 Code connection for your account on this server, then check again.')}</span>
           {connected && agent?.version && <span className="block text-muted-foreground">T3 Code {agent.version}</span>}
         </span>
         <Button size="sm" variant="outline" disabled={refreshing} onClick={refresh}><RotateCw className={refreshing ? 'animate-spin' : ''} />Refresh connection</Button>

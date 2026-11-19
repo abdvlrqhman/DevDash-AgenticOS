@@ -53,11 +53,21 @@ function call(method, params) {
       buf += d
       const i = buf.indexOf('\n')
       if (i < 0) return
-      sock.end()
-      const m = JSON.parse(buf.slice(0, i))
-      if (m.error) reject(new Error(m.error))
-      else resolve(m.result)
+      sock.destroy()
+      try {
+        const m = JSON.parse(buf.slice(0, i))
+        if (m.error) reject(new Error(m.error))
+        else resolve(m.result)
+      } catch {
+        reject(new Error('DevDash returned an unreadable response.'))
+      }
     })
+    // The member agent gives the server 60 seconds. Also settle if the agent restarts mid-request.
+    sock.setTimeout(65_000, () => {
+      reject(new Error('DevDash did not answer in time.'))
+      sock.destroy()
+    })
+    sock.on('close', () => reject(new Error('DevDash disconnected before answering.')))
     sock.on('error', () => reject(new Error('Could not reach DevDash on this server.')))
   })
 }

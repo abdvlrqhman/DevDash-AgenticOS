@@ -548,7 +548,7 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
   const t3Busy = harness === 't3code' && (s.status === 'working' || s.status === 'waiting')
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={disabled}>
+      <DropdownMenuTrigger asChild disabled={disabled || t3Busy}>
         {compact ? (
           <Button variant="ghost" size="icon" className="shrink-0" aria-label="Model, effort and permissions" title="Model, effort and permissions"><SlidersHorizontal /></Button>
         ) : (
@@ -580,7 +580,7 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         {agent.effort && (harness === 'claude' || levels.length > 0 || (harness === 't3code' && !!s.effort)) && <DropdownMenuSub>
-          <DropdownMenuSubTrigger disabled={t3Busy}>{harness === 't3code' ? `Thinking level: ${s.effort ? effortLabel(s.effort) : 'Default'}` : `Effort: ${s.effort ?? 'auto'}`}</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger>{harness === 't3code' ? `Thinking level: ${s.effort ? effortLabel(s.effort) : 'Default'}` : `Effort: ${s.effort ?? 'auto'}`}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <DropdownMenuRadioGroup value={s.effort ?? ''} onValueChange={(v) => onUpdate({ effort: v || null })}>
               <DropdownMenuRadioItem value="">{harness === 't3code' ? 'Default' : 'Auto'}</DropdownMenuRadioItem>

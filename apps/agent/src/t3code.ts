@@ -51,8 +51,12 @@ function supervisorBins(providers: Capabilities['providers']): Map<string, strin
       const config = instance.config ?? {}
       if (config.enabled === false || Object.keys(config).some((k) => !['binaryPath', 'customModels', 'enabled'].includes(k))) continue
       const bin = config.binaryPath
-      if (typeof bin !== 'string' || !isAbsolute(bin) || !statSync(bin, { throwIfNoEntry: false })?.isFile()) continue
-      try { accessSync(bin, constants.X_OK); bins.set(p.providerInstanceId, bin) } catch { /* unusable executable */ }
+      if (typeof bin !== 'string' || !isAbsolute(bin)) continue
+      try {
+        if (!statSync(bin).isFile()) continue
+        accessSync(bin, constants.X_OK)
+        bins.set(p.providerInstanceId, bin)
+      } catch { /* An unusable executable doesn't affect the member's other instances. */ }
     }
   } catch { /* Other T3 chat models remain available without local provider configuration. */ }
   return bins
@@ -71,7 +75,10 @@ export async function supervisorTarget(value: string, effort?: string) {
 export async function modelChoices(search?: string, supervisor = false) {
   const { capabilities } = await inspect(5000, search)
   const bins = supervisor ? supervisorBins(capabilities.providers) : new Map<string, string>()
-  const catalogs = new Map(await Promise.all([...new Set(bins.values())].map(async (bin) => [bin, await supervisorModels(bin)] as const)))
+  const catalogs = new Map<string, Awaited<ReturnType<typeof supervisorModels>>>()
+  const probes = await Promise.allSettled([...new Set(bins.values())].map(async (bin) => catalogs.set(bin, await supervisorModels(bin))))
+  const failed = probes.find((probe) => probe.status === 'rejected')
+  if (!catalogs.size && failed) throw failed.reason
   const rows = capabilities.providers.flatMap((p) => {
     const native = catalogs.get(bins.get(p.providerInstanceId) ?? '')
     return p.models.flatMap((m) => {

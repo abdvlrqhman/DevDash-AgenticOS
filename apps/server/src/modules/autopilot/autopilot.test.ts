@@ -273,6 +273,12 @@ test("a role's reply in a thread the session started is passed on to it, once", 
   const msg = t.db.prepare('insert into team_messages (thread_id, kind, body, author_role_id, author_session_id, author_label) values (?, ?, ?, ?, ?, ?)')
   msg.run(th, 'question', 'Can we ship the pricing page?', null, 's1', 'Session s1')
   msg.run(th, 'reply', 'Yes, but drop the annual toggle.', ceo, null, 'CEO')
+  // A native question must stay with its owner even if a role answered the session's thread.
+  t.db.prepare("update claude_sessions set harness = 't3code', drive = 0, permission_mode = 'bypassPermissions', status = 'waiting' where id = 's1'").run()
+  await t.autopilot.setSettings(t.yo, { t3Sessions: true })
+  await t.autopilot.sweep()
+  assert.equal(t.sends().length, 0)
+  t.quiet('s1')
   const did = await t.autopilot.sweep()
   assert.ok(did.some((d) => d.what === 'relay'))
   assert.match(JSON.stringify(t.sends().at(-1)!.content), /CEO wrote in team thread #\d+ \\"Pricing page\\"[\s\S]*drop the annual toggle/)
@@ -749,4 +755,31 @@ test('disabling T3 enrollment during a supervisor decision also skips later T3 t
   assert.deepEqual(await t.autopilot.sweep(), [])
   assert.equal(t.sent.filter((r) => r.op === 'claude.history').length, 1)
   assert.equal(t.sends().length, 0)
+})
+
+test('a T3 supervisor cannot answer a team ask after its project is turned off mid-decision', async () => {
+  const answers: string[] = []
+  const t = setup({ team: {
+    projects: () => [{ id: 1, slug: 'shop', name: 'Shop' }],
+    waiting: () => ({ proposals: [], asks: [{ id: 7, title: 'Wording', ask: 'Short or long?', role: 'CEO', project: 'shop',
+      updatedAt: nowS - 3600, lastMessage: 1, url: '/projects/shop/team/threads/7', recent: ['Short or long?'] }] }),
+    approve: async () => {},
+    answer: (_u, _slug, _id, text) => answers.push(text),
+  } })
+  t.db.prepare("insert into projects (id, slug, name, created_by) values (1, 'shop', 'Shop', 1)").run()
+  t.autopilot.setEnabled(t.yo, true)
+  t.autopilot.setTeam(t.yo, 1, true)
+  await t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'opencode/test/model' })
+  const complete = t.claude.complete
+  t.claude.complete = async () => {
+    t.autopilot.setTeam(t.yo, 1, false)
+    return '{"action":"answer","tier":"green","message":"Short","why":"agreed"}'
+  }
+  assert.deepEqual(await t.autopilot.teamAsks(t.yo), [])
+  assert.equal(answers.length, 0)
+  t.claude.complete = complete
+  t.reply.decision = '{"action":"answer","tier":"green","message":"Short","why":"agreed"}'
+  t.autopilot.setTeam(t.yo, 1, true)
+  await t.autopilot.teamAsks(t.yo)
+  assert.equal(answers.length, 1)
 })

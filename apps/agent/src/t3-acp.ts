@@ -280,7 +280,8 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
       const runId = result.runId
       running = runId
       const deadline = deadlineAt
-      let announcedWaiting = false
+      let waiting = false
+      let waits = 0
       let settled = false
       let cursor = afterPosition
       let interval = 250
@@ -308,9 +309,11 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
             settled = true
             throw new Error('T3 Code reached the turn time limit and the DevDash-started run was stopped.')
           }
-          if (thread.status === 'waiting' && (thread.pendingRequestCount ?? 0) > 0 && !announcedWaiting) {
-            announcedWaiting = true
-            update({ sessionUpdate: 'agent_message_chunk', messageId: `waiting-${runId}`, content: { type: 'text', text: `\nT3 Code needs an answer. Continue in T3 Code${thread.link ? `: ${thread.link}` : '.'}\n` } })
+          const pending = thread.status === 'waiting' && (thread.pendingRequestCount ?? 0) > 0
+          if (pending !== waiting) {
+            waiting = pending
+            update({ sessionUpdate: 'session_info_update', _meta: { 'devdash/t3-status': { status: pending ? 'waiting' : 'working' } } })
+            if (pending) update({ sessionUpdate: 'agent_message_chunk', messageId: `waiting-${runId}-${++waits}`, content: { type: 'text', text: `\nT3 Code needs an answer. Continue in T3 Code${thread.link ? `: ${thread.link}` : '.'}\n` } })
           }
           // Completed older items need not be paged again. Keep the newest item and any unfinished items because
           // their positions stay fixed while T3 appends streamed text or finishes tool output.
