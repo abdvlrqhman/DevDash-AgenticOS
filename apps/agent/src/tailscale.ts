@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
@@ -148,5 +149,14 @@ export async function status(): Promise<Status> {
 export async function down(): Promise<Status> {
   if (await socketReady()) await cli('logout').catch(() => {})
   await tsTmux('kill-session', '-t', `=${SESSION}`).catch(() => {})
+  await rm(STATE_FILE, { force: true }) // logged out, it's worthless; gone, resume() leaves the node off
   return status()
+}
+
+/**
+ * Starts the member's node again when it should be up but isn't: after the server restarts, nothing else would, and
+ * sessions that reach the tailnet send through its proxies. A member who disconnected (no state) stays disconnected.
+ */
+export async function resume() {
+  if (existsSync(STATE_FILE) && !(await running())) await ensureDaemon()
 }

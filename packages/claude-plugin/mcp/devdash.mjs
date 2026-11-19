@@ -87,7 +87,7 @@ async function listTools() {
   if (workflow !== 'hamasa') throw new Error('Unknown DevDash workflow.')
   const assistant = await assistantTools(call, context)
   if (!assistant.length) throw new Error('Hamasa tools require an active personal agent session.')
-  return [...TOOLS, ...assistant]
+  return [...TOOLS, ...assistant, ...await teamTools(call, context)]
 }
 let listed
 const tools = () => (listed ??= listTools())

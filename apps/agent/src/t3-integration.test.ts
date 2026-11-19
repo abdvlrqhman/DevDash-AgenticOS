@@ -594,7 +594,7 @@ test('Hamasa and Autopilot invoke only their workflow tools with the current mem
   const server = unixServer((s) => s.on('data', (buf) => {
     const req = JSON.parse(String(buf))
     requests.push(req)
-    const reply = req.method === 'mcp.assistant_here' ? { name: 'Test' } : req.method === 'mcp.autopilot_here' ? true : 'From the member socket'
+    const reply = req.method === 'mcp.assistant_here' ? { name: 'Test' } : req.method === 'mcp.autopilot_here' ? true : req.method === 'mcp.team_role' ? { session: true } : 'From the member socket'
     s.end(JSON.stringify({ result: reply }) + '\n')
   })).listen(socket)
   await new Promise<void>((r) => server.once('listening', r))
@@ -618,6 +618,7 @@ test('Hamasa and Autopilot invoke only their workflow tools with the current mem
         const list = (await run(helper, ['list'])).stdout.trim().split('\n')
         const name = assistant ? 'sessions_list' : 'autopilot_rules'
         assert.ok(list.includes(name))
+        assert.equal(list.includes('team_threads'), assistant)
         assert.ok(!list.includes(assistant ? 'autopilot_log' : 'session_create'))
         const cmd = run(helper, ['call', name])
         cmd.child.stdin!.end('{"mine":true}')
