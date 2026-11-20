@@ -215,7 +215,10 @@ Everything the team and its agents work on, in one place.
   download limit.
 - **Terminals:** a persistent shell per member, on the web and in the apps, with a key bar on phones.
 - **Vault:** end-to-end encrypted passwords and secrets. The server only ever stores ciphertext.
-- **Remote browser:** one shared Chromium, streamed into DevDash and started on demand.
+- **Remote browser:** one shared Chromium, streamed into DevDash and started on demand. In Browser chat, ask about visible
+  text, open a web address, scroll, or click a named label. Admins can grant or revoke individual members under
+  **Browser chat access**. Each conversation is private to its member. It uses the granting admin’s Autopilot supervisor
+  model and sends it locally recognized screen text. Everyone watching sees the resulting browser actions.
 - **Search and pins** across all of it.
 
 ### Operations
@@ -287,7 +290,7 @@ The server takes care of itself.
 - A fresh **Ubuntu 24.04** server you can reach as root over SSH. 4 vCPUs and 8 GB of RAM is a comfortable start for a
   small team; agents, builds and services all run here, so more helps.
 - A **domain proxied by Cloudflare** (the firewall only admits Cloudflare on port 443).
-- Optional: **Docker**, for the shared remote browser.
+- Optional: **Docker** for the shared remote browser and **Tesseract OCR** for Browser chat.
 
 The setup installs Node 24, Caddy, the GitHub CLI, rclone and Tailscale (pinned and checksum-verified where
 applicable) and configures SSH hardening, a firewall, swap and automatic security updates. The coding agents,

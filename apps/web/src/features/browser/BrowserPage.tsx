@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, Globe, Maximize, Power, UserPlus } from 'lucide-react'
+import { Copy, Globe, Maximize, MessageSquare, Power, Shield, UserPlus } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { PageHeader, pageCol } from '@/components/app/page'
 import { NativeSelect } from '@/components/app/native-select'
@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { api, meQuery, unwrap } from '@/lib/api'
 import { inShell } from '@/lib/shell'
+import { BrowserChat, ChatAccess } from './BrowserChat'
 import { ErrorAlert } from '../auth/LoginPage'
 
 /**
@@ -23,6 +24,11 @@ export function BrowserPage() {
   const status = useQuery({ queryKey: ['browser'], queryFn: () => unwrap(api.api.browser.$get()) })
   const [url, setUrl] = useState<string | null>(null)
   const [inviting, setInviting] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [accessOpen, setAccessOpen] = useState(false)
+  const permission = useQuery({ queryKey: ['browser-chat-permission', me.id],
+    queryFn: () => unwrap(api.api.browser.chat.permission.$get()), refetchInterval: 10_000 })
+  const canChat = permission.data?.allowed && !permission.error
   const open = useMutation({
     mutationFn: () => unwrap(api.api.browser.open.$post()),
     onSuccess: (r) => { setUrl(r.url); void qc.invalidateQueries({ queryKey: ['browser'] }) },
@@ -47,14 +53,19 @@ export function BrowserPage() {
     <div className="flex h-full flex-col">
       <PageHeader title="Browser" description="One shared browser on the server, signed in to your team's tools"
         actions={<>
-          <Button size="sm" variant="outline" onClick={() => setInviting(true)}><UserPlus /><span className="hidden sm:inline">Invite to watch</span></Button>
+          {url && canChat && <Button size="sm" aria-label="Browser chat" aria-expanded={chatOpen} variant={chatOpen ? 'secondary' : 'outline'} onClick={() => setChatOpen(!chatOpen)}><MessageSquare /><span className="hidden sm:inline">Browser chat</span></Button>}
+          {me.role === 'admin' && <Button size="icon-sm" variant="ghost" aria-label="Browser chat access" title="Browser chat access" onClick={() => setAccessOpen(true)}><Shield /></Button>}
+          <Button size="sm" variant="outline" aria-label="Invite to watch" onClick={() => setInviting(true)}><UserPlus /><span className="hidden sm:inline">Invite to watch</span></Button>
           {url && !inShell() && <Button size="sm" variant="outline" onClick={() => document.getElementById('dd-browser')?.requestFullscreen?.()}><Maximize /><span className="hidden sm:inline">Full screen</span></Button>}
           {url && me.role === 'admin' && <Button size="icon-sm" variant="ghost" aria-label="Stop the browser" disabled={stop.isPending} onClick={() => stop.mutate()}><Power /></Button>}
         </>} />
+      {accessOpen && me.role === 'admin' && <ChatAccess userId={me.id} onClose={() => setAccessOpen(false)} />}
       {inviting && <Invites onClose={() => setInviting(false)} />}
       {url ? (
-        <div style={pageCol()} className="page-col canvas flex min-h-0 flex-1 flex-col py-2 md:py-4"><iframe id="dd-browser" title="Shared browser" src={url} className="min-h-0 w-full flex-1 rounded-2xl border-0 bg-black"
-          allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone" /></div>
+        <div style={pageCol()} className="page-col canvas flex min-h-0 flex-1 flex-col gap-2 py-2 md:flex-row md:py-4"><iframe id="dd-browser" title="Shared browser" src={url} className="min-h-0 min-w-0 w-full flex-1 rounded-2xl border-0 bg-black"
+          allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone" />
+          {chatOpen && canChat && <BrowserChat userId={me.id} onClose={() => setChatOpen(false)} />}
+        </div>
       ) : (
         // Not running: the panel stands where the browser will be, with the one button that starts it.
         <div style={pageCol()} className="page-col flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto py-6 md:py-8">

@@ -24,6 +24,7 @@ import { sharesService } from './modules/files/shares.ts'
 import { buildsRoutes } from './modules/builds/routes.ts'
 import { vaultRoutes } from './modules/vault/routes.ts'
 import { browserRoutes, watchRoutes } from './modules/browser/routes.ts'
+import { browserChat } from './modules/browser/chat.ts'
 import { browserService } from './modules/browser/service.ts'
 import { statusRoutes } from './modules/status/routes.ts'
 import { servicePages } from './modules/previews/service.ts'
@@ -153,6 +154,8 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const builds = buildsService({ db, agents, projects, shares })
   const vault = vaultService({ db })
   const browser = browserService({ db, runDir: config.runDir, dataDir: config.dataDir, masterKey: config.masterKey, origin: config.origin })
+  const chat = browserChat(db, browser, (admin, system, prompt) =>
+    claude.complete(admin.username, prompt, { system, ...autopilot.supervisorModel(admin.id) }))
   // "Ready to review": a role's approved code proposal, finished with commits, ships in one tap. Team detects it (it has
   // the proposal context) and calls reviews.record; the claude module never imports Team.
   reviews = reviewsService({ db, hub, agents, projects, notify: notifications.notify, onMerged: (d, commit) => team?.service?.noteDeliveryMerged(d.session_id, commit) })
@@ -226,7 +229,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     .route('/api/tailnet', tailnetRoutes(tailnet, mw))
     .route('/api/storage', storageRoutes(storage, mw))
     .route('/api/pins', pinsRoutes(pins, mw))
-    .route('/api/browser', browserRoutes(browser, mw))
+    .route('/api/browser', browserRoutes(browser, chat, mw))
     .route('/api/status', statusRoutes(status, deploys, mw))
     .route('/api/team', team.routes) // Team
     .route('/api', reviewsRoutes(reviews, mw)) // "Ready to review" deliveries

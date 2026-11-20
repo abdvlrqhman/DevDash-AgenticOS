@@ -30,6 +30,10 @@ install -d -m 2775 -o root -g devdash-users /srv/devdash/projects /srv/devdash/w
 install -d -m 700 -o root -g root /srv/devdash/trash
 # The team's shared SDKs and package caches (apps/agent/src/shared-tools.ts): one copy for everyone, logins excluded.
 install -d -m 2775 -o root -g devdash-users /srv/devdash/shared
+# The optional shared browser uses local OCR so text-only models can read the live screen.
+if command -v docker >/dev/null && ! command -v tesseract >/dev/null; then
+  apt-get install -yq tesseract-ocr >/dev/null
+fi
 command -v gh >/dev/null || apt-get install -yq gh >/dev/null
 # Bun for members who switch claude-mem on (its worker runs on Bun and looks for /usr/local/bin/bun).
 if [[ ! -x /usr/local/bin/bun ]]; then
