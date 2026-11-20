@@ -519,9 +519,14 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       case 'claude.efforts':
         setLive(s.id, { efforts: Array.isArray(ev.efforts) ? (ev.efforts as unknown[]).filter((e): e is string => typeof e === 'string').slice(0, 20) : [] })
         return publish(s.id)
-      case 'claude.tasks':
-        setLive(s.id, { tasks: Array.isArray(ev.tasks) ? (ev.tasks as Task[]).slice(0, 50) : [] })
+      case 'claude.tasks': {
+        const had = live.get(s.id)?.tasks?.length ?? 0
+        const tasks = Array.isArray(ev.tasks) ? (ev.tasks as Task[]).slice(0, 50) : []
+        setLive(s.id, { tasks })
+        // The last helper finished after the turn ended: that's activity too (its work may be what the session was for).
+        if (had && !tasks.length && s.status !== 'working') repo.touch(s.id)
         return publish(s.id)
+      }
       case 'claude.msg': {
         const m = ev.msg as {
           type?: string; subtype?: string; result?: unknown; is_error?: boolean; terminal_reason?: string; total_cost_usd?: number
@@ -1193,6 +1198,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       prompts.add(fn)
       return () => void prompts.delete(fn)
     },
+
+    /** How many background helpers (shells, subagents, monitors) a session has running after its turn. */
+    background: (id: string) => live.get(id)?.tasks?.length ?? 0,
 
     /** A member's sessions that aren't archived, for features that watch them, each saying whether it's a team role's. */
     ownedActive: (username: string) => repo.ownedActive(username).map((s) => ({ ...s, role: !!roleLabel(s) })),

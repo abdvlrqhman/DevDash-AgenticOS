@@ -319,3 +319,47 @@ test('following only on their word; the supervisor leaves followed sessions to H
   assert.equal(t.sent.filter((r) => r.op === 'claude.complete').length, 0)
   assert.equal(hash('a'), hash('a'))
 })
+
+test('after Hamasa told them (waiting_you), the session finishing still wakes it once: report, no automatic reply', async () => {
+  const t = await ready()
+  t.autopilot.setEnabled(t.ann, true)
+  t.set('work', 'idle', 5)
+  await t.follow.deliver(1)
+  t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: 'Step 1 is done; shall it go on?' } })
+  assert.equal(t.follow.state(t.ann).sessions.find((s) => s.sessionId === 'work')!.state, 'waiting_you')
+  // The session carries on and really finishes later.
+  t.tick(120_000)
+  t.set('work', 'working')
+  assert.equal(await t.follow.deliver(1), false)
+  t.set('work', 'idle', 0)
+  t.quietChat(t.chat)
+  assert.equal(await t.follow.deliver(1), true)
+  assert.equal(await t.follow.deliver(1), false, 'once')
+  assert.match(reminders(t).at(-1)!.text, /Polish the panel[\s\S]*automatic replies are paused until they write: report this/)
+  await assert.rejects(t.rpc('follow_reply', t.chat, { id: 'work', text: 'Go on', tier: 'green', why: 'x' }), /told them/)
+})
+
+test('a wake-up with nothing new (follow_keep) changes nothing: still on, the same budget, no dot, no ping', async () => {
+  const t = await ready()
+  t.set('work', 'idle', 5)
+  await t.follow.deliver(1)
+  await assert.rejects(t.rpc('follow_keep', t.chat, { id: 'pr' }), /just woke you/, 'only for a session in this wake-up')
+  assert.match(await t.rpc('follow_keep', t.chat, { id: 'work' }) as string, /Kept following quietly/)
+  t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: '' } })
+  const f = t.follow.state(t.ann).sessions.find((s) => s.sessionId === 'work')!
+  assert.deepEqual([f.state, f.replies], ['on', 0])
+  assert.equal(t.notified.length, 0)
+  assert.equal(t.assistant.state(t.ann).unread, false, 'nothing written, so no dot')
+})
+
+test("idle with a helper still running isn't done; the helper finishing is what wakes Hamasa", async () => {
+  const t = await ready()
+  t.emit({ ev: 'claude.tasks', id: 'work', tasks: [{ id: 'b1', type: 'local_agent', description: 'Write the files' }] })
+  t.set('work', 'idle', 5) // the turn ended, its helper still works
+  assert.equal(await t.follow.deliver(1), false, 'nothing to tell yet')
+  t.tick(60_000)
+  t.emit({ ev: 'claude.tasks', id: 'work', tasks: [] }) // the helper finished and wrote the files: no new turn
+  t.quietChat(t.chat)
+  assert.equal(await t.follow.deliver(1), true)
+  assert.match(reminders(t)[0]!.text, /Polish the panel[\s\S]*finished a turn/)
+})

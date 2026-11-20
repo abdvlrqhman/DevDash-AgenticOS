@@ -11,7 +11,7 @@ import { useTopic } from '@/lib/live'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { assistantQuery } from './AssistantDock'
-import { followLabel, followLight as light } from './follow-label'
+import { followLabel, followLight as light, followNeedsYou } from './follow-label'
 import { AGENT_NAME, panelCoversPage, setAssistantOpen } from './store'
 
 type State = Awaited<ReturnType<typeof assistantQuery.queryFn & {}>>
@@ -46,17 +46,17 @@ export function FollowStrip({ st }: { st: State }) {
     <div className="flex shrink-0 flex-col border-b bg-surface-2/60 px-3 py-1.5" aria-label={`Sessions ${AGENT_NAME} follows`}>
       <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground"><Eye className="size-3" />Following</div>
       <ul className="flex flex-col">
-        {st.following.sessions.map((f) => (
+        {st.following.sessions.map((f) => { const status = live[f.sessionId] ?? f.status; return (
           <li key={f.sessionId} className="flex min-h-8 items-center gap-2 text-sm">
-            <StatusLight state={light(live[f.sessionId] ?? f.status)} className="shrink-0" />
+            <StatusLight state={light(status)} className="shrink-0" />
             <Link to="/sessions/$id" params={{ id: f.sessionId }} title={f.goal} className="min-w-0 flex-1 truncate hover:underline"
               onClick={() => { if (panelCoversPage()) setAssistantOpen(false) }}>{f.title}</Link>
-            <span className={cn('shrink-0 text-xs tabular-nums', f.state === 'waiting_you' ? 'text-attention-foreground dark:text-attention' : 'text-muted-foreground')}>{followLabel(f)}</span>
+            <span className={cn('shrink-0 text-xs tabular-nums', followNeedsYou(status) ? 'text-attention-foreground dark:text-attention' : 'text-muted-foreground')}>{followLabel(f, status)}</span>
             <button type="button" aria-label={`Stop following ${f.title}`} title="Stop following" disabled={unfollow.isPending}
               className="-mr-1 flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => unfollow.mutate(f.sessionId)}><X className="size-3.5" /></button>
           </li>
-        ))}
+        ) })}
       </ul>
     </div>
   )

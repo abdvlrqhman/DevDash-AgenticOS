@@ -6,7 +6,7 @@ import type { SttEvent, SttProvider, TtsProvider } from './providers.ts'
 const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)) }
 
 /** A voice conversation wired to fakes: what the recogniser hears, what the chat answers, what the browser gets. */
-function setup(o: { mode?: 'hands-free' | 'ptt'; cap?: number; chunks?: (text: string) => Uint8Array[]; languages?: string[]; waitTalk?: boolean; endWait?: 'quick' | 'normal' | 'patient' } = {}) {
+function setup(o: { mode?: 'hands-free' | 'ptt'; cap?: number; chunks?: (text: string) => Uint8Array[]; languages?: string[]; waitTalk?: boolean; endWait?: 'quick' | 'normal' | 'patient'; fail?: (text: string, attempt: number) => boolean; expressions?: boolean } = {}) {
   let hear: (e: SttEvent) => void = () => {}
   const stt = { audio: [] as number[], finalized: 0, keepalives: 0, agentText: [] as string[], closed: false }
   const sttProvider: SttProvider = {
@@ -25,8 +25,11 @@ function setup(o: { mode?: 'hands-free' | 'ptt'; cap?: number; chunks?: (text: s
   const timeline: string[] = []
   const ttsProvider: TtsProvider = {
     id: 'faketts', label: 'Fake TTS', voices: null, defaultVoice: null,
+    expressions: o.expressions,
     async *speak(_key, { text, signal }) {
       spoken.push(text)
+      const attempt = spoken.filter((x) => x === text).length
+      if (o.fail?.(text, attempt)) throw new Error('Fish Audio: 500 upstream error')
       timeline.push(`start ${text}`)
       // Sound, not silence: silence at the edges is trimmed off.
       for (const c of (o.chunks?.(text) ?? [new Uint8Array(4800), new Uint8Array(4800)]).map((x) => x.fill(0x40))) {
@@ -552,4 +555,68 @@ test('[laughing]-style cues: never read out by a voice that can\'t act them, nev
   assert.deepEqual(t.answers(), ['That one was funny, honestly.'])
   // The message tells the model which cues it may use only when the voice can act them out.
   assert.doesNotMatch(t.chat.sent[0]!, /expressions=/)
+})
+
+test('his reply: a short <voice> block, then 2,000+ characters of markdown, streamed in odd pieces: the block is spoken', async () => {
+  const voice = '[chuckling] تمام يا باشا، كتبتلك الإيميل بالإنجليزي في الشات وفيه كل النقط اللي قلتها.'
+  const written = ('\n\n## Draft\n\n> **Subject:** Follow-up on the `shop` deploy <draft>\n>\n> Hi Ann,\n\n- **Tests:** 40 pass\n- الـ migration محتاجة تتراجع\n- 3 < 5 and 5 > 3, see [the PR](https://x/y)\n\n```ts\nconst x = a < b\n```\n').repeat(10)
+  const reply = `<voice>${voice}</voice>${written}`
+  assert.ok(reply.length > 2000)
+  const t = setup({ languages: ['ar', 'en', 'de'], expressions: true })
+  t.say('اكتبلي إيميل لآن', 'ar'); t.endpoint(); await flush()
+  assert.match(t.chat.sent[0]!, /expressions="laughing chuckling sighing whispering break"/)
+  t.reply({ type: 'stream_event', event: { type: 'message_start' } })
+  // "</voice>" and the text after it in one piece, then the rest in pieces of 37.
+  const cut = reply.indexOf('</voice>') - 5
+  t.delta(reply.slice(0, cut)); t.delta(reply.slice(cut, cut + 60))
+  for (let i = cut + 60; i < reply.length; i += 37) t.delta(reply.slice(i, i + 37))
+  t.reply({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } })
+  t.result({ result: reply })
+  await flush()
+  assert.deepEqual(t.spoken, [voice]) // the cue goes to a voice that acts it out
+  assert.deepEqual(t.answers(), ['تمام يا باشا، كتبتلك الإيميل بالإنجليزي في الشات وفيه كل النقط اللي قلتها.'])
+  t.playAll()
+  const log = t.logs.at(-1)!
+  assert.equal(log.voiceChars, voice.length)
+  assert.equal(log.pieces, 1)
+  assert.deepEqual(log.errors, [])
+})
+
+test('a voice service failure is retried once; if it fails again, the voice bar says so instead of going quiet', async () => {
+  const once = setup({ fail: (_t, attempt) => attempt === 1 })
+  once.say('x'); once.endpoint(); await flush()
+  once.delta('<voice>The build is green again.</voice>')
+  await flush()
+  assert.deepEqual(once.answers(), ['The build is green again.']) // the second try worked
+  const twice = setup({ fail: () => true })
+  twice.say('x'); twice.endpoint(); await flush()
+  twice.delta('<voice>The build is green again.</voice>')
+  await flush()
+  assert.deepEqual(twice.answers(), [])
+  assert.ok(twice.client.msgs.some((m) => m.type === 'error' && /^Couldn't speak this reply: 500 upstream error/.test(String(m.message))))
+  twice.conv.end('stopped')
+  assert.deepEqual(twice.logs.at(-1)!.errors, ['tts:1', 'tts:2'])
+})
+
+test('a player that stays stuck: after the retries the voice bar says so, and the next reply tries again from scratch', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const t = setup({ chunks: () => [new Uint8Array(48000)] })
+    t.say('status'); t.endpoint(); await flush()
+    t.delta('<voice>Everything is running fine today.</voice>')
+    await flush()
+    for (let i = 0; i < 3; i++) { mock.timers.tick(1000 + STUCK_MS + 1000); await flush() }
+    assert.ok(t.client.msgs.some((m) => m.type === 'error' && /Couldn't play this reply/.test(String(m.message))))
+    t.result()
+    const before = t.marks().length
+    t.say('and now'); t.endpoint(); await flush()
+    t.delta('<voice>The second reply is here now.</voice>')
+    await flush()
+    assert.equal(t.marks().length, before + 1)
+    mock.timers.tick(1000 + STUCK_MS + 100); await flush()
+    assert.equal(t.marks().length, before + 2) // retried: the counter started over for the new reply
+    t.conv.end('stopped')
+  } finally {
+    mock.timers.reset()
+  }
 })

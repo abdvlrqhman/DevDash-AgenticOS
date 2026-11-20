@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import { agentName } from './harness'
 import type { Session } from './data'
 import { useFollowed, useUnfollow } from '../assistant/Following'
-import { followLabel } from '../assistant/follow-label'
+import { followLabel, followNeedsYou } from '../assistant/follow-label'
 import { AGENT_NAME } from '../assistant/store'
 
 // Why fast mode isn't serving, from Claude Code's fast_mode_disabled_reason.
@@ -42,15 +42,20 @@ const Chip = ({ children, tone, label }: { children: ReactNode; tone?: 'attentio
 )
 
 /** "Hamasa is following": what it's after, what it may do, and Unfollow. */
-function FollowChip({ id }: { id: string }) {
+function FollowChip({ id, status }: { id: string; status: string }) {
   const f = useFollowed(id)
   const unfollow = useUnfollow()
   if (!f) return null
+  const label = followLabel(f, status)
   return (
     <Popover>
-      <Chip label={`${AGENT_NAME} is following this session`} tone={f.state === 'waiting_you' ? 'attention' : 'live'}>
-        <Eye className="size-3.5" /><span className="max-sm:hidden">{AGENT_NAME} is following</span><span className="sm:hidden">{AGENT_NAME}</span>
-        <span className="text-muted-foreground tabular-nums">· {followLabel(f)}</span>
+      <Chip label={`${AGENT_NAME} is following this session`} tone={followNeedsYou(status) ? 'attention' : 'live'}>
+        <Eye className="size-3.5" />
+        {/* "Hamasa told you" already names it; otherwise who follows, then where it stands. */}
+        {label.startsWith(AGENT_NAME) ? <span>{label}</span> : <>
+          <span className="max-sm:hidden">{AGENT_NAME} is following</span><span className="sm:hidden">{AGENT_NAME}</span>
+          <span className="text-muted-foreground tabular-nums">· {label}</span>
+        </>}
       </Chip>
       <PopoverContent align="start" className="w-72 text-sm">
         <p className="font-medium">{AGENT_NAME} is following this session</p>
@@ -127,7 +132,7 @@ export function SessionChips({ s, isOwner, canSend, working, onUpdate, onCompact
     : s.fast && s.fast.state !== 'on' ? (s.fast.reason && FAST_REASON[s.fast.reason]) ?? 'Fast mode is not available right now.' : null
   return (
     <>
-      <FollowChip id={s.id} />
+      <FollowChip id={s.id} status={s.status} />
       {s.origin?.kind === 'proposal' && (
         <Popover>
           <Chip label={`From ${s.origin.role}'s approval`}><BadgeCheck className="size-3.5" /><span className="max-sm:hidden">From {s.origin.role}'s approval</span><span className="sm:hidden">Approval</span></Chip>

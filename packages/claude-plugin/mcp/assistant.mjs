@@ -54,6 +54,11 @@ export const ASSISTANT_TOOLS = [
     }, ['id', 'text', 'tier', 'why']),
   },
   {
+    name: 'follow_keep',
+    description: "Only after DevDash woke you about a followed session: there's nothing new for the person (it's still on it). The follow stays as it was, nothing is shown to them and they aren't notified; you're woken again when it changes. Then write nothing to them about it.",
+    inputSchema: obj({ id }, ['id']),
+  },
+  {
     name: 'follow_answer',
     description: "Only after DevDash woke you about a followed session that asks a question: answer it for the person, within their autopilot rules (never a permission prompt; never a red question). Same limits as follow_reply.",
     inputSchema: obj({

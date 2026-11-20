@@ -31,6 +31,8 @@ install -d -m 700 -o root -g root /srv/devdash/trash
 # The team's shared SDKs and package caches (apps/agent/src/shared-tools.ts): one copy for everyone, logins excluded.
 install -d -m 2775 -o root -g devdash-users /srv/devdash/shared
 command -v gh >/dev/null || apt-get install -yq gh >/dev/null
+# pg_dump/pg_restore: each worktree's own copy of a project's dev database, without disturbing the main one (apps/agent/src/worktree-db.ts).
+command -v pg_dump >/dev/null || apt-get install -yq postgresql-client >/dev/null || echo 'postgresql-client not installed: worktree databases copy only an idle main database'
 # Bun for members who switch claude-mem on (its worker runs on Bun and looks for /usr/local/bin/bun).
 if [[ ! -x /usr/local/bin/bun ]]; then
   command -v unzip >/dev/null || apt-get install -yq unzip >/dev/null
