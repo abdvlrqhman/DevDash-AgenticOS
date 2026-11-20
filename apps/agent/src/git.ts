@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { promisify } from 'node:util'
+import * as worktreeDb from './worktree-db.ts'
 
 // Git as this member, in shared checkouts under /srv/devdash. Never prompts: missing credentials fail fast with a clear message.
 const ROOT = process.env.DEVDASH_PROJECTS_ROOT || '/srv/devdash'
@@ -167,7 +168,9 @@ export const ops = {
     const base = String(r.base ?? '')
     if (!/^dd\/[a-z0-9-]{1,40}$/.test(branch) || !/^[\w./-]+$/.test(base)) throw new Error('invalid branch')
     await git(['-C', path, 'worktree', 'add', '--quiet', '-b', branch, wt, base])
-    return { ok: true }
+    // Its env files, and its own copy of the dev database when the project opted in (worktree-db.ts). Never throws.
+    const databases = await worktreeDb.setup(path, wt).catch((err: Error) => { console.error('worktree setup:', err.message); return [] })
+    return { ok: true, databases }
   },
 
   /** Removes a worktree only when it has nothing uncommitted; otherwise it stays for someone to look at. */
@@ -176,6 +179,7 @@ export const ops = {
     const wt = checked(r.worktree)
     if (!existsSync(wt)) return { removed: true }
     if ((await git(['-C', wt, 'status', '--porcelain'])).trim()) return { removed: false }
+    await worktreeDb.teardown(wt)
     await git(['-C', path, 'worktree', 'remove', wt])
     return { removed: true }
   },

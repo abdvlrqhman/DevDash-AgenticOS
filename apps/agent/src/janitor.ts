@@ -2,8 +2,9 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { lstat, readdir, realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
+import * as worktreeDb from './worktree-db.ts'
 
 // Worktree janitor: runs AS the member (one agent per member) and prunes leftover worktrees so they stop filling the
 // shared disk. Two kinds:
@@ -146,6 +147,7 @@ async function inspect(repo: string, path: string, reg: Registered, base: Base, 
 
 /** Removes a proven-safe worktree: force-remove, prune admin state, delete its now-merged branch (never a base branch). */
 async function removeWorktree(repo: string, path: string, reg: Registered, base: Base): Promise<void> {
+  await worktreeDb.teardown(path) // its own database copy goes with it (worktree-db.ts); never throws
   const res = await git(repo, ['worktree', 'remove', '--force', path])
   if (!res.ok) throw new Error('git worktree remove failed')
   await git(repo, ['worktree', 'prune'])
@@ -335,6 +337,8 @@ export async function sweep(now = Date.now(), inUse?: InUse): Promise<Result> {
   await sweepDevdashWorktrees(now, out, inUse).catch((err) => console.log(`janitor: devdash worktrees sweep failed — ${(err as Error).message}`))
   await sweepUploads(now, out).catch((err) => console.log(`janitor: uploads sweep failed — ${(err as Error).message}`))
   await sweepAttachments(now, out).catch((err) => console.log(`janitor: attachments sweep failed — ${(err as Error).message}`))
+  // Worktree database copies whose worktree is gone (removed by hand, say): dropped so they don't fill the disk.
+  for (const repo of repos) await worktreeDb.sweep(repo, join(ROOT(), 'worktrees', basename(repo)))
   if (out.removed || out.skipped) console.log(`janitor: removed ${out.removed}, kept ${out.skipped} stale/uncertain worktree(s)`)
   return out
 }

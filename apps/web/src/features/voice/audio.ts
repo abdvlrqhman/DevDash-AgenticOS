@@ -55,6 +55,7 @@ export function createVoiceClient(o: { page: () => string; session?: string }) {
   let wake: { release(): Promise<void> } | null = null
   let gen = 0
   let ready = false
+  let ownsSession = false
   let lastPage = ''
   let pageTimer: ReturnType<typeof setInterval> | undefined
 
@@ -97,10 +98,14 @@ export function createVoiceClient(o: { page: () => string; session?: string }) {
     void wake?.release().catch(() => {})
     wake = null
     ready = false
-    try { (navigator as AudioSessionNavigator).audioSession!.type = 'auto' } catch { /* not Safari */ }
+    // Only the client that set the page's audio session gives it back: an idle one (every session page has one)
+    // must never touch it, or it silences the conversation that's live in Hamasa's panel.
+    if (ownsSession) try { (navigator as AudioSessionNavigator).audioSession!.type = 'auto' } catch { /* not Safari */ }
+    ownsSession = false
   }
 
   function stop(why: VoiceSnapshot['ended'] = null) {
+    if (snap.phase === 'off' && !ws && !ctx) return // never started (an idle client): nothing to stop, nothing to touch
     note('stop', { why: why ?? 'tap', ctx: ctx?.state ?? 'none' })
     sendNotes()
     send({ type: 'stop' })
@@ -143,6 +148,7 @@ export function createVoiceClient(o: { page: () => string; session?: string }) {
         note('flush', { gen: Number(m.gen) })
         gen = Number(m.gen)
         playback?.port.postMessage({ cmd: 'clear' })
+        if (ctx && ctx.state !== 'running') void ctx.resume().catch(() => {}) // a reset after a stuck player: wake it
         return set({ saying: '', stopped: true })
       case 'pause': note('pause'); return void playback?.port.postMessage({ cmd: 'pause' })
       case 'resume': note('resume'); return void playback?.port.postMessage({ cmd: 'resume' })
@@ -168,7 +174,7 @@ export function createVoiceClient(o: { page: () => string; session?: string }) {
         // All of this in the same tap: iOS only lets sound play and the mic open from one.
         ctx = new AudioContext({ latencyHint: 'interactive' })
         const resumed = ctx.resume()
-        try { (navigator as AudioSessionNavigator).audioSession!.type = 'play-and-record' } catch { /* not Safari */ }
+        try { (navigator as AudioSessionNavigator).audioSession!.type = 'play-and-record'; ownsSession = true } catch { /* not Safari */ }
         // The site's own policy or an insecure page: no prompt would ever show, so say why before asking.
         if (!window.isSecureContext || micPolicy() === false || !navigator.mediaDevices?.getUserMedia) throw new DOMException('', 'NotAllowedError')
         mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } })

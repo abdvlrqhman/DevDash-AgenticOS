@@ -35,6 +35,8 @@ if command -v docker >/dev/null && ! command -v tesseract >/dev/null; then
   apt-get install -yq tesseract-ocr >/dev/null
 fi
 command -v gh >/dev/null || apt-get install -yq gh >/dev/null
+# pg_dump/pg_restore: each worktree's own copy of a project's dev database, without disturbing the main one (apps/agent/src/worktree-db.ts).
+command -v pg_dump >/dev/null || apt-get install -yq postgresql-client >/dev/null || echo 'postgresql-client not installed: worktree databases copy only an idle main database'
 # Bun for members who switch claude-mem on (its worker runs on Bun and looks for /usr/local/bin/bun).
 if [[ ! -x /usr/local/bin/bun ]]; then
   command -v unzip >/dev/null || apt-get install -yq unzip >/dev/null

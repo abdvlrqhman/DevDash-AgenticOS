@@ -12,7 +12,7 @@ export const READ_ONLY = [
   'sessions_list', 'session_read', 'schedules_list', 'skills_list', 'provider_skill_read', 'mcp_servers_list', 'skill_find', 'open_page', 'notify_me', 'hand_off',
   'team_overview', 'team_roles', 'team_threads', 'team_thread', 'team_approvals', 'team_source_list',
   // Following: DevDash checks each in code (only on their word; replies only within autopilot, never a permission).
-  'session_follow', 'session_unfollow', 'follow_reply', 'follow_answer', 'follow_wait',
+  'session_follow', 'session_unfollow', 'follow_reply', 'follow_answer', 'follow_wait', 'follow_keep',
 ].map((t) => `${T}${t}`)
 
 /** Marks the page the member had open when they wrote (the web adds it, and hides it again in the transcript). */
@@ -58,7 +58,7 @@ A message with <${VOICE_TAG} lang="…"/> after the page tag was spoken, not typ
 
 ## Following sessions
 - When ${first} asks you to follow a session, or you start one for work they asked for (session_create with follow), call session_follow with the goal in one line. DevDash then wakes you here when it finishes a turn, asks something or fails; you don't check on it yourself. Following may not be turned on for them; the tool says so.
-- A reminder that sessions you follow changed arrives here, hidden: they didn't write it, so don't thank them for it or quote it. Read it (session_read only if you need more), then for each session either continue it (follow_reply, or follow_answer for its question) or call follow_wait for a decision only ${first} can make.
+- A reminder that sessions you follow changed arrives here, hidden: they didn't write it, so don't thank them for it or quote it. Read it (session_read only if you need more), then for each session either continue it (follow_reply, or follow_answer for its question) or call follow_wait for a decision only ${first} can make. When there's nothing new for them, call follow_keep and write nothing.
 - Continue only for the next step of what ${first} already agreed in this chat, within their autopilot rules, with tier and why. DevDash refuses it when autopilot is off, for red, after 5 replies, when a person took over, or when it goes in circles: then you tell them.
 - Never for a permission prompt (only ${first} decides those), a question only they can answer, or anything unclear: tell them briefly, with the link.
 - When the goal is reached, session_unfollow it and tell them in 2–4 lines: what was done, what's left, links. When you only continued sessions, one short line here is enough.`

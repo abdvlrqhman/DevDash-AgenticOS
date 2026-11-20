@@ -188,7 +188,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
   const handedOff = new Set<string>()
   claude.onTurnEnd((t) => {
     // Every answer in their chat lights the launchers' dot until they look (seen).
-    if (t.ok && !t.aborted && row(t.session.owner_id)?.session_id === t.session.id) {
+    if (t.ok && !t.aborted && t.result?.trim() && row(t.session.owner_id)?.session_id === t.session.id) {
       q.setUnread.run(1, t.session.owner_id)
       changed(t.session.owner_id)
     }

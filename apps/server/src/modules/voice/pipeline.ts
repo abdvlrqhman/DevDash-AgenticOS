@@ -44,6 +44,8 @@ export const FILLER_MS = 2_500
 export const STILL_MS = 5_000
 /** Sent audio not heard this long after it should have finished: the browser's player is reset and it's sent again. */
 export const STUCK_MS = 3_000
+/** One TTS request may take this long before it's tried again. */
+export const TTS_TIMEOUT_MS = 20_000
 const KEEPALIVE_MS = 10_000
 const TICK_MS = 5_000
 /** How many pieces are synthesized at once: the next sentence is ready when the one playing ends. */
@@ -213,15 +215,17 @@ export function voiceConversation(o: {
   }
 
   // Timings of the turn in progress (ms since they stopped talking).
-  let T: Record<string, unknown> & { at: number; tts: number[]; ttfb: number[]; gaps: number[] } = { at: 0, tts: [], ttfb: [], gaps: [] }
+  type Turn = Record<string, unknown> & { at: number; tts: number[]; ttfb: number[]; gaps: number[]; errors: string[] }
+  const fresh = (): Turn => ({ at: 0, tts: [], ttfb: [], gaps: [], errors: [] })
+  let T: Turn = fresh()
   let lastWordAt = 0
   const ms = () => Date.now() - T.at
   const mark = (k: string) => { if (T.at && T[k] === undefined) T[k] = ms() }
   function flushTimings() {
     if (!T.at || !o.log) return
     const { at: _at, ...t } = T
-    o.log(t)
-    T = { at: 0, tts: [], ttfb: [], gaps: [] }
+    o.log({ ...t, stateAfter: state })
+    T = fresh()
   }
 
   const stt = o.stt.connect(o.sttKey, { languages: o.languages }, (e) => {
@@ -264,18 +268,30 @@ export function voiceConversation(o: {
       const ready = await clip(p.text, p.lang)
       if (ready) { p.chunks.push(...ready); p.done = true; wake(); return void fill() }
     }
-    const sent = Date.now()
-    if (T.at) T.tts.push(ms())
-    let first = true
-    try {
-      for await (const c of o.tts.speak(o.ttsKey, { text: p.text, voice: o.voice(p.lang), lang: p.lang, speed: o.speed, signal: p.ac.signal })) {
-        if (g !== gen || ended) break
-        if (first && T.at) { T.ttfb.push(Date.now() - sent); first = false }
-        p.chunks.push(c)
-        wake()
+    // Tried twice before giving up (a voice service hiccup shouldn't cost the reply), each within TTS_TIMEOUT_MS.
+    for (let attempt = 1; attempt <= 2 && g === gen && !ended; attempt++) {
+      p.chunks = []
+      p.failed = undefined
+      const sent = Date.now()
+      if (T.at) T.tts.push(ms())
+      let first = true
+      try {
+        const signal = AbortSignal.any([p.ac.signal, AbortSignal.timeout(TTS_TIMEOUT_MS)])
+        for await (const c of o.tts.speak(o.ttsKey, { text: p.text, voice: o.voice(p.lang), lang: p.lang, speed: o.speed, signal })) {
+          if (g !== gen || ended) break
+          if (first && T.at) { T.ttfb.push(Date.now() - sent); first = false }
+          p.chunks.push(c)
+        }
+      } catch (err) {
+        if (p.ac.signal.aborted) break
+        const e = err as Error
+        p.failed = e.name === 'TimeoutError' ? new Error('the voice service didn\'t answer in time') : e
+        ev('tts_failed', { attempt, kind: p.kind })
+        if (T.at) T.errors.push(`tts:${attempt}`)
+        continue
       }
-    } catch (err) {
-      if (!p.ac.signal.aborted) p.failed = err as Error
+      if (!p.chunks.length && !p.ac.signal.aborted) { p.failed = new Error('the voice service sent no audio'); if (T.at) T.errors.push(`empty:${attempt}`); continue }
+      break
     }
     const bytes = p.chunks.reduce((n, c) => n + c.length, 0)
     // Whole now: without the silence the TTS put around it, so pieces follow each other like one voice.
@@ -316,11 +332,12 @@ export function voiceConversation(o: {
         }
         if (g !== gen || ended) continue // flushed: the queue was cleared with it
         queue.shift()
-        if (p.failed) o.client.json({ type: 'error', message: p.failed.message })
+        if (p.failed) o.client.json({ type: 'error', message: `Couldn't speak this reply: ${p.failed.message.replace(/^[^:]{1,20}: /, '')}` })
         else {
           said.set(p.id, p)
           o.client.json({ type: 'mark', id: p.id, text: stripExpressions(p.text) })
           ev('sent', { id: p.id, kind: p.kind, ms: Math.round(duration(p)) })
+          if (T.at) T.pieces = ((T.pieces as number | undefined) ?? 0) + 1
           watch(p)
         }
       }
@@ -339,9 +356,18 @@ export function voiceConversation(o: {
     const g = gen
     later(() => {
       if (ended || g !== gen || !said.has(p.id)) return
-      if (recoveries >= 3) return void ev('stuck_gave_up', { id: p.id })
+      if (recoveries >= 2) {
+        // Still not heard: say so where they look, instead of going quiet. The next reply tries again from scratch.
+        ev('stuck_gave_up', { id: p.id })
+        if (T.at) T.errors.push('player_stuck')
+        said.delete(p.id)
+        o.client.json({ type: 'error', message: 'Couldn\'t play this reply: the speaker didn\'t start. It\'s in the chat; end voice mode and start it again if it keeps happening.' })
+        if (!speaking()) quietAgain()
+        return
+      }
       recoveries++
       ev('stuck', { id: p.id, unheard: said.size })
+      if (T.at) T.errors.push('stuck')
       const again = [...said.values()].map((x) => ({ ...x, id: ++nextId, ac: new AbortController(), started: true, done: true }))
       gen++
       said.clear()
@@ -459,7 +485,8 @@ export function voiceConversation(o: {
     // "…, send": the word that sent it isn't part of the message.
     const message = utterance.replace(SEND, '').replace(/[\s،,]+$/, '').trim() || utterance
     flushTimings()
-    T = { at: Date.now(), tts: [], ttfb: [], gaps: [], endpointDelay: lastWordAt ? Date.now() - lastWordAt : null }
+    T = { ...fresh(), at: Date.now(), endpointDelay: lastWordAt ? Date.now() - lastWordAt : null, stateBefore: state, voiceChars: 0, pieces: 0, pageChanges: 0 }
+    recoveries = 0
     bargeIn() // a whole sentence while it speaks is an interruption, even a one-word "stop"
     lang = mainLanguage(all, lang)
     void deliver(message)
@@ -542,6 +569,7 @@ export function voiceConversation(o: {
     if (!t) return
     if (T.firstVoiceText === undefined) ev('voice_text', { quiet })
     mark('firstVoiceText')
+    if (T.at) T.voiceChars = (T.voiceChars as number) + t.length
     spoke = true
     if (quiet) return
     for (const s of chunk.push(t)) say(s)
@@ -632,7 +660,11 @@ export function voiceConversation(o: {
     /** A control message from the browser. Anything else is ignored. */
     control(m: Record<string, unknown>) {
       if (ended) return
-      if (m.type === 'page' && typeof m.page === 'string') page = PAGE.test(m.page) ? m.page : ''
+      if (m.type === 'page' && typeof m.page === 'string') {
+        const next = PAGE.test(m.page) ? m.page : ''
+        if (next !== page && T.at) T.pageChanges = ((T.pageChanges as number | undefined) ?? 0) + 1
+        page = next
+      }
       else if (m.type === 'mode' && (m.mode === 'hands-free' || m.mode === 'ptt')) {
         mode = m.mode
         pttDown = false
@@ -650,6 +682,7 @@ export function voiceConversation(o: {
         if (p === undefined) return
         said.delete(m.id)
         recoveries = 0
+        if (T.at) T.playEnd = ms()
         ev('played', { id: m.id })
         if (p.kind === 'answer') lastPlayed = p.text
         if (!speaking()) quietAgain()

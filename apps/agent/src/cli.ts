@@ -20,6 +20,11 @@ DevDash keeps them running after you close everything, and restarts them if they
 The command must listen on $PORT, bound to 127.0.0.1. Never pick a port yourself.
 Docker: docker run --rm -p 127.0.0.1:$PORT:<container-port> ...   Compose: "127.0.0.1:\${PORT}:<port>"`
 
+const DB_HELP = `Each worktree's own copy of the project's dev database (when its main checkout's .env has DEVDASH_WORKTREE_DB=<variable>).
+
+  devdash db          this worktree's own databases (or, in the main checkout, what new worktrees get)
+  devdash db reset    copy the main database into this worktree's again, e.g. after main's migrations moved on`
+
 type Service = { name: string; owner: { username: string }; port: number; state: string; listening: boolean; command: string; cwd: string; session: { title: string } | null }
 
 function call(method: string, params: object = {}): Promise<Record<string, unknown>> {
@@ -45,6 +50,12 @@ const state = (s: Service) => (s.state === 'running' ? (s.listening ? 'running' 
 
 async function main(argv: string[]) {
   const [group, cmd, ...rest] = argv
+  // `devdash db [reset]`: this worktree's own copy of the dev database (worktree-db.ts), run here as the member.
+  if (group === 'db') {
+    if (cmd && cmd !== 'reset' && cmd !== 'status') return console.log(DB_HELP)
+    const { cli } = await import('./worktree-db.ts')
+    return console.log(await cli(process.cwd(), cmd ?? 'status'))
+  }
   if (!['service', 'services', 'svc'].includes(group ?? '') || !cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(HELP)
     return

@@ -215,39 +215,51 @@ function Costs({ v, onCap }: { v: VoiceSettingsState; onCap: (cap: number | null
 }
 
 /**
- * The last voice conversation's numbers, for "it's choppy": when each step happened, gaps and underruns, which
- * provider and speed. Timings and names only, never words or audio. Copy sends the whole day.
+ * The last ten voice turns, for "I heard nothing" or "it's choppy": per turn, whether a voice block came and how long,
+ * pieces sent, when audio started and stopped, errors, page changes, the state before and after. Timings and names
+ * only, never words or audio. Copy sends those turns and the day's events.
  */
 function Diagnostics() {
   const [open, setOpen] = useState(false)
   const q = useQuery({ queryKey: ['voice', 'events'], queryFn: () => unwrap(api.api.voice.events.$get()), enabled: open, staleTime: 0 })
   const events = q.data?.events ?? []
-  const turn = [...events].reverse().find((e) => e.kind === 'turn')?.data as Record<string, unknown> | undefined
+  const turns = events.filter((e) => e.kind === 'turn').slice(-10).reverse()
   const start = [...events].reverse().find((e) => e.kind === 'start')?.data as Record<string, unknown> | undefined
-  const underruns = events.filter((e) => e.kind === 'underrun' || e.kind === 'client:underrun').length
-  const stuck = events.filter((e) => e.kind === 'stuck').length
-  const row = (label: string, v: unknown) => v === undefined || v === null ? null : <><dt className="text-muted-foreground">{label}</dt><dd className="text-right tabular-nums">{String(v)}</dd></>
-  const ms = (v: unknown) => (typeof v === 'number' ? `${(v / 1000).toFixed(1)} s` : undefined)
+  const s = (v: unknown) => (typeof v === 'number' ? `${(v / 1000).toFixed(1)}s` : '–')
+  const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   return (
     <details className="text-sm" onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="cursor-pointer text-muted-foreground select-none hover:text-foreground">Voice diagnostics</summary>
       <div className="mt-2 flex flex-col gap-2">
-        {!q.data ? <Skeleton className="h-20" /> : !turn ? <p className="text-xs text-muted-foreground">No voice conversation today yet.</p> : (
-          <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-xs">
-            {row('Voice provider, speed', start ? `${start.tts}, ${start.speed}×` : undefined)}
-            {row('First sound after you stopped', ms(turn.playStart))}
-            {row('Acknowledgement', ms(turn.ack))}
-            {row('First word from Hamasa', ms(turn.firstVoiceText))}
-            {row('Its answer starts playing', ms(turn.firstAnswerAudio))}
-            {row('Voice service response (TTS)', Array.isArray(turn.ttfb) && turn.ttfb.length ? (turn.ttfb as number[]).map((x) => `${x} ms`).join(', ') : undefined)}
-            {row('Gaps between sentences', Array.isArray(turn.gaps) && turn.gaps.length ? (turn.gaps as number[]).map((x) => `${x} ms`).join(', ') : 'none')}
-            {row('Audio ran out mid-sentence (today)', underruns)}
-            {row('Player resets (today)', stuck)}
-          </dl>
+        {!q.data ? <Skeleton className="h-20" /> : !turns.length ? <p className="text-xs text-muted-foreground">No voice turns today yet.</p> : (
+          <>
+            {start && <p className="text-xs text-muted-foreground">Last conversation: {String(start.tts)}, {String(start.speed)}×.</p>}
+            <ul className="flex flex-col divide-y text-xs" aria-label="Last voice turns">
+              {turns.map((e) => {
+                const t = (e.data ?? {}) as Record<string, unknown>
+                const errors = Array.isArray(t.errors) ? (t.errors as string[]) : []
+                const heard = typeof t.playStart === 'number'
+                return (
+                  <li key={`${e.call}:${e.at}`} className="flex flex-col gap-0.5 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium tabular-nums">{time(e.at)}</span>
+                      <span className={cn('ml-auto', heard ? 'text-muted-foreground' : 'text-destructive')}>{heard ? 'spoken' : typeof t.voiceChars === 'number' && t.voiceChars > 0 ? 'voice text, not heard' : 'nothing to say'}</span>
+                    </div>
+                    <div className="text-muted-foreground tabular-nums">
+                      voice {String(t.voiceChars ?? 0)} chars · {String(t.pieces ?? 0)} pieces · TTS {Array.isArray(t.tts) ? t.tts.length : 0} · first audio {s(t.firstAudio)} · plays {s(t.playStart)}–{s(t.playEnd)}
+                      {Array.isArray(t.gaps) && (t.gaps as number[]).length ? ` · gaps ${(t.gaps as number[]).join(', ')} ms` : ''}
+                      {t.pageChanges ? ` · page changed ${String(t.pageChanges)}×` : ''} · {String(t.stateBefore ?? '?')} → {String(t.stateAfter ?? '?')}
+                      {errors.length ? <span className="text-destructive"> · {errors.join(', ')}</span> : null}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </>
         )}
         <div>
-          <Button type="button" variant="outline" size="sm" disabled={!events.length} onClick={() => void navigator.clipboard.writeText(JSON.stringify(events))
-            .then(() => toast.success('Copied: timings and states of today\'s voice conversations, no words or audio.'), (e: Error) => toast.error(e.message))}>
+          <Button type="button" variant="outline" size="sm" disabled={!events.length} onClick={() => void navigator.clipboard.writeText(JSON.stringify({ turns: turns.map((e) => ({ at: e.at, ...(e.data as object) })), events: events.slice(-300) }))
+            .then(() => toast.success('Copied: the last ten voice turns and today\'s voice events, timings only, no words or audio.'), (e: Error) => toast.error(e.message))}>
             Copy diagnostics
           </Button>
         </div>

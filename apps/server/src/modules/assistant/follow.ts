@@ -42,9 +42,10 @@ type Notify = (userId: number, kind: NotificationKind, n: { title: string; body?
  * autopilot's approvals window), 'stale' (nothing for two days: the follow ends quietly), or null. Pure, tested.
  */
 export function due(f: Pick<FollowRow, 'seen_activity' | 'started_at'>, s: SessionSeen | undefined, nowS: number,
-  o: { waitingOn?: 'question' | 'permission' | null; approvalsWait?: number | null } = {}): Kind | 'hold' | 'stale' | null {
+  o: { waitingOn?: 'question' | 'permission' | null; approvalsWait?: number | null; background?: number } = {}): Kind | 'hold' | 'stale' | null {
   if (!s || s.archived) return 'gone'
-  if (s.status === 'working') return null
+  // Idle with helpers still running isn't done: their results come later (and count as activity then).
+  if (s.status === 'working' || (s.status === 'idle' && (o.background ?? 0) > 0)) return null
   if (s.last_activity_at <= f.seen_activity) return nowS - Math.max(f.seen_activity, f.started_at) > STALE_S ? 'stale' : null
   if (s.status === 'error') return 'failed'
   if (s.status === 'waiting') {
@@ -103,12 +104,14 @@ export function reminder(first: string, items: Item[], autopilotOn: boolean, rul
     if (it.ask) parts.push(`   ${it.kind === 'approval' ? `Asks permission for: ${it.ask} (only ${first} decides this; you never can).` : `Asks: ${it.ask}`}`)
     if (it.tookOver) parts.push(`   Someone else wrote in it after you: report only.`)
     if (it.loop) parts.push('   Same answer as before your last reply: it is going in circles. Report only.')
-    parts.push(`   Automatic replies left: ${Math.max(0, it.follow.max_replies - it.follow.replies)} of ${it.follow.max_replies}${it.follow.state === 'waiting_you' ? ' (paused: you told them; they write next)' : ''}.`)
+    parts.push(it.follow.state === 'waiting_you'
+      ? `   You told them about it earlier, so automatic replies are paused until they write: report this if it's news, don't reply to it.`
+      : `   Automatic replies left: ${Math.max(0, it.follow.max_replies - it.follow.replies)} of ${it.follow.max_replies}.`)
     return parts.join('\n')
   })
   return `<system-reminder>Sessions you follow for ${first} changed (DevDash wrote this, not ${first}). Autopilot: ${autopilotOn ? 'on' : 'off, so you only report'}.
 ${lines.join('\n')}
-${rules ? 'Apply the member’s Autopilot rules below. follow_reply and follow_answer log your decision automatically.\n' + rules + '\n' : ''}For each one: if the next step is clearly what ${first} already agreed in this chat and autopilot allows it, continue it with follow_reply (or answer its question with follow_answer), with tier and why. If a decision belongs to the member, call follow_wait and explain what you need. A progress report alone leaves the goal open. When its goal is reached, session_unfollow it and tell them what was done. If you're not sure, ask them; don't guess.
+${rules ? 'Apply the member’s Autopilot rules below. follow_reply and follow_answer log your decision automatically.\n' + rules + '\n' : ''}For each one: if the next step is clearly what ${first} already agreed in this chat and autopilot allows it, continue it with follow_reply (or answer its question with follow_answer), with tier and why. When there is nothing new to report, call follow_keep and write nothing. If a decision belongs to the member, call follow_wait and explain what you need. A progress report alone leaves the goal open. When its goal is reached, session_unfollow it and tell them what was done. If you're not sure, ask them; don't guess.
 </system-reminder>`
 }
 
@@ -170,7 +173,7 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
   })
 
   // Per member, the wake turn being answered in their chat: which follows it covers, and which got a reply.
-  const waking = new Map<string, { userId: number; items: Item[]; replied: Set<string>; hashes: Map<string, string> }>()
+  const waking = new Map<string, { userId: number; items: Item[]; replied: Set<string>; kept: Set<string>; hashes: Map<string, string> }>()
   const timers = new Map<number, ReturnType<typeof setTimeout>>()
   function poke(userId: number, ms = DEBOUNCE_MS) {
     if (timers.has(userId)) return
@@ -245,7 +248,7 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
         }
         const s = sessionOf(f.session_id)
         const w = s ? await waitingOn(user, s) : { kind: null, ask: null }
-        const d = due(f, s, t, { waitingOn: w.kind, approvalsWait: wait })
+        const d = due(f, s, t, { waitingOn: w.kind, approvalsWait: wait, background: claude.background(f.session_id) })
         if (d === 'stale') {
           q.remove.run(userId, f.session_id)
           changed(userId)
@@ -282,7 +285,7 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
             && !i.tookOver && !i.loop && i.follow.replies < i.follow.max_replies && i.follow.state === 'on'
             && (i.session.harness !== 't3code' || settings?.settings.t3Sessions === true)
         }
-        waking.set(to, { userId, items, replied: new Set(), hashes })
+        waking.set(to, { userId, items, replied: new Set(), kept: new Set(), hashes })
         try {
           await claude.send(user, to, reminder(first(user), items, !blocked, settings?.rules), [])
         } catch (err) {
@@ -315,13 +318,13 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
   }
 
   /** Hamasa's answer to a reminder is done: silent if it only continued sessions, otherwise that answer is the one ping. */
-  async function finishWake(chatId: string, w: { userId: number; items: Item[]; replied: Set<string> }, t: { ok: boolean; aborted: boolean; result: string | null }) {
+  async function finishWake(chatId: string, w: { userId: number; items: Item[]; replied: Set<string>; kept: Set<string> }, t: { ok: boolean; aborted: boolean; result: string | null }) {
     waking.delete(chatId)
     const user = userOf(w.userId)
     if (!user || t.aborted) return // stopped from the chat: they're there
     const real = w.items.filter((i) => i.kind !== 'gone')
     if (!t.ok) return fallback(user, real)
-    const told = real.filter((i) => !w.replied.has(i.follow.session_id))
+    const told = real.filter((i) => !w.replied.has(i.follow.session_id) && !w.kept.has(i.follow.session_id))
     // Reported to them: automatic replies on those wait until they write.
     for (const i of told) {
       if (i.canContinue && q.retry.run(i.follow.id, i.session!.last_activity_at).changes) {
@@ -416,6 +419,15 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
     q.state.run('waiting_you', item.follow.id)
     changed(c.user.id)
     return 'Paused. Tell the member what you need from them.'
+  })
+  // A wake-up with nothing new for the member: the follow stays as it was, nothing is shown, no ping.
+  agents.onRpc('mcp.follow_keep', (username, params) => {
+    const c = ctx(username, params)
+    const id = str(c.args.id, 'the session id')
+    const w = waking.get(c.chatId)
+    if (!w?.items.some((i) => i.follow.session_id === id)) throw new AppError(400, 'bad_args', "Only for a session DevDash just woke you about.")
+    w.kept.add(id)
+    return "Kept following quietly: you'll be woken again when it changes. Don't write to them about it."
   })
   agents.onRpc('mcp.follow_reply', async (username, params) => {
     const c = ctx(username, params)
