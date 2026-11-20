@@ -24,7 +24,10 @@ function fixture(choose = async () => '{"kind":"read"}') {
   const actions: unknown[] = []
   const chat = browserChat(db, {
     act: async (a) => { actions.push(a) },
-    screen: async () => [[{ text: 'Documentation', x: 100, y: 160, w: 120, h: 20 }]],
+    screen: async () => [
+      [{ text: 'Private tab title', x: 100, y: 20, w: 120, h: 20 }],
+      [{ text: 'Documentation', x: 100, y: 160, w: 120, h: 20 }],
+    ],
   }, async (owner, system, prompt) => {
     calls.push({ username: owner.username, prompt })
     return system.startsWith('Choose') ? choose() : 'The page shows Documentation.'
@@ -43,7 +46,7 @@ function fixture(choose = async () => '{"kind":"read"}') {
 }
 
 async function finish(chat: ReturnType<typeof browserChat>, user: User) {
-  for (let i = 0; i < 100 && chat.state(user).busy; i++) await delay(10)
+  for (let i = 0; i < 600 && chat.state(user).busy; i++) await delay(10)
   assert.equal(chat.state(user).busy, false)
   return chat.state(user).turns.at(-1)!.reply
 }
@@ -66,6 +69,7 @@ test('only admins grant access, watch links cannot chat, and granted members sha
   assert.deepEqual(calls.map((c) => c.username), [admin.username, admin.username])
   assert.equal(calls[0]!.prompt, turn.message)
   assert.match(calls[1]!.prompt, /Documentation/)
+  assert.doesNotMatch(calls[1]!.prompt, /Private tab title/)
   assert.deepEqual(chat.state(admin).turns, [])
   assert.equal(chat.state(member).turns.length, 1)
   assert.throws(() => chat.state(other), /grant/)

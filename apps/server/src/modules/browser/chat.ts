@@ -31,6 +31,11 @@ function parsePlan(raw: string) {
   catch { throw new AppError(409, 'browser_plan', 'The model returned an unreadable browser instruction. Try rephrasing the request.') }
 }
 
+function pageText(screen: Screen) {
+  return screen.map((line) => line.filter((word) => word.y >= 100).map((word) => word.text).join(' '))
+    .filter(Boolean).join('\n').slice(0, 12_000)
+}
+
 export function browserChat(db: Db, browser: Port, complete: Complete) {
   const q = {
     admin: db.prepare(`select a.id, a.username, a.email, a.name, a.role from users u
@@ -52,6 +57,7 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
 
   async function run(admin: User, user: User, id: number, message: string, check: () => void) {
     let result = ''
+    let beforeClick: string | undefined
     const ask = async (system: string, prompt: string) => {
       try { return await complete(admin, system, prompt) }
       catch (err) {
@@ -78,16 +84,23 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
         result = 'Scrolled ' + plan.direction + '.'
       } else if (plan.kind === 'click') {
         if (!message.toLowerCase().includes(plan.label.toLowerCase())) throw new AppError(409, 'browser_label', 'Name the visible text you want me to click.')
-        const point = clickPoint(await browser.screen(), plan.label)
+        const screen = await browser.screen()
+        const point = clickPoint(screen, plan.label)
+        beforeClick = pageText(screen)
         check()
         await browser.act({ kind: 'click', ...point })
         result = 'Clicked “' + plan.label + '”.'
       }
       if (result) await delay(500)
       check()
-      const screen = await browser.screen()
+      let visibleText = pageText(await browser.screen())
+      // Chromium can accept the click before the stream shows the new document. Never click again to check.
+      for (let i = 0; i < 3 && visibleText === beforeClick; i++) {
+        await delay(600)
+        check()
+        visibleText = pageText(await browser.screen())
+      }
       check()
-      const visibleText = screen.map((line) => line.filter((word) => word.y >= 100).map((word) => word.text).join(' ')).filter(Boolean).join('\n').slice(0, 12_000)
       const recent = history(user.id).slice(-7, -1).map((t) => ({ message: t.message, reply: t.reply?.slice(0, 1200) }))
       const reply = await ask(answer, JSON.stringify({ recent, message, result: result || 'Read the screen.', visibleText }))
       check()
