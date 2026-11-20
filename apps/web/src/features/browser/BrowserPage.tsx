@@ -54,7 +54,7 @@ export function BrowserPage() {
       <PageHeader title="Browser" description="One shared browser on the server, signed in to your team's tools"
         actions={<>
           {url && canChat && <Button size="sm" aria-label="Browser chat" aria-expanded={chatOpen} variant={chatOpen ? 'secondary' : 'outline'} onClick={() => setChatOpen(!chatOpen)}><MessageSquare /><span className="hidden sm:inline">Browser chat</span></Button>}
-          {me.role === 'admin' && <Button size="icon-sm" variant="ghost" aria-label="Browser chat access" title="Browser chat access" onClick={() => setAccessOpen(true)}><Shield /></Button>}
+          {me.role === 'admin' && <Button size="sm" variant="ghost" aria-label="Browser chat access" title="Browser chat access" onClick={() => setAccessOpen(true)}><Shield /><span className="hidden lg:inline">Chat access</span></Button>}
           <Button size="sm" variant="outline" aria-label="Invite to watch" onClick={() => setInviting(true)}><UserPlus /><span className="hidden sm:inline">Invite to watch</span></Button>
           {url && !inShell() && <Button size="sm" variant="outline" onClick={() => document.getElementById('dd-browser')?.requestFullscreen?.()}><Maximize /><span className="hidden sm:inline">Full screen</span></Button>}
           {url && me.role === 'admin' && <Button size="icon-sm" variant="ghost" aria-label="Stop the browser" disabled={stop.isPending} onClick={() => stop.mutate()}><Power /></Button>}

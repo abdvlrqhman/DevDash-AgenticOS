@@ -87,7 +87,7 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
       check()
       const screen = await browser.screen()
       check()
-      const visibleText = screen.map((line) => line.map((word) => word.text).join(' ')).join('\n').slice(0, 12_000)
+      const visibleText = screen.map((line) => line.filter((word) => word.y >= 100).map((word) => word.text).join(' ')).filter(Boolean).join('\n').slice(0, 12_000)
       const recent = history(user.id).slice(-7, -1).map((t) => ({ message: t.message, reply: t.reply?.slice(0, 1200) }))
       const reply = await ask(answer, JSON.stringify({ recent, message, result: result || 'Read the screen.', visibleText }))
       check()
