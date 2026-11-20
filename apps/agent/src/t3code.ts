@@ -28,11 +28,12 @@ export async function connectedCapabilities(client: T3Client, search?: string): 
   const capabilities = await client.call<Capabilities>('orchestrator_capabilities', search ? { search } : {})
   return { ...capabilities, providers: capabilities.providers.filter((p) => p.canRunChildTask === true) }
 }
-export async function inspect(budgetMs = 5000, search?: string) {
+export async function inspect(budgetMs = 5000, search?: string, full = false) {
   const client = new T3Client(undefined, { timeoutMs: budgetMs, signal: AbortSignal.timeout(budgetMs) })
   try {
     await client.connect()
     const capabilities = await connectedCapabilities(client, search)
+    if (full && !search) await expandShortlists(client, capabilities)
     return { version: client.serverVersion, capabilities }
   } finally { await client.close() }
 }
@@ -62,31 +63,71 @@ function supervisorBins(providers: Capabilities['providers']): Map<string, strin
   return bins
 }
 
+// The MCP response is a shortlist. The member's T3 discovery snapshot supplies omitted IDs;
+// exact live lookup confirms each before it can enter a picker.
+async function expandShortlists(client: T3Client, caps: Capabilities) {
+  const { baseDir } = readConfig()
+  if (!baseDir) return
+  for (const provider of caps.providers) {
+    if (!provider.omittedModels || !/^[\w.-]+$/.test(provider.providerInstanceId)) continue
+    let ids: string[]
+    try {
+      const snapshot = JSON.parse(readFileSync(join(baseDir, 'caches', provider.providerInstanceId + '.json'), 'utf8'))
+      if (snapshot.instanceId !== provider.providerInstanceId || snapshot.driver !== provider.driverKind) continue
+      ids = snapshot.models.map((m: { slug: string }) => m.slug).filter((id: string) => typeof id === 'string' && !provider.models.some((m) => m.id === id))
+    } catch { continue }
+    for (let i = 0; i < ids.length; i += 6) {
+      await Promise.allSettled(ids.slice(i, i + 6).map(async (id) => {
+        const exact = await connectedCapabilities(client, id)
+        const model = exact.providers.find((p) => p.providerInstanceId === provider.providerInstanceId)?.models.find((m) => m.id === id)
+        if (model) provider.models.push(model)
+      }))
+    }
+  }
+}
+
+const catalogCache = new Map<string, { at: number; models: ReturnType<typeof supervisorModels> }>()
+function nativeCatalog(bin: string) {
+  const hit = catalogCache.get(bin)
+  if (hit && Date.now() - hit.at < 60_000) return hit.models
+  const models = supervisorModels(bin)
+  catalogCache.set(bin, { at: Date.now(), models })
+  void models.catch(() => { if (catalogCache.get(bin)?.models === models) catalogCache.delete(bin) })
+  return models
+}
+
+export async function nativeVariants(caps: Capabilities, instance: string, id: string) {
+  const bin = supervisorBins(caps.providers).get(instance)
+  if (!bin) return
+  const models = await nativeCatalog(bin).catch(() => [])
+  return models.find((m) => modelId(m.providerID, m.id) === id)?.variants
+}
+
 export async function supervisorTarget(value: string, effort?: string) {
   const { instanceId, model } = selection(value)
-  const { capabilities } = await inspect(5000, model)
-  const provider = capabilities.providers.find((p) => p.providerInstanceId === instanceId)
-  const selected = provider?.models.find((m) => m.id === model)
+  const { capabilities } = await inspect(5000)
   const bin = supervisorBins(capabilities.providers).get(instanceId)
-  if (!bin || !selected || !/^[^/]+\/.+/.test(model)) throw new Error('Choose an available T3 OpenCode supervisor model.')
+  if (!bin || !/^[^/]+\/.+/.test(model)) throw new Error('Choose an available T3 OpenCode supervisor model.')
   const { instanceId: providerID, model: id } = selection(model)
   return { bin, ref: { providerID, id, ...(effort ? { variant: effort } : {}) } }
 }
 export async function modelChoices(search?: string, supervisor = false) {
-  const { capabilities } = await inspect(5000, search)
-  const bins = supervisor ? supervisorBins(capabilities.providers) : new Map<string, string>()
+  const { capabilities } = await inspect(15_000, search, true)
+  const bins = supervisorBins(capabilities.providers)
   const catalogs = new Map<string, Awaited<ReturnType<typeof supervisorModels>>>()
-  const probes = await Promise.allSettled([...new Set(bins.values())].map(async (bin) => catalogs.set(bin, await supervisorModels(bin))))
-  const failed = probes.find((probe) => probe.status === 'rejected')
-  if (!catalogs.size && failed) throw failed.reason
+  await Promise.allSettled([...new Set(bins.values())].map(async (bin) => catalogs.set(bin, await nativeCatalog(bin))))
   const rows = capabilities.providers.flatMap((p) => {
     const native = catalogs.get(bins.get(p.providerInstanceId) ?? '')
-    return p.models.flatMap((m) => {
+    const models = new Map(p.models.map((m) => [m.id, m]))
+    if (supervisor) for (const n of native ?? []) {
+      const id = modelId(n.providerID, n.id)
+      if (!models.has(id)) models.set(id, { id })
+    }
+    return [...models.values()].map((m) => {
       const value = modelId(p.providerInstanceId, m.id)
       const match = native?.find((n) => modelId(n.providerID, n.id) === m.id)
-      if (supervisor && !match) return []
-      return [{ value, displayName: m.label || m.id, description: value, group: p.providerInstanceId,
-        ...(supervisor && { supportsSupervisor: true }), supportedEffortLevels: match?.variants ?? effortOption(m)?.levels ?? [] }]
+      return { value, displayName: m.label || m.id, description: value, group: p.providerInstanceId,
+        ...(supervisor && { supportsSupervisor: !!match }), supportedEffortLevels: match?.variants ?? effortOption(m)?.levels ?? [] }
     })
   })
   // T3 does not identify the model chosen for Default. The supervisor always requires an explicit model.
@@ -95,7 +136,7 @@ export async function modelChoices(search?: string, supervisor = false) {
 let cached: { key: string; at: number; value: Awaited<ReturnType<typeof probeInfo>> } | undefined
 let probing: { key: string; value: Promise<Awaited<ReturnType<typeof probeInfo>>> } | undefined
 let generation = 0
-export const invalidateInfo = () => { generation++; cached = undefined; probing = undefined }
+export const invalidateInfo = () => { generation++; catalogCache.clear(); cached = undefined; probing = undefined }
 async function probeInfo() {
   try {
     const { version, capabilities } = await inspect(1500)

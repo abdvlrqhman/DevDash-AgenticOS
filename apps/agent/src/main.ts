@@ -21,6 +21,7 @@ import * as memory from './memory.ts'
 import * as mentions from './mentions.ts'
 import { busy as projectBusy, ops as project } from './project.ts'
 import * as sqlite from './sqlite.ts'
+import * as memberMcps from './member-mcps.ts'
 import * as skills from './skills.ts'
 import * as gh from './gh.ts'
 import { attachPty, hasSession, listSessions, send, tmux, TMUX_CONF } from './tmux.ts'
@@ -156,6 +157,10 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   },
   // Skills for the member's agents (skills.ts): theirs in ~/.claude/skills, or a project's .claude/skills.
   'skills.list': (r) => skills.ops.list(r),
+  'skills.providerRead': (r) => skills.ops.providerRead(r),
+  'mcps.list': () => memberMcps.inventory(),
+  'mcps.check': (r) => memberMcps.check(r),
+  'mcps.change': async (r) => { await memberMcps.change(r); return { ok: true } },
   'skills.get': (r) => skills.ops.get(r),
   'skills.write': (r) => skills.ops.write(r),
   'skills.review.github': (r) => skills.ops.reviewGithub(r),

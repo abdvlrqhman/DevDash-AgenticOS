@@ -45,6 +45,7 @@ export const ASSISTANT_TOOLS = [
     description: "Follow a session for the person until its work is done: DevDash wakes you in this chat when it finishes a turn, asks something or fails, and you continue it or tell them. Only when they ask you to (or for a session you start for work they asked for).",
     inputSchema: obj({ id, goal: { type: 'string', description: 'What should be true when it is done, in one line: "panel polished and a PR open".' } }, ['id', 'goal']),
   },
+  { name: 'follow_wait', description: 'Pause a followed session during a wake when the next decision needs the member. Explain the question in your reply.', inputSchema: obj({ id }, ['id']) },
   { name: 'session_unfollow', description: 'Stop following a session: its goal is reached, or they asked.', inputSchema: obj({ id }, ['id']) },
   {
     name: 'follow_reply',
@@ -77,6 +78,12 @@ export const ASSISTANT_TOOLS = [
       repo_url: { type: 'string', description: 'An existing git repository to clone instead of starting empty.' },
     }, ['name']),
   },
+  { name: 'mcp_servers_list', description: "List the member's provider MCP settings, enabled state and current revision.", inputSchema: obj({}) },
+  { name: 'mcp_server_change', description: 'On the member’s direct request, create, edit or remove a provider MCP server. List first for the revision. Changing the URL or command replaces the transport and clears old credentials.', inputSchema: obj({
+    source: {type: 'string'}, name: {type: 'string'}, revision: {type: 'string'}, action: {type: 'string', enum: ['create','edit','remove']},
+    url: {type:'string'}, command: {type:'array', items:{type:'string'}}, enabled: {type:'boolean'},
+  }, ['source','name','revision','action']) },
+  { name: 'provider_skill_read', description: 'Read the instructions of a provider skill by its ID from skills_list.', inputSchema: obj({ id }, ['id']) },
   {
     name: 'skills_list',
     description: "The person's skills: their own (every session, or only_in some folders; Claude Code and OpenCode), plugins' (Claude Code only), DevDash's. With project: that project's committed skills, for the whole team.",

@@ -244,11 +244,11 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
   const harness = harnessOf(v)
   const t3 = harness === 't3code'
   const offered = useOfferedModels(v.profile, harness, v.model, agentProfiles.includes(v.profile), t3)
-  const modelList: ModelInfo[] = t3 ? (offered ?? []).filter((m) => m.supportsSupervisor)
+  const modelList: ModelInfo[] = t3 ? (offered ?? [])
     : offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
   const picked = modelList.find((m) => m.value === v.model)
   const levels = t3 ? effortLevels(modelList, v.model) : []
-  const validT3 = !!picked && (!v.effort || levels.includes(v.effort))
+  const validT3 = !!picked?.supportsSupervisor && (!v.effort || levels.includes(v.effort))
 
   const changeAgent = (h: string) => setV({ ...v, harness: h, profile: 'default', model: h === 'claude' ? 'sonnet' : '', effort: null })
 
@@ -272,7 +272,7 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
         <Row id="sv-model" label="Model" responsive={t3} description={t3 ? "Choose a T3 Code model that can review sessions with tools disabled." : "The model the supervisor uses to read sessions and decide."}>
           <NativeSelect id="sv-model" className={t3 ? "min-w-56 max-w-full @md/field-group:max-w-80" : "w-44"} value={v.model} onChange={(e) => setV({ ...v, model: e.target.value, effort: null })}>
             {t3 && !picked && <option value={v.model}>{v.model ? `${v.model} (unavailable)` : offered && !modelList.length ? 'No tool-free models available' : 'Choose a model'}</option>}
-            {modelList.map((m) => <option key={m.value} value={m.value}>{isDefaultModel(m.value) ? modelLabel(modelList, m.value, HARNESS[harnessOf({ harness: v.harness })].label) : m.displayName}</option>)}
+            {modelList.map((m) => <option key={m.value} value={m.value} disabled={t3 && !m.supportsSupervisor}>{isDefaultModel(m.value) ? modelLabel(modelList, m.value, HARNESS[harnessOf({ harness: v.harness })].label) : m.displayName}{t3 && !m.supportsSupervisor ? ' (chat only)' : ''}</option>)}
           </NativeSelect>
         </Row>
         {t3 && (levels.length > 0 || !!v.effort) && (

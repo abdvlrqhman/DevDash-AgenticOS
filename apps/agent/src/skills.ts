@@ -7,13 +7,14 @@
 //   interpreter, no build step, no git hooks; links and oversized archives are refused. It installs only once the member
 //   has looked at it and confirmed.
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, cp, lstat, mkdir, open, readdir, readFile, readlink, realpath, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, userInfo } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { PLUGIN_DIR, profileDir, profileNames } from './claude.ts'
+import { readConfig } from './t3-client.ts'
 import { cleanFolders, readScopes, setScope } from './skill-scope.ts'
 
 const run = promisify(execFile)
@@ -863,6 +864,42 @@ async function after(project: string | null, name: string, message: string) {
   return { commit, push: await pushState(project) }
 }
 
+export type ProviderSkill = { id: string; name: string; description: string | null; sources: string[] }
+
+async function providerSkills() {
+  const items = new Map<string, ProviderSkill>()
+  const homeRoot = await realpath(home())
+  const add = async (path: string, name: string, source: string, description?: string) => {
+    const file = await realpath(path).catch(() => '')
+    if (!file.startsWith(homeRoot + '/') || !file.endsWith('/SKILL.md') || !(await stat(file).catch(() => null))?.isFile()) return
+    const previous = items.get(file)
+    if (previous) {
+      if (!previous.sources.includes(source)) previous.sources.push(source)
+    } else {
+      items.set(file, { id: createHash('sha256').update(file).digest('hex'), name, sources: [source],
+        description: description || parseSkillMd(await readMd(dirname(file)) ?? '').description })
+    }
+  }
+  const roots = { 'Shared agents': '.agents/skills', Codex: '.codex/skills', OpenCode: '.config/opencode/skills',
+    Gemini: '.gemini/skills', Antigravity: '.gemini/antigravity/skills', 'Antigravity built-ins': '.gemini/antigravity-cli/builtin/skills' }
+  for (const [label, root] of Object.entries(roots)) {
+    for (const f of await skillFolders(join(home(), root))) await add(join(f.dir, 'SKILL.md'), f.name, label)
+  }
+  try {
+    const base = readConfig().baseDir
+    if (base) for (const file of await readdir(join(base, 'caches'))) {
+      if (!file.endsWith('.json')) continue
+      const snap = await readJson(join(base, 'caches', file))
+      if (!snap.enabled || !Array.isArray(snap.skills)) continue
+      for (const skill of snap.skills) {
+        if (skill.enabled !== false && typeof skill.name === 'string' && typeof skill.path === 'string' && skill.path.endsWith('/SKILL.md'))
+          await add(skill.path, skill.name, 'T3 · ' + (snap.displayName || file.slice(0, -5)), skill.description)
+      }
+    }
+  } catch { /* Native skill folders also work without T3. */ }
+  return items
+}
+
 export const ops = {
   /** My skills (on and off) and the built-in ones; or a project's skills. */
   async list(r: Req) {
@@ -874,7 +911,15 @@ export const ops = {
     const { skills: where } = await readScopes()
     const on = await Promise.all((await skillFolders(mySkillsDir(), ['synced'])).map(async (f) => ({ ...(await summary(f)), enabled: true, folders: where[f.name] ?? null })))
     const off = await Promise.all((await skillFolders(offDir())).map(async (f) => ({ ...(await summary(f)), enabled: false, folders: where[f.name] ?? null })))
-    return { skills: [...on, ...off].sort((a, b) => a.name.localeCompare(b.name)), builtIn: await builtIn(), profiles: profileNames(), shadowed }
+    const discovered = [...(await providerSkills()).values()].sort((a, b) => a.name.localeCompare(b.name))
+    return { discovered, skills: [...on, ...off].sort((a, b) => a.name.localeCompare(b.name)), builtIn: await builtIn(), profiles: profileNames(), shadowed }
+  },
+
+  async providerRead(r: Req) {
+    for (const [file, skill] of await providerSkills()) {
+      if (skill.id === r.id) return { markdown: await readMd(dirname(file)) ?? '' }
+    }
+    throw new Error('That provider skill is no longer available.')
   },
 
   async get(r: Req) {

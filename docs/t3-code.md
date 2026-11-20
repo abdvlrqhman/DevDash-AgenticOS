@@ -54,10 +54,18 @@ In **Hamasa → Settings and access**, choose **T3 Code** and confirm **Full acc
 
 In **Autopilot → Settings**, turn on **Include T3 Code sessions** to apply your rules to your full-access T3 Chat sessions. Existing Autopilot settings leave T3 enrollment off until you select it. When T3 asks for a native approval or an answer, open the linked T3 conversation to respond.
 
-The **Supervisor** model is a separate choice. A supervisor reads transcripts and returns decisions with tools disabled. Choose **T3 Code**, then an eligible model and its offered thinking level. DevDash looks for a local T3 OpenCode instance with an absolute executable path in its provider settings. It lists models found in both T3 and OpenCode’s native model catalog, with the thinking levels the native model accepts. Supervisor decisions use OpenCode’s stateless text-generation endpoint. Hamasa and enrolled chats can use any connected T3 provider, including Codex and Antigravity.
+The **Supervisor** model is a separate choice. A supervisor reads transcripts and returns decisions with tools disabled. Choose **T3 Code**, then an eligible model and its offered thinking level. DevDash looks for a local T3 OpenCode instance with an absolute executable path in its provider settings. The picker shows connected T3 models and labels chat-only entries. The local OpenCode catalog supplies the selectable supervisor models and their native variants, including levels absent from T3’s discovery snapshot. Supervisor decisions use OpenCode’s stateless text-generation endpoint. Hamasa and enrolled chats can use any connected T3 provider, including Codex and Antigravity.
 
 Ordinary T3 Chat uses the connections configured in T3. DevDash reserves its workflow commands for Hamasa and enrolled Autopilot turns. Terminal view, attachments, Drive provisioning, tailnet forwarding, Claude fast/remote/advisor features and restricted team roles remain unavailable. Token costs and context percentages are available in T3 Code.
 
 ## Verification
 
 Run `npm run typecheck`, `npm test` and `npm run build`. Transport and bridge tests use isolated HTTP MCP fixtures; production credentials and models are unnecessary. Socket-owner tests include refusing root and other-user listeners before any HTTP headers are sent. The connection-helper tests exercise OAuth callback checks, private config writes, refusal to overwrite, and unused credential cleanup with a fake CLI and HTTP server. Positive transport checks must also run as an ordinary Linux member; root processes cannot create T3 connections.
+
+## Provider connections and skills
+
+Open **MCP servers** below **Skills** to inspect or change a member’s provider configuration. Changes apply when the provider next loads its configuration. **Check** opens a short MCP connection and can start a configured stdio process. Providers manage their own OAuth sign-ins. Replacing the transport removes the old entry’s headers and environment settings. The page shows the configured host and keeps those values private.
+
+A member can also ask Hamasa to list connections or create and edit one. Writes require a message typed by the owner. The **Provider skills** section reads the member’s installed skills in place, including shared skills and the skills reported by their T3 providers.
+
+When a followed session finishes, Hamasa uses the follow goal and the member’s Autopilot rules to decide how to continue. An eligible progress-only update gets one more wake for the same activity. Hamasa can explicitly pause for member input with `follow_wait`.

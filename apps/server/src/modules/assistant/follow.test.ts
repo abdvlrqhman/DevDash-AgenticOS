@@ -334,3 +334,35 @@ test('following only on their word; the supervisor leaves followed sessions to H
   assert.equal(t.sent.filter((r) => r.op === 'claude.complete').length, 0)
   assert.equal(hash('a'), hash('a'))
 })
+
+test('an eligible progress-only update gets one further decision and can continue the same idle session', async () => {
+  const t = await ready()
+  t.autopilot.setEnabled(t.ann, true)
+  t.set('work', 'idle', 5)
+  await t.follow.deliver(1)
+  const finish = () => t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: 'The first step is complete.' } })
+  finish()
+  t.tick(60_000)
+  t.quietChat(t.chat)
+  assert.equal(await t.follow.deliver(1), true)
+  assert.match(reminders(t).at(-1)!.text, /previous update left this goal open/)
+  await t.rpc('follow_reply', t.chat, { id: 'work', text: 'Run the agreed tests', tier: 'green', why: 'member requested verification' })
+  assert.match(t.sends().at(-1)!.text, /Run the agreed tests/)
+})
+
+test('explicit requests for input and repeated progress updates do not start an endless follow loop', async () => {
+  for (const wait of [true, false]) {
+    const t = await ready()
+    t.autopilot.setEnabled(t.ann, true)
+    t.set('work', 'idle', 5)
+    for (let i = 0; i < (wait ? 1 : 2); i++) {
+      assert.equal(await t.follow.deliver(1), true)
+      if (wait) await t.rpc('follow_wait', t.chat, { id: 'work' })
+      t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: 'Report' } })
+      t.tick(60_000)
+      t.quietChat(t.chat)
+    }
+    assert.equal(await t.follow.deliver(1), false)
+    assert.equal(t.follow.state(t.ann).sessions.find((s) => s.sessionId === 'work')?.state, 'waiting_you')
+  }
+})

@@ -69,7 +69,7 @@ export const supervisorModels = (bin: string) => withOpenCode(bin, async (_reque
 export function supervisorText(bin: string, model: ModelRef, prompt: string): Promise<string> {
   return withOpenCode(bin, async (request, models) => {
     const selected = models.find((m) => m.providerID === model.providerID && m.id === model.id)
-    if (!selected) throw new Error('This model is unavailable in the local T3 OpenCode supervisor.')
+    if (!selected) throw new Error('This supervisor model is unavailable in the local T3 OpenCode catalog.')
     if (model.variant && !selected.variants.includes(model.variant)) throw new Error('This thinking level is unavailable in the local T3 OpenCode supervisor.')
     const response = await request('/api/experimental/generate/text', { model, prompt })
     if (!response.ok) {

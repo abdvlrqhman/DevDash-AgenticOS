@@ -4,9 +4,11 @@ import { Link } from '@tanstack/react-router'
 import { BookOpenCheck, ChevronDown, ChevronRight, FileCode2, MapPin, Plus, Puzzle } from 'lucide-react'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
+import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
+import { api, unwrap } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
@@ -22,6 +24,11 @@ export function SkillsPage() {
   const [adding, setAdding] = useState(false)
   const mine = list.data?.skills ?? []
   const builtIn = list.data?.builtIn ?? []
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState('')
+  const provider = useQuery({ queryKey: ['provider-skill', selected], enabled: !!selected,
+    queryFn: () => unwrap(api.api.skills.provider[':id'].$get({ param: { id: selected } })) })
+  const providerRows = list.data?.discovered?.filter((s) => [s.name, ...s.sources].join(' ').toLowerCase().includes(search.toLowerCase().trim())) ?? []
   const profiles = list.data?.profiles ?? []
   return (
     <>
@@ -60,6 +67,16 @@ export function SkillsPage() {
           ) : null}
         </section>
 
+        <Link to="/mcps" className="text-sm underline">Manage MCP servers</Link>
+        {!!list.data?.discovered?.length && <section className="grid gap-2">
+          <h2 className="font-semibold">Provider skills <span className="text-muted-foreground">{list.data.discovered.length}</span></h2>
+          <Input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find a provider skill" aria-label="Find a provider skill" />
+          {providerRows.length === 0 && <p className="text-sm text-muted-foreground">No matching skills.</p>}
+          <ul className="rounded-2xl bg-surface p-2">{providerRows.map((s) => <li key={s.id}>
+            <button type="button" onClick={() => setSelected(s.id)} className={rowClass + ' w-full text-left'}>
+              <span className="min-w-0 flex-1"><span className="block font-medium">{s.name}</span><span className="block text-xs text-muted-foreground">{s.sources.join(' · ')}</span></span><ChevronRight className="size-4"/>
+            </button></li>)}</ul>
+        </section>}
         {builtIn.length > 0 && (
           <section className="flex flex-col gap-3">
             <div>
@@ -73,6 +90,9 @@ export function SkillsPage() {
           </section>
         )}
       </PageBody>
+      <ResponsiveDialog open={!!selected} onOpenChange={(v) => { if (!v) setSelected('') }} title={list.data?.discovered?.find((s) => s.id === selected)?.name ?? 'Provider skill'}>
+        <ErrorAlert error={provider.error} /><pre className="whitespace-pre-wrap break-words text-sm">{provider.data?.markdown ?? (provider.isLoading ? 'Loading…' : '')}</pre>
+      </ResponsiveDialog>
       <AddSkill open={adding} onOpenChange={setAdding} />
     </>
   )

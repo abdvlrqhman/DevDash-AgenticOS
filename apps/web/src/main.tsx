@@ -67,6 +67,7 @@ const autopilotActivity = createRoute({
 })
 const autopilot = createRoute({ getParentRoute: () => app, path: '/autopilot', component: lazy(() => import('./features/autopilot/AutopilotPage'), 'AutopilotPage') })
 const more = createRoute({ getParentRoute: () => app, path: '/more', component: lazy(() => import('./features/more/MorePage'), 'MorePage') })
+const mcps = createRoute({ getParentRoute: () => app, path: '/mcps', component: lazy(() => import('./features/skills/McpsPage'), 'McpsPage') })
 const skills = createRoute({ getParentRoute: () => app, path: '/skills', component: lazy(() => import('./features/skills/SkillsPage'), 'SkillsPage') })
 const skillReview = createRoute({
   getParentRoute: () => app, path: '/skills/review/$id', component: lazy(() => import('./features/skills/ReviewPage'), 'ReviewPage'),
@@ -132,7 +133,7 @@ const legacyClaude = createRoute({
 })
 
 const router = createRouter({
-  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, skillReview, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity])]),
+  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, mcps, skillReview, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity])]),
   context: { queryClient },
   defaultPreload: 'intent',
 })

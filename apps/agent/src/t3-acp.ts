@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { T3Client, T3RequestError } from './t3-client.ts'
-import { connectedCapabilities, effortOption, selection, modelId, type Capabilities } from './t3code.ts'
+import { connectedCapabilities, nativeVariants, effortOption, selection, modelId, type Capabilities } from './t3code.ts'
 
 type Selection = { model: string; instanceId: string; options?: { id: string; value: string | boolean }[] }
 type Item = { itemId: string; position: number; runId: string | null; type: string; createdBy: string | null; text: string | null; title: string | null; status: string; textTruncated?: boolean; nextTextOffset?: number | null; [key: string]: unknown }
@@ -35,12 +35,18 @@ function currentModel() { return caps.providers.find((p) => p.providerInstanceId
 /** A project's default or a resumed model may be outside T3's short list. Search its exact ID when necessary. */
 async function findModel(picked: Selection) {
   const provider = caps.providers.find((p) => p.providerInstanceId === picked.instanceId)
-  const listed = provider?.models.find((m) => m.id === picked.model)
-  if (listed || !provider?.omittedModels) return listed
-  const result = await connectedCapabilities(client, picked.model)
-  const match = result.providers.find((p) => p.providerInstanceId === picked.instanceId)?.models.find((m) => m.id === picked.model)
-  if (match) provider.models.push(match)
-  return match
+  if (!provider) return
+  let model = provider.models.find((m) => m.id === picked.model)
+  if (!model && provider.omittedModels) {
+    const result = await connectedCapabilities(client, picked.model)
+    model = result.providers.find((p) => p.providerInstanceId === picked.instanceId)?.models.find((m) => m.id === picked.model)
+    if (model) provider.models.push(model)
+  }
+  if (model && provider.driverKind === 'opencode') {
+    const levels = await nativeVariants(caps, picked.instanceId, picked.model)
+    if (levels) model.options = [...(model.options ?? []).filter((o) => o.id !== 'variant'), { id: 'variant', values: levels }]
+  }
+  return model
 }
 // With no modelSelection this MCP operation is read-only and returns options that t3_thread_read omits.
 async function readSelection() {

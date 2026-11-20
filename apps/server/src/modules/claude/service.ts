@@ -889,6 +889,11 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       return () => void labellers.delete(fn)
     },
 
+    canViewSession(user: User, id: string) {
+      const row = repo.byId(id)
+      return !!row && canView(user, row)
+    },
+
     async get(user: User, id: string) {
       const s = find(user, id)
       const pending = s.mode === 'chat'

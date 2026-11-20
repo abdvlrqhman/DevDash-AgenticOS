@@ -5,6 +5,7 @@ import { HARNESSES, PERMISSION_MODES, type ClaudeService, type Harness } from '.
 import type { NotificationKind } from '../notifications/service.ts'
 import { Create as ProjectCreate } from '../projects/routes.ts'
 import type { ProjectsService } from '../projects/service.ts'
+import { McpChange } from '../skills/routes.ts'
 import type { BuiltInSkill, Review, SkillSummary } from '../skills/routes.ts'
 import { AGENT_NAME, PAGE_TAG, VOICE_TAG } from './prompt.ts'
 import type { FollowService } from './follow.ts'
@@ -170,13 +171,21 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     if (p.archived) throw new AppError(409, 'archived', `${slug} is archived.`)
     return p.path
   }
+  on('mcp_servers_list', (c) => ask(c, { op: 'mcps.list' }))
+  on('mcp_server_change', (c) => {
+    if (!claude.typedByOwner(c.sessionId)) throw new AppError(403, 'not_asked', 'Ask for this change directly in your Hamasa chat.')
+    const edit = McpChange.safeParse(c.args)
+    if (!edit.success) throw new AppError(400, 'bad_args', 'List the connections and supply a provider, server name, revision and action.')
+    return ask(c, { ...edit.data, op: 'mcps.change' })
+  })
+  on('provider_skill_read', (c) => ask(c, { op: 'skills.providerRead', id: c.args.id }))
   on('skills_list', async (c) => {
     const slug = str(c.args.project)
     if (slug) {
       const r = await ask<{ skills: SkillSummary[] }>(c, { op: 'skills.list', project: checkout(c, slug) })
       return { project: slug, skills: r.skills.map((x) => ({ name: x.name, description: x.description })), note: 'Committed in the project: every session there gets them, for the whole team.' }
     }
-    const r = await ask<{ skills: SkillSummary[]; builtIn: BuiltInSkill[] }>(c, { op: 'skills.list' })
+    const r = await ask<{ skills: SkillSummary[]; discovered?: unknown[]; builtIn: BuiltInSkill[] }>(c, { op: 'skills.list' })
     const plugins = new Map<string, { id: string; skills: number; on: boolean; only_in: string[] | null; claude_keeps_it_to: string | null }>()
     for (const b of r.builtIn) {
       if (!b.plugin) continue
@@ -186,6 +195,7 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     }
     return {
       mine: r.skills.map((x) => ({ name: x.name, description: x.description, on: x.enabled !== false, only_in: x.folders ?? null })),
+      provider_skills: r.discovered ?? [],
       plugins: [...plugins.values()],
       devdash: r.builtIn.filter((b) => b.kind === 'devdash').map((b) => b.name),
       note: 'Their own skills work in Claude Code and OpenCode; plugins only in Claude Code. only_in null = every session.',

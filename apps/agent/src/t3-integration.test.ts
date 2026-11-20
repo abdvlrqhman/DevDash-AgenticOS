@@ -251,7 +251,10 @@ process.stdin.on('end', () => server.close())
   const messages = () => readFileSync(capture, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { url: string; body: unknown; method: string })
   try {
     const { models: entries } = await H.commandsAndModels('t3code', 'default', undefined, true)
-    assert.deepEqual(entries.map((m) => [m.value, m.supportsSupervisor, m.supportedEffortLevels]), [['local/account/chosen', true, ['high']]])
+    assert.deepEqual(entries.filter((m) => m.supportsSupervisor).map((m) => [m.value, m.supportsSupervisor, m.supportedEffortLevels]), [['local/account/chosen', true, ['high']]])
+    assert.ok(entries.some((m) => m.value === 'other/account/chosen' && m.supportsSupervisor === false))
+    const chat = (await H.commandsAndModels('t3code', 'default', 'local/account/chosen')).models
+    assert.deepEqual(chat.find((m) => m.value === 'local/account/chosen')?.supportedEffortLevels, ['high'])
     const start = calls.length
     const complete = (model: string, effort?: string) => H.complete('t3code', 'default', 'judge this transcript', { system: 'Return the decision.', model, effort })
     for (const unsupported of ['custom/account/chosen', 'other/account/chosen', 'local/account/missing']) {
