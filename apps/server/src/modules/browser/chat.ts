@@ -54,7 +54,11 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
     let result = ''
     const ask = async (system: string, prompt: string) => {
       try { return await complete(admin, system, prompt) }
-      catch { throw new AppError(409, 'browser_model', 'The browser model could not answer. Check the granting admin’s supervisor model and connection in Autopilot.') }
+      catch (err) {
+        if (err instanceof Error && /rate limit/i.test(err.message))
+          throw new AppError(429, 'browser_model_limit', 'The browser model reached its usage limit. Try again when the limit resets, or ask an admin to select another supervisor model in Autopilot.')
+        throw new AppError(409, 'browser_model', 'The browser model could not answer. Check the granting admin’s supervisor model and connection in Autopilot.')
+      }
     }
     try {
       const plan = parsePlan(await ask(instruction, message))

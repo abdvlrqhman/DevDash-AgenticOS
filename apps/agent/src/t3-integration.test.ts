@@ -213,6 +213,7 @@ test('T3 supervisors use the selected member OpenCode model and variant for tool
   const binary = join(folder, 'opencode.mjs')
   const capture = join(folder, 'requests.jsonl')
   const openServer = join(folder, 'disable-auth')
+  const limited = join(folder, 'rate-limited')
   const nativeModel = { providerID: 'account', id: 'chosen', modelID: 'Upstream-Chosen', enabled: true, variants: [{ id: 'high' }] }
   writeFileSync(binary, `#!${process.execPath}
 import { createServer } from 'node:http'
@@ -229,6 +230,7 @@ const server = createServer(async (req, res) => {
   appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ method: req.method, url: req.url, body }) + '\\n')
   res.setHeader('content-type', 'application/json')
   if (req.url === '/api/model') res.end(JSON.stringify({ data: [${JSON.stringify(nativeModel)}] }))
+  else if (req.url === '/api/experimental/generate/text' && existsSync(${JSON.stringify(limited)})) res.writeHead(502).end(JSON.stringify({ status: 429, reason: 'rate_limit' }))
   else if (req.url === '/api/experimental/generate/text') res.end(JSON.stringify({ data: { text: 'decision' } }))
   else res.writeHead(404).end()
 }).listen(0, '127.0.0.1', () => console.log(JSON.stringify({ url: 'http://127.0.0.1:' + server.address().port })))
@@ -267,10 +269,12 @@ process.stdin.on('end', () => server.close())
       body: { prompt: 'Return the decision.\n\njudge this transcript', model: { providerID: 'account', id: 'chosen', variant: 'high' } } }])
     // T3 can retain a variant in its catalog after OpenCode removes it. Never request a default in its place.
     await assert.rejects(complete('local/account/chosen', 'stale'), /variant|thinking|level/i)
+    writeFileSync(limited, '')
+    await assert.rejects(complete('local/account/chosen', 'high'), /rate limit/)
     // An executable that ignores its configured password must never receive the private transcript.
     writeFileSync(openServer, '')
     await assert.rejects(complete('local/account/chosen', 'high'))
-    assert.equal(messages().filter((m) => m.url === '/api/experimental/generate/text').length, 1)
+    assert.equal(messages().filter((m) => m.url === '/api/experimental/generate/text').length, 2)
     assert.ok(messages().every((m) => m.url === '/api/model' || m.url === '/api/experimental/generate/text'))
     assert.ok(calls.slice(start).every((c) => c.name === 'orchestrator_capabilities'), 'no tool-bearing T3 thread was started')
   } finally {

@@ -73,8 +73,10 @@ export function supervisorText(bin: string, model: ModelRef, prompt: string): Pr
     if (model.variant && !selected.variants.includes(model.variant)) throw new Error('This thinking level is unavailable in the local T3 OpenCode supervisor.')
     const response = await request('/api/experimental/generate/text', { model, prompt })
     if (!response.ok) {
-      await response.body?.cancel()
-      throw new Error(response.status === 429 ? 'The T3 OpenCode supervisor reached its rate limit.' : `The T3 OpenCode supervisor could not generate text (HTTP ${response.status}).`)
+      // OpenCode may wrap an upstream 429 in a 502 ProviderError. Forward only its category.
+      const error = await response.json().catch(() => null) as { status?: number; reason?: string } | null
+      const limited = response.status === 429 || error?.status === 429 || error?.reason === 'rate_limit'
+      throw new Error(limited ? 'The T3 OpenCode supervisor reached its rate limit.' : `The T3 OpenCode supervisor could not generate text (HTTP ${response.status}).`)
     }
     const result = await response.json() as { data: { text: string } }
     if (typeof result.data?.text !== 'string' || !result.data.text.trim()) throw new Error('The T3 OpenCode supervisor returned no text.')
