@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { T3Client, T3RequestError } from './t3-client.ts'
 import { connectedCapabilities, nativeVariants, effortOption, selection, modelId, type Capabilities } from './t3code.ts'
+import { disposeSupervisorWorkers } from './t3-supervisor.ts'
 
 type Selection = { model: string; instanceId: string; options?: { id: string; value: string | boolean }[] }
 type Item = { itemId: string; position: number; runId: string | null; type: string; createdBy: string | null; text: string | null; title: string | null; status: string; textTruncated?: boolean; nextTextOffset?: number | null; [key: string]: unknown }
@@ -154,8 +155,8 @@ async function checkWorkspace(cwd: string) {
 /** Validate the whole selection before T3 changes anything; committing model then effort can leave the two apps apart. */
 async function setSelection(model: string | null, requestedEffort: string | null) {
   if (running || unresolvedSend || activePrompt) throw new Error('Wait for T3 Code to finish before changing its model or effort.')
-  caps = await connectedCapabilities(client)
-  const current = await readSelection()
+  const [freshCaps, current] = await Promise.all([connectedCapabilities(client), readSelection()])
+  caps = freshCaps
   // Keep unrelated options such as service tier when only the reasoning level changes.
   const picked = !model || model === modelId(current.instanceId, current.model) ? current : selection(model)
   const modelSelection = await withEffort(picked, requestedEffort)
@@ -192,17 +193,24 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
     if (caps.runtimeMode !== 'full-access') throw new Error('The member T3 Code connection does not allow Bypass sessions.')
     const wanted = process.env.DEVDASH_T3_MODEL
     const wantedEffort = process.env.DEVDASH_T3_EFFORT || null
-    const initial = wanted ? await withEffort(selection(wanted), wantedEffort) : undefined
     if (!caps.providers.some((p) => p.models.length)) throw new Error('No connected T3 Code provider has available models.')
     const cwd = realpathSync(String(p.cwd))
-    // Bind every conversation to exactly the folder DevDash selected, including existing worktrees.
-    let projectId: string | undefined
-    let cursor: number | undefined
-    do {
-      const page = await client.call<{ projects: { id: string; workspaceRoot: string }[]; nextCursor: number | null }>('t3_project_list', { limit: 100, ...(cursor === undefined ? {} : { cursor }) })
-      projectId = page.projects.find((x) => x.workspaceRoot === cwd)?.id
-      cursor = page.nextCursor ?? undefined
-    } while (!projectId && cursor !== undefined)
+    const findProject = async () => {
+      // Bind every conversation to exactly the folder DevDash selected, including existing worktrees.
+      let found: string | undefined
+      let cursor: number | undefined
+      do {
+        const page = await client.call<{ projects: { id: string; workspaceRoot: string }[]; nextCursor: number | null }>('t3_project_list', { limit: 100, ...(cursor === undefined ? {} : { cursor }) })
+        found = page.projects.find((x) => x.workspaceRoot === cwd)?.id
+        cursor = page.nextCursor ?? undefined
+      } while (!found && cursor !== undefined)
+      return found
+    }
+    const [initial, existingProjectId] = await Promise.all([
+      wanted ? withEffort(selection(wanted), wantedEffort) : Promise.resolve(undefined),
+      findProject(),
+    ])
+    let projectId = existingProjectId
     if (!projectId) projectId = (await client.call<{ id: string }>('t3_project_create', { title: `DevDash: ${cwd.split('/').at(-1)}`, workspaceRoot: cwd })).id
     const launched = await client.call<{ threadId: string }>('t3_thread_launch', {
       projectId, title: process.env.DEVDASH_T3_TITLE || 'DevDash session', ...desiredModes(), workspaceStrategy: { type: 'root' },
@@ -220,10 +228,12 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
     thread = { threadId: String(p.sessionId) } as Read['thread']
     const data = await allItems()
     thread = data.thread
-    await checkWorkspace(String(p.cwd))
     const desired = desiredModes()
-    if (mode !== 'bypassPermissions' || thread.runtimeMode !== desired.runtimeMode || thread.interactionMode !== desired.interactionMode) throw new Error('This T3 Code connection supports only explicitly selected Bypass sessions. Start a new session to change permissions.')
-    const current = await readSelection()
+    if (mode !== 'bypassPermissions' || thread.runtimeMode !== desired.runtimeMode || thread.interactionMode !== desired.interactionMode) {
+      await checkWorkspace(String(p.cwd))
+      throw new Error('This T3 Code connection supports only explicitly selected Bypass sessions. Start a new session to change permissions.')
+    }
+    const [, current] = await Promise.all([checkWorkspace(String(p.cwd)), readSelection()])
     thread = { ...thread, providerInstanceId: current.instanceId, model: current.model }
     const opt = effortOption(await findModel(current))
     const savedLevel = current.options?.find((o) => o.id === opt?.id)?.value
@@ -329,7 +339,7 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
             cursor = Math.max(cursor, keep - 1)
           }
           const signature = JSON.stringify([run?.status, items.map((i) => [i.itemId, i.status, i.text, i.updatedAt])])
-          interval = signature === previous ? Math.min(interval * 2, 3000) : 250
+          interval = signature === previous ? Math.min(interval * 2, 1000) : 250
           previous = signature
           pollWake = new AbortController()
           await delay(Math.min(interval, Math.max(1, deadline - Date.now())), undefined, { signal: pollWake.signal }).catch((err: Error) => { if (err.name !== 'AbortError') throw err })
@@ -376,7 +386,7 @@ async function close() {
   try {
     await handlers['session/cancel']!({})
     await promptDone?.catch(() => {})
-  } finally { await client.close() }
+  } finally { await Promise.allSettled([client.close(), disposeSupervisorWorkers()]) }
   process.exit(0)
 }
 input.on('close', () => void close())

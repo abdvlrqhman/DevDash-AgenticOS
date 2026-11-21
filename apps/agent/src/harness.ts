@@ -846,9 +846,10 @@ export async function commandsAndModels(harness: string, profile: string, select
   if (!PROFILE_RE.test(profile)) throw new Error('invalid profile')
   const agent = agentOf(harness)
   const forSupervisor = harness === 't3code' && supervisor
-  const key = `${harness}:${profile}${forSupervisor ? ':supervisor' : ''}`
+  const rev = harness === 't3code' ? `:${t3code.configRevision()}` : ''
+  const key = `${harness}:${profile}${forSupervisor ? ':supervisor' : ''}${rev}`
   let hit = modelCache.get(key)
-  if (!hit || Date.now() - hit.at > (harness === 't3code' ? 15_000 : 5 * 60_000)) {
+  if (!hit || Date.now() - hit.at > (harness === 't3code' ? 2 * 60_000 : 5 * 60_000)) {
     const models = forSupervisor ? t3code.modelChoices(undefined, true) : agent.models(profile)
     hit = { at: Date.now(), models }
     modelCache.set(key, hit)

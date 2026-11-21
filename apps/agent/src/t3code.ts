@@ -1,6 +1,7 @@
 // T3 Code's own MCP integration. Credentials belong to the DevDash member; the configured T3 server runs the tools.
-import { createHash } from 'node:crypto'
-import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { assertRegularMemberUid } from './t3-local.ts'
 import {
@@ -8,10 +9,11 @@ import {
   disposeSupervisorWorkers,
   supervisorModels,
   validateAntigravitySettingsFile,
+  type SupervisorModel,
   type SupervisorProvider,
   type SupervisorTarget,
 } from './t3-supervisor.ts'
-import { T3Client, configPath, readConfig } from './t3-client.ts'
+import { T3Client, configPath, readConfig, type T3CallOptions } from './t3-client.ts'
 
 type Model = { id: string; label?: string | null; options?: { id: string; values: (string | boolean)[] }[] | null }
 export type Capabilities = {
@@ -33,18 +35,96 @@ export function effortOption(model: Model | undefined) {
 }
 /** T3's runnable flag includes enabled state, executable availability and authentication checks.
  * Its catalog also contains disabled providers and their models, which must not be offered as connected. */
-export async function connectedCapabilities(client: T3Client, search?: string): Promise<Capabilities> {
-  const capabilities = await client.call<Capabilities>('orchestrator_capabilities', search ? { search } : {})
+export function configRevision(): string {
+  try {
+    const file = configPath()
+    const st = statSync(file)
+    return `${file}:${st.mtimeMs}:${st.size}`
+  } catch {
+    return ''
+  }
+}
+
+const SHARED_CLIENT_IDLE_MS = 5 * 60_000
+type SharedClientEntry = { key: string; generation: number; client: T3Client; ready: boolean; idleTimer?: ReturnType<typeof setTimeout> }
+let sharedClient: SharedClientEntry | undefined
+
+function closeSharedClient(entry = sharedClient) {
+  if (!entry) return
+  if (sharedClient === entry) sharedClient = undefined
+  if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = undefined }
+  void entry.client.close()
+}
+
+function touchSharedClient(entry: SharedClientEntry) {
+  if (entry.idleTimer) clearTimeout(entry.idleTimer)
+  if (sharedClient !== entry) return
+  entry.idleTimer = setTimeout(() => closeSharedClient(entry), SHARED_CLIENT_IDLE_MS)
+  entry.idleTimer.unref?.()
+}
+
+function acquireSharedClient(): { entry: SharedClientEntry; reused: boolean } {
+  const key = configRevision()
+  if (sharedClient && sharedClient.key === key && sharedClient.generation === generation) {
+    return { entry: sharedClient, reused: sharedClient.ready }
+  }
+  closeSharedClient()
+  const entry: SharedClientEntry = { key, generation, client: new T3Client(), ready: false }
+  sharedClient = entry
+  return { entry, reused: false }
+}
+
+process.once('exit', () => {
+  if (sharedClient?.idleTimer) clearTimeout(sharedClient.idleTimer)
+  sharedClient = undefined
+})
+
+export async function connectedCapabilities(client: T3Client, search?: string, options?: T3CallOptions): Promise<Capabilities> {
+  const capabilities = await client.call<Capabilities>('orchestrator_capabilities', search ? { search } : {}, options)
   return { ...capabilities, providers: capabilities.providers.filter((p) => p.canRunChildTask === true) }
 }
+
+let fullCapsCache: { key: string; at: number; version: string | null; capabilities: Capabilities } | undefined
+
 export async function inspect(budgetMs = 5000, search?: string, full = false) {
-  const client = new T3Client(undefined, { timeoutMs: budgetMs, signal: AbortSignal.timeout(budgetMs) })
+  const started = generation
+  const rev = configRevision()
+  const cacheKey = `${started}:${rev}`
+  if (full && !search && fullCapsCache && fullCapsCache.key === cacheKey && Date.now() - fullCapsCache.at < 60_000) {
+    return { version: fullCapsCache.version, capabilities: fullCapsCache.capabilities }
+  }
+  const deadline = Date.now() + budgetMs
+  const runOnce = async (entry: SharedClientEntry) => {
+    const remaining = Math.max(1, deadline - Date.now())
+    const opts: T3CallOptions = { timeoutMs: remaining, signal: AbortSignal.timeout(remaining) }
+    await entry.client.connect(opts)
+    const capabilities = await connectedCapabilities(entry.client, search, opts)
+    if (full && !search) await expandShortlists(entry.client, capabilities, opts)
+    entry.ready = true
+    touchSharedClient(entry)
+    return { version: entry.client.serverVersion, capabilities }
+  }
+  const { entry, reused } = acquireSharedClient()
+  let result: { version: string | null; capabilities: Capabilities }
   try {
-    await client.connect()
-    const capabilities = await connectedCapabilities(client, search)
-    if (full && !search) await expandShortlists(client, capabilities)
-    return { version: client.serverVersion, capabilities }
-  } finally { await client.close() }
+    result = await runOnce(entry)
+  } catch (err) {
+    closeSharedClient(entry)
+    if (!reused || Date.now() >= deadline - 100) throw err
+    // A warm MCP session can expire if T3 Code restarts; retry once on a fresh session for read-only discovery.
+    const fresh = acquireSharedClient().entry
+    try {
+      result = await runOnce(fresh)
+    } catch (retryErr) {
+      closeSharedClient(fresh)
+      throw retryErr
+    }
+  }
+  if (generation === started && !search) {
+    capsCache = { key: cacheKey, at: Date.now(), capabilities: result.capabilities }
+    if (full) fullCapsCache = { key: cacheKey, at: Date.now(), version: result.version, capabilities: result.capabilities }
+  }
+  return result
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -152,7 +232,7 @@ function supervisorProviders(providers: Capabilities['providers']): Map<string, 
 
 // The MCP response is a shortlist. The member's T3 discovery snapshot supplies omitted IDs;
 // exact live lookup confirms each before it can enter a picker.
-async function expandShortlists(client: T3Client, caps: Capabilities) {
+async function expandShortlists(client: T3Client, caps: Capabilities, options?: T3CallOptions) {
   const { baseDir } = readConfig()
   if (!baseDir) return
   for (const provider of caps.providers) {
@@ -165,7 +245,7 @@ async function expandShortlists(client: T3Client, caps: Capabilities) {
     } catch { continue }
     for (let i = 0; i < ids.length; i += 6) {
       await Promise.allSettled(ids.slice(i, i + 6).map(async (id) => {
-        const exact = await connectedCapabilities(client, id)
+        const exact = await connectedCapabilities(client, id, options)
         const model = exact.providers.find((p) => p.providerInstanceId === provider.providerInstanceId)?.models.find((m) => m.id === id)
         if (model) provider.models.push(model)
       }))
@@ -173,30 +253,84 @@ async function expandShortlists(client: T3Client, caps: Capabilities) {
   }
 }
 
+const CATALOG_TTL_MS = 10 * 60_000
+const openCodeDiskCachePath = () => join(homedir(), '.cache', 'devdash', 't3-opencode-catalog.json')
+
+function openCodeCacheKey(bin: string): string | undefined {
+  try {
+    const st = statSync(bin)
+    return `${bin}:${st.mtimeMs}:${st.size}:${configRevision()}`
+  } catch {
+    return undefined
+  }
+}
+
+function readOpenCodeDiskCache(bin: string): SupervisorModel[] | undefined {
+  const expectedKey = openCodeCacheKey(bin)
+  if (!expectedKey) return undefined
+  try {
+    const uid = assertRegularMemberUid(process.getuid?.())
+    const file = openCodeDiskCachePath()
+    const st = lstatSync(file)
+    if (!st.isFile() || st.isSymbolicLink() || st.uid !== uid || (st.mode & 0o077) !== 0) return undefined
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { key?: string; at?: number; models?: SupervisorModel[] }
+    if (parsed.key !== expectedKey || typeof parsed.at !== 'number' || Date.now() - parsed.at >= CATALOG_TTL_MS) return undefined
+    if (!Array.isArray(parsed.models)) return undefined
+    return parsed.models
+  } catch {
+    return undefined
+  }
+}
+
+function writeOpenCodeDiskCache(bin: string, models: SupervisorModel[]): void {
+  const key = openCodeCacheKey(bin)
+  if (!key) return
+  try {
+    assertRegularMemberUid(process.getuid?.())
+    const file = openCodeDiskCachePath()
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+    writeFileSync(tmp, JSON.stringify({ key, at: Date.now(), models }), { mode: 0o600 })
+    renameSync(tmp, file)
+  } catch { /* best-effort cache */ }
+}
+
+function clearOpenCodeDiskCache(): void {
+  try { unlinkSync(openCodeDiskCachePath()) } catch { /* ignore */ }
+}
+
 const catalogCache = new Map<string, { at: number; models: ReturnType<typeof supervisorModels> }>()
-function nativeCatalog(provider: SupervisorProvider) {
+function nativeCatalog(provider: SupervisorProvider, allowDiskCache = false) {
   const hit = catalogCache.get(provider.key)
-  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.models
-  const models = supervisorModels(provider)
+  if (hit && Date.now() - hit.at < CATALOG_TTL_MS) return hit.models
+  if (allowDiskCache && provider.kind === 'opencode') {
+    const disk = readOpenCodeDiskCache(provider.bin)
+    if (disk) {
+      const models = Promise.resolve(disk)
+      catalogCache.set(provider.key, { at: Date.now(), models })
+      return models
+    }
+  }
+  const models = supervisorModels(provider).then((list) => {
+    if (provider.kind === 'opencode') writeOpenCodeDiskCache(provider.bin, list)
+    return list
+  })
   catalogCache.set(provider.key, { at: Date.now(), models })
   void models.catch(() => { if (catalogCache.get(provider.key)?.models === models) catalogCache.delete(provider.key) })
   return models
 }
 let capsCache: { key: string; at: number; capabilities: Capabilities } | undefined
 async function cachedSupervisorCapabilities(): Promise<Capabilities> {
-  let key = String(generation)
-  try { key = `${generation}:${configPath()}:${statSync(configPath()).mtimeMs}` } catch { /* ignore */ }
+  const key = `${generation}:${configRevision()}`
   if (capsCache && capsCache.key === key && Date.now() - capsCache.at < 60_000) return capsCache.capabilities
-  const started = generation
   const { capabilities } = await inspect(5000)
-  if (generation === started) capsCache = { key, at: Date.now(), capabilities }
   return capabilities
 }
 
 export async function nativeVariants(caps: Capabilities, instance: string, id: string) {
   const provider = supervisorProviders(caps.providers).get(instance)
   if (!provider || provider.kind !== 'opencode') return
-  const models = await nativeCatalog(provider).catch(() => [])
+  const models = await nativeCatalog(provider, true).catch(() => [])
   return models.find((m) => m.id === id)?.variants
 }
 
@@ -231,7 +365,7 @@ export async function modelChoices(search?: string, supervisor = false) {
     if (!unique.has(provider.key)) unique.set(provider.key, provider)
   }
   const catalogs = new Map<string, Awaited<ReturnType<typeof supervisorModels>>>()
-  await Promise.allSettled([...unique.values()].map(async (provider) => catalogs.set(provider.key, await nativeCatalog(provider))))
+  await Promise.allSettled([...unique.values()].map(async (provider) => catalogs.set(provider.key, await nativeCatalog(provider, !supervisor))))
   const rows = capabilities.providers.flatMap((p) => {
     const provider = providers.get(p.providerInstanceId)
     const native = provider ? catalogs.get(provider.key) : undefined
@@ -252,7 +386,17 @@ export async function modelChoices(search?: string, supervisor = false) {
 let cached: { key: string; at: number; value: Awaited<ReturnType<typeof probeInfo>> } | undefined
 let probing: { key: string; value: Promise<Awaited<ReturnType<typeof probeInfo>>> } | undefined
 let generation = 0
-export const invalidateInfo = () => { generation++; catalogCache.clear(); capsCache = undefined; cached = undefined; probing = undefined; void disposeSupervisorWorkers() }
+export const invalidateInfo = () => {
+  generation++
+  closeSharedClient()
+  catalogCache.clear()
+  clearOpenCodeDiskCache()
+  capsCache = undefined
+  fullCapsCache = undefined
+  cached = undefined
+  probing = undefined
+  void disposeSupervisorWorkers()
+}
 async function probeInfo() {
   try {
     const { version, capabilities } = await inspect(1500)
@@ -263,9 +407,9 @@ async function probeInfo() {
 }
 export async function info() {
   if (!installed()) return { harness: 't3code', installed: false, version: null, profiles: [], error: 'No member-owned T3 Code connection configured for your account.' }
-  let key: string
-  try { key = `${configPath()}:${statSync(configPath()).mtimeMs}` } catch { return probeInfo() }
-  if (cached?.key === key && Date.now() - cached.at < 15_000) return cached.value
+  const key = configRevision()
+  if (!key) return probeInfo()
+  if (cached?.key === key && Date.now() - cached.at < (cached.value.installed ? 60_000 : 15_000)) return cached.value
   if (probing?.key === key) return probing.value
   const started = generation
   const value = probeInfo().then((value) => { if (generation === started) cached = { key, at: Date.now(), value }; return value }).finally(() => { if (probing?.value === value) probing = undefined })

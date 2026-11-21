@@ -213,12 +213,14 @@ test('T3 supervisors use the selected member OpenCode model and variant for tool
   const folder = mkdtempSync(join(home, 'supervisor-'))
   const binary = join(folder, 'opencode.mjs')
   const capture = join(folder, 'requests.jsonl')
+  const starts = join(folder, 'starts.log')
   const openServer = join(folder, 'disable-auth')
   const limited = join(folder, 'rate-limited')
   const nativeModel = { providerID: 'account', id: 'chosen', modelID: 'Upstream-Chosen', enabled: true, variants: [{ id: 'high' }] }
   writeFileSync(binary, `#!${process.execPath}
 import { createServer } from 'node:http'
 import { appendFileSync, existsSync } from 'node:fs'
+appendFileSync(${JSON.stringify(starts)}, 'start\\n')
 const server = createServer(async (req, res) => {
   const auth = Buffer.from('opencode:' + process.env.OPENCODE_PASSWORD).toString('base64')
   if (!existsSync(${JSON.stringify(openServer)}) && (!process.env.OPENCODE_PASSWORD || req.headers.authorization !== 'Basic ' + auth)) {
@@ -265,9 +267,16 @@ process.stdin.on('end', () => server.close())
     }
     await assert.rejects(complete('local/account/chosen', 'invalid'), /thinking level/i)
     assert.equal(await complete('local/account/chosen', 'high'), 'decision')
+    assert.equal(await complete('local/account/chosen', 'high'), 'decision')
+    // Discovery + consecutive completions reuse the single warm OpenCode supervisor process.
+    assert.equal(readFileSync(starts, 'utf8').trim().split('\n').length, 1)
     const generate = messages().filter((m) => m.url === '/api/experimental/generate/text')
-    assert.deepEqual(generate, [{ method: 'POST', url: '/api/experimental/generate/text',
-      body: { prompt: 'Return the decision.\n\njudge this transcript', model: { providerID: 'account', id: 'chosen', variant: 'high' } } }])
+    assert.deepEqual(generate, [
+      { method: 'POST', url: '/api/experimental/generate/text',
+        body: { prompt: 'Return the decision.\n\njudge this transcript', model: { providerID: 'account', id: 'chosen', variant: 'high' } } },
+      { method: 'POST', url: '/api/experimental/generate/text',
+        body: { prompt: 'Return the decision.\n\njudge this transcript', model: { providerID: 'account', id: 'chosen', variant: 'high' } } },
+    ])
     // T3 can retain a variant in its catalog after OpenCode removes it. Never request a default in its place.
     await assert.rejects(complete('local/account/chosen', 'stale'), /variant|thinking|level/i)
     writeFileSync(limited, '')
@@ -275,12 +284,13 @@ process.stdin.on('end', () => server.close())
     // An executable that ignores its configured password must never receive the private transcript.
     writeFileSync(openServer, '')
     await assert.rejects(complete('local/account/chosen', 'high'))
-    assert.equal(messages().filter((m) => m.url === '/api/experimental/generate/text').length, 2)
+    assert.equal(messages().filter((m) => m.url === '/api/experimental/generate/text').length, 3)
     assert.ok(messages().every((m) => m.url === '/api/model' || m.url === '/api/experimental/generate/text'))
     assert.ok(calls.slice(start).every((c) => c.name === 'orchestrator_capabilities'), 'no tool-bearing T3 thread was started')
   } finally {
     supervisorProviders = undefined
     writeFileSync(config, original)
+    H.refreshT3()
   }
 })
 

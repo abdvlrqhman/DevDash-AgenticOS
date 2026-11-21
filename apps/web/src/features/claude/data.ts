@@ -42,13 +42,13 @@ export type SubagentActivity = InferResponseType<(typeof api.api.claude.sessions
 export const profilesQuery = queryOptions({
   queryKey: ['claude', 'profiles'],
   queryFn: () => unwrap(api.api.claude.profiles.$get({ query: {} })),
-  staleTime: 30_000,
+  staleTime: 60_000,
 })
 /** Slash commands and models: a Claude profile's, or another agent's (OpenCode lists every provider's models). */
 export const commandsQuery = (profile: string, harness: Harness = 'claude', model?: string, supervisor = false) => queryOptions({
   queryKey: ['claude', 'commands', harness, profile, ...(supervisor ? [{ supervisor }] : []), ...(model ? [model] : [])],
   queryFn: () => unwrap(api.api.claude.commands.$get({ query: { profile, harness, model, supervisor: supervisor ? 'true' : undefined } })),
-  staleTime: 60_000,
+  staleTime: 5 * 60_000,
 })
 
 /** T3's short catalog can omit a saved or typed model. Only look it up once the ID settles. */

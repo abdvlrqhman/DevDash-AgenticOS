@@ -174,9 +174,20 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     return t.projects().map((p) => ({ ...p, on: on.has(p.id) }))
   }
 
+  const warmedSupervisorAt = new Map<number, { key: string; at: number }>()
+  function maybeWarmSupervisor(user: User, r: Row) {
+    if (!r.enabled || r.sv_harness !== 't3code' || !r.sv_model) return
+    const key = `${r.sv_profile}:${r.sv_model}`
+    const prev = warmedSupervisorAt.get(user.id)
+    if (prev && prev.key === key && now() - prev.at < 3 * 60_000) return
+    warmedSupervisorAt.set(user.id, { key, at: now() })
+    void claude.commands(user, r.sv_profile, 't3code', r.sv_model, true).catch(() => { warmedSupervisorAt.delete(user.id) })
+  }
+
   function state(user: User) {
     const r = row(user.id)
     tidyInbox(user.id)
+    maybeWarmSupervisor(user, r)
     return {
       enabled: !!r.enabled,
       rules: r.rules ?? renderRules(null, user.name),

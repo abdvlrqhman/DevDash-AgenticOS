@@ -27,8 +27,15 @@ export function readConfig(): T3Config {
 
 export class T3RequestError extends Error {
   mayHaveExecuted: boolean
-  constructor(message: string, mayHaveExecuted = true) { super(message); this.mayHaveExecuted = mayHaveExecuted }
+  httpStatus?: number
+  constructor(message: string, mayHaveExecuted = true, httpStatus?: number) {
+    super(message)
+    this.mayHaveExecuted = mayHaveExecuted
+    this.httpStatus = httpStatus
+  }
 }
+
+export type T3CallOptions = { timeoutMs?: number; signal?: AbortSignal }
 
 type RpcReply = { id?: number; result?: unknown; error?: { code?: number; message?: string } }
 type ToolResult = { structuredContent?: unknown; content?: { type?: string; text?: string }[]; isError?: boolean }
@@ -63,14 +70,16 @@ export class T3Client {
   }
 
   /** No retries: a lost response may already have created a project or sent a prompt. */
-  private async request(method: string, params: unknown, notification = false): Promise<unknown> {
+  private async request(method: string, params: unknown, notification = false, options?: T3CallOptions): Promise<unknown> {
     const id = notification ? undefined : this.nextId++
+    const timeoutMs = options?.timeoutMs ?? this.timeoutMs
+    const signals = [AbortSignal.timeout(timeoutMs), ...(this.signal ? [this.signal] : []), ...(options?.signal ? [options.signal] : [])]
     try {
       const response = await memberFetch(this.config.url, {
-        method: 'POST', headers: this.headers(), signal: AbortSignal.any([AbortSignal.timeout(this.timeoutMs), ...(this.signal ? [this.signal] : [])]),
+        method: 'POST', headers: this.headers(), signal: AbortSignal.any(signals),
         body: JSON.stringify({ jsonrpc: '2.0', ...(id !== undefined ? { id } : {}), method, params }),
       })
-      if (!response.ok) { await response.body?.cancel(); throw new T3RequestError(`T3 Code MCP returned HTTP ${response.status}.`, response.status >= 500 || response.status === 408) }
+      if (!response.ok) { await response.body?.cancel(); throw new T3RequestError(`T3 Code MCP returned HTTP ${response.status}.`, response.status >= 500 || response.status === 408, response.status) }
       const session = response.headers.get('mcp-session-id')
       if (session) this.session = session
       if (notification) { await response.body?.cancel(); return undefined }
@@ -114,24 +123,24 @@ export class T3Client {
     } finally { await reader.cancel().catch(() => {}) }
   }
 
-  async connect(): Promise<void> {
+  async connect(options?: T3CallOptions): Promise<void> {
     if (this.connected) return
     if (this.connecting) return this.connecting
     this.connecting = (async () => {
       const initialized = await this.request('initialize', {
         protocolVersion: this.protocol, capabilities: {}, clientInfo: { name: 'DevDash', version: '1' },
-      }) as { protocolVersion?: string; serverInfo?: { version?: string } }
+      }, false, options) as { protocolVersion?: string; serverInfo?: { version?: string } }
       if (initialized?.protocolVersion) this.protocol = initialized.protocolVersion
       this.serverVersion = initialized?.serverInfo?.version ?? null
-      await this.request('notifications/initialized', {}, true)
+      await this.request('notifications/initialized', {}, true, options)
       this.connected = true
     })()
     try { await this.connecting } finally { this.connecting = null }
   }
 
-  async call<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
-    await this.connect()
-    const result = await this.request('tools/call', { name, arguments: args }) as ToolResult
+  async call<T>(name: string, args: Record<string, unknown> = {}, options?: T3CallOptions): Promise<T> {
+    await this.connect(options)
+    const result = await this.request('tools/call', { name, arguments: args }, false, options) as ToolResult
     if (result?.isError) {
       const detail = result.content?.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
       throw new T3RequestError(`T3 Code tool ${name} failed${detail ? `: ${this.clean(detail)}` : '.'}`, false)

@@ -3,7 +3,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -103,11 +103,54 @@ function flattenOptions(opt: AcpConfigOption | undefined): { value: string; name
 const findModelOption = (opts: AcpConfigOption[] | undefined) => opts?.find((c) => c.category === 'model' || c.id === 'model')
 const findThoughtOption = (opts: AcpConfigOption[] | undefined) => opts?.find((c) => c.category === 'thought_level' || c.id === 'thinking_level')
 
-/** The server chooses the port and reports it on stdout. Each invocation has its own password and lifetime. */
-async function withOpenCode<T>(bin: string, use: (request: OpenCodeRequest, models: OpenCodeModel[]) => Promise<T>, timeouts: SupervisorTimeouts = {}) {
-  assertRegularMemberUid(process.getuid?.())
-  const startupMs = timeouts.startupMs ?? 45_000
-  const requestMs = timeouts.requestMs ?? 155_000
+const DEFAULT_IDLE_MS = 5 * 60_000
+
+type OpenCodeWorker = {
+  key: string
+  slot: string
+  endpoint: string
+  headers: Record<string, string>
+  models: OpenCodeModel[]
+  modelsAt: number
+  child: ReturnType<typeof spawn>
+  ended: AbortController
+  stopped: Promise<void>
+  disposed: boolean
+  idleTimer?: ReturnType<typeof setTimeout>
+  queue: Promise<void>
+  dispose: (force?: boolean) => Promise<void>
+  disposeSync: () => void
+  touch: (idleMs: number) => void
+}
+
+const openCodePool = new Map<string, OpenCodeWorker>()
+const openCodeStarting = new Map<string, { key: string; promise: Promise<OpenCodeWorker> }>()
+
+function openCodeWorkerKey(bin: string): { slot: string; key: string } {
+  const st = statSync(bin)
+  return { slot: bin, key: `${bin}:${st.mtimeMs}:${st.size}` }
+}
+
+async function fetchOpenCodeCatalog(endpoint: string, headers: Record<string, string>, signal: AbortSignal): Promise<OpenCodeModel[]> {
+  const catalogUrl = new URL('/api/model', endpoint)
+  let response = await openCodeMemberFetch(catalogUrl, { method: 'GET', headers, signal })
+  while (response.status === 503) { // The server is listening while the member's provider plugins are starting.
+    await response.body?.cancel()
+    await delay(150, undefined, { signal })
+    response = await openCodeMemberFetch(catalogUrl, { method: 'GET', headers, signal })
+  }
+  if (!response.ok) { await response.body?.cancel(); throw new Error('The local OpenCode supervisor model catalog is unavailable.') }
+  const json = await response.json() as { data: { providerID: string; id: string; enabled: boolean; variants: { id: string }[] }[] }
+  return json.data.filter((m) => m.enabled).map((m) => ({ providerID: m.providerID, id: m.id, variants: m.variants.map((v) => v.id) }))
+}
+
+async function verifyOpenCodeAuth(endpoint: string, signal: AbortSignal): Promise<void> {
+  const anonymous = await openCodeMemberFetch(new URL('/api/model', endpoint), { method: 'GET', headers: {}, signal })
+  await anonymous.body?.cancel()
+  if (anonymous.status !== 401) throw new Error('The local OpenCode supervisor requires password authentication.')
+}
+
+async function startOpenCodeWorker(bin: string, slot: string, key: string, startupMs: number, idleMs: number): Promise<OpenCodeWorker> {
   const password = randomBytes(32).toString('base64url')
   const config = {
     permissions: [{ action: '*', resource: '*', effect: 'deny' }],
@@ -116,7 +159,7 @@ async function withOpenCode<T>(bin: string, use: (request: OpenCodeRequest, mode
     mcp: { timeout: { startup: 500, catalog: 500, execution: 500 } },
   }
   const child = spawn(bin, ['serve', '--stdio', '--hostname', '127.0.0.1', '--port', '0'], {
-    cwd: homedir(), stdio: ['pipe', 'pipe', 'ignore'],
+    cwd: homedir(), detached: true, stdio: ['pipe', 'pipe', 'ignore'],
     env: { ...process.env, OPENCODE_USERNAME: 'opencode', OPENCODE_PASSWORD: password, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
   })
   const ended = new AbortController()
@@ -124,41 +167,155 @@ async function withOpenCode<T>(bin: string, use: (request: OpenCodeRequest, mode
     child.once('error', () => { ended.abort(new Error('Could not start the T3 OpenCode supervisor.')); resolve() })
     child.once('close', () => { ended.abort(new Error('The T3 OpenCode supervisor stopped.')); resolve() })
   })
-  const signal = AbortSignal.any([ended.signal, AbortSignal.timeout(requestMs)])
-  const starting = AbortSignal.any([signal, AbortSignal.timeout(startupMs)])
   const lines = createInterface({ input: child.stdout })
+  const headers = { Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64'), 'Content-Type': 'application/json' }
+
+  let disposePromise: Promise<void> | undefined
+  const worker: OpenCodeWorker = {
+    key, slot, endpoint: '', headers, models: [], modelsAt: 0, child, ended, stopped, disposed: false, queue: Promise.resolve(),
+    dispose: async (force = false) => {
+      if (disposePromise) return disposePromise
+      worker.disposed = true
+      if (worker.idleTimer) { clearTimeout(worker.idleTimer); worker.idleTimer = undefined }
+      if (openCodePool.get(slot) === worker) openCodePool.delete(slot)
+      disposePromise = (async () => {
+        lines.close()
+        try { child.stdin.end() } catch { /* ignore */ }
+        if (force) {
+          killGroup(child.pid, 'SIGKILL')
+          child.kill('SIGKILL')
+        } else {
+          killGroup(child.pid, 'SIGTERM')
+          child.kill('SIGTERM')
+        }
+        const kill = setTimeout(() => { killGroup(child.pid, 'SIGKILL'); child.kill('SIGKILL') }, 1500)
+        kill.unref?.()
+        try { await stopped } finally { clearTimeout(kill) }
+      })()
+      return disposePromise
+    },
+    disposeSync: () => {
+      worker.disposed = true
+      if (worker.idleTimer) { clearTimeout(worker.idleTimer); worker.idleTimer = undefined }
+      if (openCodePool.get(slot) === worker) openCodePool.delete(slot)
+      lines.close()
+      killGroup(child.pid, 'SIGKILL')
+      try { child.kill('SIGKILL') } catch { /* ignore */ }
+    },
+    touch: (ms: number) => {
+      if (worker.idleTimer) clearTimeout(worker.idleTimer)
+      if (worker.disposed || ms <= 0) return
+      worker.idleTimer = setTimeout(() => { void worker.dispose(false) }, ms)
+      worker.idleTimer.unref?.()
+    },
+  }
+
+  void stopped.then(() => {
+    if (!worker.disposed) void worker.dispose(false)
+  })
+
+  const starting = AbortSignal.any([ended.signal, AbortSignal.timeout(startupMs)])
   try {
     const [line] = await once(lines, 'line', { signal: starting })
     let endpoint: unknown
     try { endpoint = JSON.parse(line).url } catch { /* unsupported OpenCode launcher */ }
-    if (typeof endpoint !== 'string' || !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(endpoint)) throw new Error('The T3 OpenCode executable did not report a local supervisor endpoint.')
-    const catalog = new URL('/api/model', endpoint)
-    const anonymous = await openCodeMemberFetch(catalog, { method: 'GET', headers: {}, signal: starting })
-    await anonymous.body?.cancel()
-    if (anonymous.status !== 401) throw new Error('The local OpenCode supervisor requires password authentication.')
-    const headers = { Authorization: 'Basic ' + Buffer.from('opencode:' + password).toString('base64'), 'Content-Type': 'application/json' }
-    const request: OpenCodeRequest = (path, body) => openCodeMemberFetch(new URL(path, endpoint), {
-      method: body ? 'POST' : 'GET', headers, signal: body ? signal : starting, ...(body && { body: JSON.stringify(body) }),
-    })
-    let response = await request('/api/model')
-    while (response.status === 503) { // The server is listening while the member's provider plugins are starting.
-      await response.body?.cancel()
-      await delay(500, undefined, { signal: starting })
-      response = await request('/api/model')
+    if (typeof endpoint !== 'string' || !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(endpoint)) {
+      throw new Error('The T3 OpenCode executable did not report a local supervisor endpoint.')
     }
-    if (!response.ok) { await response.body?.cancel(); throw new Error('The local OpenCode supervisor model catalog is unavailable.') }
-    const json = await response.json() as { data: { providerID: string; id: string; enabled: boolean; variants: { id: string }[] }[] }
-    const models = json.data.filter((m) => m.enabled).map((m) => ({ providerID: m.providerID, id: m.id, variants: m.variants.map((v) => v.id) }))
-    return await use(request, models)
-  } finally {
-    lines.close()
-    child.stdin.end()
-    child.kill('SIGTERM')
-    const kill = setTimeout(() => child.kill('SIGKILL'), 1500)
-    try { await stopped } finally { clearTimeout(kill) }
+    worker.endpoint = endpoint
+    await verifyOpenCodeAuth(endpoint, starting)
+    worker.models = await fetchOpenCodeCatalog(endpoint, headers, starting)
+    worker.modelsAt = Date.now()
+    worker.touch(idleMs)
+    return worker
+  } catch (err) {
+    await worker.dispose(true)
+    throw err
   }
 }
 
+/** The server chooses the port and reports it on stdout. Kept warm for idle reuse with deny-all policies,
+ * per-worker random credentials, and member-socket verification on every request. */
+async function withOpenCode<T>(
+  bin: string,
+  use: (request: OpenCodeRequest, models: OpenCodeModel[], markPoisoned: () => void) => Promise<T>,
+  timeouts: SupervisorTimeouts = {},
+  options: { verifyAuth?: boolean; refreshCatalog?: boolean } = {},
+) {
+  assertRegularMemberUid(process.getuid?.())
+  const { slot, key } = openCodeWorkerKey(bin)
+  const startupMs = timeouts.startupMs ?? 45_000
+  const requestMs = timeouts.requestMs ?? 155_000
+  const idleMs = timeouts.idleMs ?? DEFAULT_IDLE_MS
+
+  const acquireWorker = async (): Promise<OpenCodeWorker> => {
+    let w = openCodePool.get(slot)
+    if (w && (w.key !== key || w.disposed || w.ended.signal.aborted)) {
+      openCodePool.delete(slot)
+      await w.dispose(false)
+      w = undefined
+    }
+    if (w) return w
+    if (idleMs > 0) {
+      const inflight = openCodeStarting.get(slot)
+      if (inflight && inflight.key === key) {
+        const started = await inflight.promise
+        if (!started.disposed && !started.ended.signal.aborted) return started
+      }
+      const promise = startOpenCodeWorker(bin, slot, key, startupMs, idleMs).then((started) => {
+        if (!started.disposed) openCodePool.set(slot, started)
+        return started
+      }).finally(() => {
+        if (openCodeStarting.get(slot)?.promise === promise) openCodeStarting.delete(slot)
+      })
+      openCodeStarting.set(slot, { key, promise })
+      return await promise
+    }
+    return startOpenCodeWorker(bin, slot, key, startupMs, idleMs)
+  }
+  let worker = await acquireWorker()
+
+  const runOnWorker = async (w: OpenCodeWorker): Promise<T> => {
+    if (w.disposed || w.ended.signal.aborted) throw new Error('The T3 OpenCode supervisor stopped.')
+    if (w.idleTimer) { clearTimeout(w.idleTimer); w.idleTimer = undefined }
+    const signal = AbortSignal.any([w.ended.signal, AbortSignal.timeout(requestMs)])
+    const starting = AbortSignal.any([signal, AbortSignal.timeout(startupMs)])
+    let poisoned = false
+    const markPoisoned = () => { poisoned = true }
+    const request: OpenCodeRequest = (path, body) => openCodeMemberFetch(new URL(path, w.endpoint), {
+      method: body ? 'POST' : 'GET', headers: w.headers, signal: body ? signal : starting, ...(body && { body: JSON.stringify(body) }),
+    }).catch((err) => { poisoned = true; throw err })
+    try {
+      if (options.verifyAuth) {
+        try { await verifyOpenCodeAuth(w.endpoint, starting) } catch (err) { poisoned = true; throw err }
+      }
+      if ((options.refreshCatalog && Date.now() - w.modelsAt > 10_000) || Date.now() - w.modelsAt > 60_000) {
+        try {
+          w.models = await fetchOpenCodeCatalog(w.endpoint, w.headers, starting)
+          w.modelsAt = Date.now()
+        } catch (err) { poisoned = true; throw err }
+      }
+      return await use(request, w.models, markPoisoned)
+    } finally {
+      if (poisoned || w.disposed || w.ended.signal.aborted || idleMs <= 0) {
+        await w.dispose(true)
+      } else {
+        w.touch(idleMs)
+      }
+    }
+  }
+
+  const previous = worker.queue
+  let release!: () => void
+  worker.queue = new Promise<void>((r) => { release = r })
+  await previous
+  try {
+    if (worker.disposed || worker.ended.signal.aborted) worker = await acquireWorker()
+    return await runOnWorker(worker)
+  } finally {
+    release()
+  }
+}
 type AntigravityCallHooks = {
   onText: (text: string) => void
   onToolViolation: (reason: string) => void
@@ -182,7 +339,6 @@ type AntigravityWorker = {
   touch: (idleMs: number) => void
 }
 
-const DEFAULT_IDLE_MS = 5 * 60_000
 const antigravityPool = new Map<string, AntigravityWorker>()
 const antigravityStarting = new Map<string, { key: string; promise: Promise<AntigravityWorker> }>()
 
@@ -350,13 +506,16 @@ async function startAntigravityWorker(
 }
 
 export async function disposeSupervisorWorkers(): Promise<void> {
-  const workers = [...antigravityPool.values()]
+  const agy = [...antigravityPool.values()]
+  const oc = [...openCodePool.values()]
   antigravityPool.clear()
-  await Promise.allSettled(workers.map((w) => w.dispose(false)))
+  openCodePool.clear()
+  await Promise.allSettled([...agy.map((w) => w.dispose(false)), ...oc.map((w) => w.dispose(false))])
 }
 
 process.once('exit', () => {
   for (const w of [...antigravityPool.values()]) w.disposeSync()
+  for (const w of [...openCodePool.values()]) w.disposeSync()
 })
 
 /**
@@ -486,7 +645,7 @@ async function withAntigravity<T>(
 
 export async function supervisorModels(provider: SupervisorProvider, timeouts?: SupervisorTimeouts): Promise<SupervisorModel[]> {
   if (provider.kind === 'opencode') {
-    const models = await withOpenCode(provider.bin, async (_request, list) => list, timeouts)
+    const models = await withOpenCode(provider.bin, async (_request, list) => list, timeouts, { refreshCatalog: true })
     return models.map((m) => ({ id: `${m.providerID}/${m.id}`, variants: m.variants }))
   }
   return withAntigravity(provider, async ({ sessionId, configOptions, call, startupSignal }) => {
@@ -517,13 +676,14 @@ export async function supervisorModels(provider: SupervisorProvider, timeouts?: 
 
 export function supervisorText(target: SupervisorTarget, prompt: string, timeouts?: SupervisorTimeouts): Promise<string> {
   if (target.kind === 'opencode') {
-    return withOpenCode(target.bin, async (request, models) => {
+    return withOpenCode(target.bin, async (request, models, markPoisoned) => {
       const selected = models.find((m) => m.providerID === target.providerID && m.id === target.id)
       if (!selected) throw new Error('This supervisor model is unavailable in the local T3 OpenCode catalog.')
       if (target.variant && !selected.variants.includes(target.variant)) throw new Error('This thinking level is unavailable in the local T3 OpenCode supervisor.')
       const model = { providerID: target.providerID, id: target.id, ...(target.variant ? { variant: target.variant } : {}) }
       const response = await request('/api/experimental/generate/text', { model, prompt })
       if (!response.ok) {
+        if (response.status >= 500) markPoisoned()
         // OpenCode may wrap an upstream 429 in a 502 ProviderError. Forward only its category.
         const error = await response.json().catch(() => null) as { status?: number; reason?: string } | null
         const limited = response.status === 429 || error?.status === 429 || error?.reason === 'rate_limit'
@@ -532,7 +692,7 @@ export function supervisorText(target: SupervisorTarget, prompt: string, timeout
       const result = await response.json() as { data: { text: string } }
       if (typeof result.data?.text !== 'string' || !result.data.text.trim()) throw new Error('The T3 OpenCode supervisor returned no text.')
       return result.data.text
-    }, timeouts)
+    }, timeouts, { verifyAuth: true })
   }
 
   return withAntigravity(target, async ({ sessionId, configOptions, call, promptSignal, startupSignal, consumeOutput }) => {
