@@ -891,8 +891,8 @@ export async function complete(harness: string, profile: string, prompt: string,
   const agent = agentOf(harness)
   if (harness === 't3code') {
     if (profile !== 'default' || !o.model) throw new Error('Choose a T3 Code supervisor model from your connected account.')
-    const { bin, ref } = await t3code.supervisorTarget(o.model, o.effort)
-    return supervisorText(bin, ref, [o.system, prompt].filter(Boolean).join('\n\n'))
+    const target = await t3code.supervisorTarget(o.model, o.effort)
+    return supervisorText(target, [o.system, prompt].filter(Boolean).join('\n\n'))
   }
   const dir = join(homedir(), '.cache', 'devdash', 'complete')
   mkdirSync(dir, { recursive: true, mode: 0o700 })

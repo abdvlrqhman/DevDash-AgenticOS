@@ -92,6 +92,7 @@ function setup(o: { team?: TeamPort } = {}) {
       sent.push(req)
       if (req.op === 'claude.commands') return { commands: [], models: [
         { value: 'opencode/test/model', supportsSupervisor: true, supportedEffortLevels: ['low', 'ultra'] },
+        { value: 'antigravity/gemini-4-neon', supportsSupervisor: true, supportedEffortLevels: ['low', 'high'] },
         { value: 'codex/gpt-chat', supportsSupervisor: false, supportedEffortLevels: ['high'] },
       ] }
       if (req.op === 'claude.complete' && reply.error) throw new Error(reply.error)
@@ -625,6 +626,19 @@ test('T3 supervisor uses the member’s selected tool-free model, effort and dai
   assert.deepEqual([calls[0]!.harness, calls[0]!.profile, calls[0]!.model, calls[0]!.effort], ['t3code', 'default', 'opencode/test/model', 'ultra'])
   assert.equal(t.autopilot.state(t.yo).supervisor.modelCallsToday, 1)
   assert.equal(t.autopilot.state(t.bob).supervisor.harness, 'claude')
+})
+
+test('T3 non-OpenCode supervisor (Antigravity) validates model and thinking level server-side and runs sweeps', async () => {
+  const t = setup()
+  await assert.rejects(t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'antigravity/gemini-4-neon', svEffort: 'xhigh' }), /thinking level/)
+  await assert.rejects(t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'codex/gpt-chat', svEffort: 'high' }), /supervisor/)
+  await t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'antigravity/gemini-4-neon', svEffort: 'high', svDailyCap: 5 })
+  t.session('agy-1')
+  t.autopilot.setEnabled(t.yo, true)
+  await t.autopilot.sweep()
+  const calls = t.sent.filter((r) => r.op === 'claude.complete')
+  assert.equal(calls.length, 1)
+  assert.deepEqual([calls[0]!.harness, calls[0]!.profile, calls[0]!.model, calls[0]!.effort], ['t3code', 'default', 'antigravity/gemini-4-neon', 'high'])
 })
 
 test('red checks run before any model call, regardless of supervisor settings', async () => {

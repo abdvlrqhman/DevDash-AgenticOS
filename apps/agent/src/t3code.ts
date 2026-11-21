@@ -1,7 +1,15 @@
 // T3 Code's own MCP integration. Credentials belong to the DevDash member; the configured T3 server runs the tools.
+import { createHash } from 'node:crypto'
 import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
-import { supervisorModels } from './t3-supervisor.ts'
+import { dirname, isAbsolute, join } from 'node:path'
+import { assertRegularMemberUid } from './t3-local.ts'
+import {
+  assertMemberOwnedRegularFile,
+  supervisorModels,
+  validateAntigravitySettingsFile,
+  type SupervisorProvider,
+  type SupervisorTarget,
+} from './t3-supervisor.ts'
 import { T3Client, configPath, readConfig } from './t3-client.ts'
 
 type Model = { id: string; label?: string | null; options?: { id: string; values: (string | boolean)[] }[] | null }
@@ -37,30 +45,108 @@ export async function inspect(budgetMs = 5000, search?: string, full = false) {
     return { version: client.serverVersion, capabilities }
   } finally { await client.close() }
 }
-/** Reuse only an OpenCode instance whose account and executable the member's local settings identify.
- * Custom environments or server connections may select a different account and require a separate adapter. */
-function supervisorBins(providers: Capabilities['providers']): Map<string, string> {
-  const bins = new Map<string, string>()
-  const { baseDir } = readConfig()
-  if (!baseDir) return bins
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+function isExecutableFile(filePath: string): boolean {
   try {
-    const settings = JSON.parse(readFileSync(join(baseDir, 'userdata', 'settings.json'), 'utf8'))
+    if (!statSync(filePath).isFile()) return false
+    accessSync(filePath, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function resolveAntigravityBinary(baseDir: string, config: Record<string, unknown>, uid: number): { bin: string; harnessPath?: string } | undefined {
+  let bin: string | undefined
+  if (config.binaryPath !== undefined) {
+    if (typeof config.binaryPath !== 'string' || !isAbsolute(config.binaryPath)) return undefined
+    bin = config.binaryPath
+  } else {
+    const toolRoot = join(baseDir, 'tools', 'antigravity-acp', `${process.platform}-${process.arch}`)
+    const activePath = join(toolRoot, 'active.json')
+    try {
+      assertMemberOwnedRegularFile(activePath, uid)
+      const active = JSON.parse(readFileSync(activePath, 'utf8')) as unknown
+      if (!isPlainObject(active)) return undefined
+      const releaseId = active.releaseId
+      if (typeof releaseId !== 'string' || !/^[a-f0-9]{16,128}$/i.test(releaseId)) return undefined
+      bin = join(toolRoot, 'versions', releaseId, 'agy_acp_server.par')
+    } catch {
+      return undefined
+    }
+  }
+  if (!isExecutableFile(bin)) return undefined
+  const siblingHarness = join(dirname(bin), 'localharness_external')
+  const harnessPath = isExecutableFile(siblingHarness) ? siblingHarness : undefined
+  return { bin, harnessPath }
+}
+
+/** Reuse only member-owned provider instances whose driver can guarantee hard tool-free execution:
+ * - OpenCode: stateless /api/experimental/generate/text with deny-all policies & per-run auth
+ * - Antigravity: ephemeral ACP server with clientCapabilities fs/terminal=false, mcpServers=[], enabledTools=[], isolated HOME/GEMINI_HOME
+ * Drivers like Codex keep built-in exec/collaboration tools enabled even with read-only sandboxes and stay chat-only. */
+function supervisorProviders(providers: Capabilities['providers']): Map<string, SupervisorProvider> {
+  const result = new Map<string, SupervisorProvider>()
+  const { baseDir } = readConfig()
+  if (!baseDir) return result
+  try {
+    const uid = assertRegularMemberUid(process.getuid?.())
+    const settingsFile = join(baseDir, 'userdata', 'settings.json')
+    assertMemberOwnedRegularFile(settingsFile, uid)
+    const settings = JSON.parse(readFileSync(settingsFile, 'utf8')) as { providerInstances?: Record<string, unknown> }
+    if (!isPlainObject(settings.providerInstances)) return result
+
     for (const p of providers) {
-      const instance = settings.providerInstances?.[p.providerInstanceId]
-      if (p.driverKind !== 'opencode' || instance?.driver !== 'opencode' || instance.enabled === false) continue
+      const instance = settings.providerInstances[p.providerInstanceId]
+      if (!isPlainObject(instance) || instance.enabled === false) continue
       if (Object.keys(instance).some((k) => !['driver', 'enabled', 'config', 'displayName'].includes(k))) continue
-      const config = instance.config ?? {}
-      if (config.enabled === false || Object.keys(config).some((k) => !['binaryPath', 'customModels', 'enabled'].includes(k))) continue
-      const bin = config.binaryPath
-      if (typeof bin !== 'string' || !isAbsolute(bin)) continue
-      try {
-        if (!statSync(bin).isFile()) continue
-        accessSync(bin, constants.X_OK)
-        bins.set(p.providerInstanceId, bin)
-      } catch { /* An unusable executable doesn't affect the member's other instances. */ }
+      const config = instance.config === undefined ? {} : instance.config
+      if (!isPlainObject(config) || config.enabled === false) continue
+
+      if (p.driverKind === 'opencode' && instance.driver === 'opencode') {
+        if (Object.keys(config).some((k) => !['binaryPath', 'customModels', 'enabled'].includes(k))) continue
+        const bin = config.binaryPath
+        if (typeof bin !== 'string' || !isAbsolute(bin) || !isExecutableFile(bin)) continue
+        result.set(p.providerInstanceId, { kind: 'opencode', key: `opencode:${bin}`, bin })
+        continue
+      }
+
+      if (p.driverKind === 'antigravity' && instance.driver === 'antigravity') {
+        if (Object.keys(config).some((k) => !['enabled', 'authMethod', 'binaryPath', 'customModels'].includes(k))) continue
+        if (config.authMethod !== undefined && config.authMethod !== 'oauth-personal') continue
+        const resolved = resolveAntigravityBinary(baseDir, config, uid)
+        if (!resolved) continue
+        const providerHash = createHash('sha256').update(p.providerInstanceId).digest('hex')
+        const acpDir = join(baseDir, 'userdata', 'providers', 'antigravity', providerHash, 'antigravity-acp')
+        const tokenPath = join(acpDir, 'acp_token.json')
+        const agySettingsPath = join(acpDir, 'settings.json')
+        try {
+          assertMemberOwnedRegularFile(tokenPath, uid)
+          let settingsPath: string | undefined
+          let fileAuthType: 'oauth-personal' | undefined
+          if (existsSync(agySettingsPath)) {
+            fileAuthType = validateAntigravitySettingsFile(agySettingsPath, uid)
+            settingsPath = agySettingsPath
+          }
+          if (config.authMethod === undefined && fileAuthType !== 'oauth-personal') continue
+          result.set(p.providerInstanceId, {
+            kind: 'antigravity',
+            key: `antigravity:${resolved.bin}:${resolved.harnessPath ?? ''}:${tokenPath}`,
+            bin: resolved.bin,
+            ...(resolved.harnessPath ? { harnessPath: resolved.harnessPath } : {}),
+            authMethod: 'oauth-personal',
+            tokenPath,
+            ...(settingsPath ? { settingsPath } : {}),
+          })
+        } catch { /* An unverified Antigravity instance doesn't affect the member's other instances. */ }
+      }
     }
   } catch { /* Other T3 chat models remain available without local provider configuration. */ }
-  return bins
+  return result
 }
 
 // The MCP response is a shortlist. The member's T3 discovery snapshot supplies omitted IDs;
@@ -87,45 +173,64 @@ async function expandShortlists(client: T3Client, caps: Capabilities) {
 }
 
 const catalogCache = new Map<string, { at: number; models: ReturnType<typeof supervisorModels> }>()
-function nativeCatalog(bin: string) {
-  const hit = catalogCache.get(bin)
+function nativeCatalog(provider: SupervisorProvider) {
+  const hit = catalogCache.get(provider.key)
   if (hit && Date.now() - hit.at < 60_000) return hit.models
-  const models = supervisorModels(bin)
-  catalogCache.set(bin, { at: Date.now(), models })
-  void models.catch(() => { if (catalogCache.get(bin)?.models === models) catalogCache.delete(bin) })
+  const models = supervisorModels(provider)
+  catalogCache.set(provider.key, { at: Date.now(), models })
+  void models.catch(() => { if (catalogCache.get(provider.key)?.models === models) catalogCache.delete(provider.key) })
   return models
 }
 
 export async function nativeVariants(caps: Capabilities, instance: string, id: string) {
-  const bin = supervisorBins(caps.providers).get(instance)
-  if (!bin) return
-  const models = await nativeCatalog(bin).catch(() => [])
-  return models.find((m) => modelId(m.providerID, m.id) === id)?.variants
+  const provider = supervisorProviders(caps.providers).get(instance)
+  if (!provider || provider.kind !== 'opencode') return
+  const models = await nativeCatalog(provider).catch(() => [])
+  return models.find((m) => m.id === id)?.variants
 }
 
-export async function supervisorTarget(value: string, effort?: string) {
+export async function supervisorTarget(value: string, effort?: string): Promise<SupervisorTarget> {
   const { instanceId, model } = selection(value)
   const { capabilities } = await inspect(5000)
-  const bin = supervisorBins(capabilities.providers).get(instanceId)
-  if (!bin || !/^[^/]+\/.+/.test(model)) throw new Error('Choose an available T3 OpenCode supervisor model.')
-  const { instanceId: providerID, model: id } = selection(model)
-  return { bin, ref: { providerID, id, ...(effort ? { variant: effort } : {}) } }
+  const provider = supervisorProviders(capabilities.providers).get(instanceId)
+  if (!provider) throw new Error('Choose an available T3 Code supervisor model.')
+  if (provider.kind === 'opencode') {
+    if (!/^[^/]+\/.+/.test(model)) throw new Error('Choose an available T3 Code supervisor model.')
+    const { instanceId: providerID, model: id } = selection(model)
+    return { kind: 'opencode', bin: provider.bin, providerID, id, ...(effort ? { variant: effort } : {}) }
+  }
+  return {
+    kind: 'antigravity',
+    bin: provider.bin,
+    ...(provider.harnessPath ? { harnessPath: provider.harnessPath } : {}),
+    authMethod: provider.authMethod,
+    tokenPath: provider.tokenPath,
+    ...(provider.settingsPath ? { settingsPath: provider.settingsPath } : {}),
+    id: model,
+    ...(effort ? { variant: effort } : {}),
+  }
 }
 export async function modelChoices(search?: string, supervisor = false) {
   const { capabilities } = await inspect(15_000, search, true)
-  const bins = supervisorBins(capabilities.providers)
+  const providers = supervisorProviders(capabilities.providers)
+  const unique = new Map<string, SupervisorProvider>()
+  for (const provider of providers.values()) {
+    // Only probe Antigravity when building supervisor pickers so chat pickers avoid .par startup overhead.
+    if (!supervisor && provider.kind !== 'opencode') continue
+    if (!unique.has(provider.key)) unique.set(provider.key, provider)
+  }
   const catalogs = new Map<string, Awaited<ReturnType<typeof supervisorModels>>>()
-  await Promise.allSettled([...new Set(bins.values())].map(async (bin) => catalogs.set(bin, await nativeCatalog(bin))))
+  await Promise.allSettled([...unique.values()].map(async (provider) => catalogs.set(provider.key, await nativeCatalog(provider))))
   const rows = capabilities.providers.flatMap((p) => {
-    const native = catalogs.get(bins.get(p.providerInstanceId) ?? '')
+    const provider = providers.get(p.providerInstanceId)
+    const native = provider ? catalogs.get(provider.key) : undefined
     const models = new Map(p.models.map((m) => [m.id, m]))
     if (supervisor) for (const n of native ?? []) {
-      const id = modelId(n.providerID, n.id)
-      if (!models.has(id)) models.set(id, { id })
+      if (!models.has(n.id)) models.set(n.id, { id: n.id, label: n.displayName })
     }
     return [...models.values()].map((m) => {
       const value = modelId(p.providerInstanceId, m.id)
-      const match = native?.find((n) => modelId(n.providerID, n.id) === m.id)
+      const match = native?.find((n) => n.id === m.id)
       return { value, displayName: m.label || m.id, description: value, group: p.providerInstanceId,
         ...(supervisor && { supportsSupervisor: !!match }), supportedEffortLevels: match?.variants ?? effortOption(m)?.levels ?? [] }
     })

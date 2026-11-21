@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createServer as unixServer } from 'node:net'
 import { promisify } from 'node:util'
-import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { supervisorText } from './t3-supervisor.ts'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -280,6 +281,247 @@ process.stdin.on('end', () => server.close())
   } finally {
     supervisorProviders = undefined
     writeFileSync(config, original)
+  }
+})
+
+test('T3 Antigravity supervisors enforce tool-free ACP isolation, strict config, rate limits and cleanup', async () => {
+  const original = readFileSync(config, 'utf8')
+  const folder = mkdtempSync(join(home, 'supervisor-agy-'))
+  const capture = join(folder, 'acp-events.jsonl')
+  const modeFile = join(folder, 'mode.txt')
+  const releaseId = 'a'.repeat(64)
+  const toolRoot = join(folder, 'tools', 'antigravity-acp', `${process.platform}-${process.arch}`)
+  const versionDir = join(toolRoot, 'versions', releaseId)
+  mkdirSync(versionDir, { recursive: true })
+  writeFileSync(join(toolRoot, 'active.json'), JSON.stringify({ releaseId }), { mode: 0o600 })
+  const binary = join(versionDir, 'agy_acp_server.par')
+  const harnessBin = join(versionDir, 'localharness_external')
+  writeFileSync(harnessBin, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  writeFileSync(binary, `#!${process.execPath}
+const { appendFileSync, existsSync, readdirSync, readFileSync } = require('node:fs')
+const { join } = require('node:path')
+const { createInterface } = require('node:readline')
+
+const capture = ${JSON.stringify(capture)}
+const modeFile = ${JSON.stringify(modeFile)}
+const mode = () => existsSync(modeFile) ? readFileSync(modeFile, 'utf8').trim() : 'ok'
+const log = (entry) => appendFileSync(capture, JSON.stringify(entry) + '\\n')
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n')
+
+const models = [
+  { value: 'gemini-4-neon', name: 'Gemini 4 Neon', levels: ['low', 'high'] },
+  { value: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', levels: ['low', 'medium'] },
+]
+let currentModel = models[0].value
+let currentLevel = 'high'
+const configOptions = () => {
+  const active = models.find((m) => m.value === currentModel) ?? models[0]
+  return [
+    { id: 'model', category: 'model', currentValue: currentModel, options: models.map((m) => ({ value: m.value, name: m.name })) },
+    { id: 'thinking_level', category: 'thought_level', currentValue: currentLevel, options: active.levels.map((v) => ({ value: v, name: v })) },
+  ]
+}
+
+const rl = createInterface({ input: process.stdin })
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const msg = JSON.parse(line)
+  if (msg.method === 'initialize') {
+    const acpDir = join(process.env.GEMINI_HOME || '', 'antigravity-acp')
+    log({
+      event: 'initialize',
+      pid: process.pid,
+      argv: process.argv.slice(2),
+      cwd: process.cwd(),
+      home: process.env.HOME,
+      geminiHome: process.env.GEMINI_HOME,
+      tmpdir: process.env.TMPDIR,
+      harnessPath: process.env.ANTIGRAVITY_HARNESS_PATH,
+      acpFiles: existsSync(acpDir) ? readdirSync(acpDir).sort() : [],
+      params: msg.params,
+    })
+    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, authMethods: [{ id: 'oauth-personal' }] } })
+  } else if (msg.method === 'authenticate') {
+    log({ event: 'authenticate', params: msg.params })
+    send({ jsonrpc: '2.0', id: msg.id, result: {} })
+  } else if (msg.method === 'session/new') {
+    log({ event: 'session/new', params: msg.params })
+    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'ephemeral-1', configOptions: configOptions() } })
+  } else if (msg.method === 'session/set_config_option') {
+    log({ event: 'session/set_config_option', params: msg.params })
+    if (msg.params.configId === 'model' && models.some((m) => m.value === msg.params.value)) {
+      currentModel = msg.params.value
+      currentLevel = models.find((m) => m.value === currentModel).levels[0]
+    } else if (msg.params.configId === 'thinking_level') {
+      const active = models.find((m) => m.value === currentModel)
+      if (active?.levels.includes(msg.params.value)) currentLevel = msg.params.value
+    }
+    send({ jsonrpc: '2.0', id: msg.id, result: { configOptions: configOptions() } })
+  } else if (msg.method === 'session/prompt') {
+    log({ event: 'session/prompt', params: msg.params })
+    const m = mode()
+    if (m === 'tool_call') {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'ephemeral-1', update: { sessionUpdate: 'tool_call', title: 'bash' } } })
+      return
+    }
+    if (m === 'permission') {
+      send({ jsonrpc: '2.0', id: 99, method: 'session/request_permission', params: { sessionId: 'ephemeral-1' } })
+      return
+    }
+    if (m === 'rpc_rate_limit') {
+      process.stderr.write('secret-oauth-token-leak\\n')
+      send({ jsonrpc: '2.0', id: msg.id, error: { code: 429, message: 'RESOURCE_EXHAUSTED token=secret-oauth-token-leak' } })
+      return
+    }
+    if (m === 'chunk_rate_limit') {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'ephemeral-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Usage Limit Reached\\n\\nYou have reached your quota.' } } } })
+      send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn', usage: { used: 0, size: 1000 } } })
+      return
+    }
+    if (m === 'refusal_rate_limit') {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'ephemeral-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Error 429 RESOURCE_EXHAUSTED' } } } })
+      send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'refusal' } })
+      return
+    }
+    if (m === 'hang') {
+      return
+    }
+    send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'ephemeral-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'agy-decision' } } } })
+    send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn', usage: { used: 42, size: 1000 } } })
+  } else if (msg.method === 'session/delete') {
+    log({ event: 'session/delete', params: msg.params })
+    send({ jsonrpc: '2.0', id: msg.id, result: {} })
+  }
+})
+`, { mode: 0o700 })
+
+  const setupProviderCreds = (instanceId: string, opts: { symlinkToken?: boolean; authType?: string } = {}) => {
+    const hash = createHash('sha256').update(instanceId).digest('hex')
+    const acpDir = join(folder, 'userdata', 'providers', 'antigravity', hash, 'antigravity-acp')
+    mkdirSync(acpDir, { recursive: true, mode: 0o700 })
+    const tokenFile = join(acpDir, 'acp_token.json')
+    if (opts.symlinkToken) {
+      const target = join(folder, 'real-token.json')
+      writeFileSync(target, JSON.stringify({ access_token: 'secret-token' }), { mode: 0o600 })
+      symlinkSync(target, tokenFile)
+    } else {
+      writeFileSync(tokenFile, JSON.stringify({ access_token: 'secret-token' }), { mode: 0o600 })
+    }
+    writeFileSync(join(acpDir, 'settings.json'), JSON.stringify({ auth: { type: opts.authType ?? 'oauth-personal' } }), { mode: 0o600 })
+    // Place distracting files in member dir to confirm they are NEVER copied into the ephemeral GEMINI_HOME.
+    writeFileSync(join(acpDir, 'mcp_config.json'), JSON.stringify({ mcpServers: { bad: { command: '/bin/sh' } } }), { mode: 0o600 })
+    return tokenFile
+  }
+  const validToken = setupProviderCreds('antigravity')
+  setupProviderCreds('agy-badkeys')
+  setupProviderCreds('agy-badauth', { authType: 'gemini-api-key' })
+  setupProviderCreds('agy-symlink', { symlinkToken: true })
+
+  const agyModels = [
+    { id: 'gemini-4-neon', label: 'Gemini 4 Neon', options: [{ id: 'thinkingLevel', values: ['low', 'high', 'xhigh'] }] },
+    { id: 'stale-model', label: 'Stale Model', options: [{ id: 'thinkingLevel', values: ['low'] }] },
+  ]
+  const codexModels = [{ id: 'gpt-6.2-sol', label: 'GPT-6.2 Sol', options: [{ id: 'reasoningEffort', values: ['high'] }] }]
+  supervisorProviders = [
+    { providerInstanceId: 'antigravity', driverKind: 'antigravity', canRunChildTask: true, displayName: 'Antigravity', models: agyModels },
+    { providerInstanceId: 'agy-badkeys', driverKind: 'antigravity', canRunChildTask: true, displayName: 'BadKeys', models: agyModels },
+    { providerInstanceId: 'agy-badauth', driverKind: 'antigravity', canRunChildTask: true, displayName: 'BadAuth', models: agyModels },
+    { providerInstanceId: 'agy-symlink', driverKind: 'antigravity', canRunChildTask: true, displayName: 'Symlink', models: agyModels },
+    { providerInstanceId: 'codex', driverKind: 'codex', canRunChildTask: true, displayName: 'Codex', models: codexModels },
+  ]
+  const settings = {
+    providerInstances: {
+      antigravity: { driver: 'antigravity', enabled: true, config: { enabled: true, authMethod: 'oauth-personal' } },
+      'agy-badkeys': { driver: 'antigravity', enabled: true, config: { enabled: true, authMethod: 'oauth-personal', env: { FOO: 'bar' } } },
+      'agy-badauth': { driver: 'antigravity', enabled: true, config: { enabled: true, authMethod: 'gemini-api-key' } },
+      'agy-symlink': { driver: 'antigravity', enabled: true, config: { enabled: true, authMethod: 'oauth-personal' } },
+      codex: { driver: 'codex', enabled: true, config: { enabled: true, binaryPath: '/bin/true' } },
+    },
+  }
+  mkdirSync(join(folder, 'userdata'), { recursive: true })
+  writeFileSync(join(folder, 'userdata', 'settings.json'), JSON.stringify(settings), { mode: 0o600 })
+  writeFileSync(config, JSON.stringify({ ...JSON.parse(original), baseDir: folder }))
+
+  const eventsLog = () => existsSync(capture) ? readFileSync(capture, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>) : []
+  try {
+    H.refreshT3()
+    // Chat picker must not spawn Antigravity ACP.
+    await H.commandsAndModels('t3code', 'default')
+    assert.equal(eventsLog().length, 0)
+
+    // Supervisor picker discovers only the live verified Antigravity catalog; bad/codex/stale entries stay supportsSupervisor: false.
+    const { models: entries } = await H.commandsAndModels('t3code', 'default', undefined, true)
+    assert.deepEqual(
+      entries.filter((m) => m.supportsSupervisor).map((m) => [m.value, m.supportedEffortLevels]),
+      [['antigravity/gemini-4-neon', ['low', 'high']], ['antigravity/gemini-3.8-flash', ['low', 'medium']]],
+    )
+    for (const chatOnly of ['codex/gpt-6.2-sol', 'antigravity/stale-model', 'agy-badkeys/gemini-4-neon', 'agy-badauth/gemini-4-neon', 'agy-symlink/gemini-4-neon']) {
+      assert.ok(entries.some((m) => m.value === chatOnly && m.supportsSupervisor === false), `${chatOnly} must be supportsSupervisor: false`)
+    }
+    const initCountAfterDiscovery = eventsLog().filter((e) => e.event === 'initialize').length
+    assert.equal(initCountAfterDiscovery, 1)
+
+    // Cached discovery does not respawn ACP within TTL.
+    await H.commandsAndModels('t3code', 'default', undefined, true)
+    assert.equal(eventsLog().filter((e) => e.event === 'initialize').length, 1)
+
+    const startCalls = calls.length
+    const complete = (model: string, effort?: string) => H.complete('t3code', 'default', 'judge this transcript', { system: 'Return the decision.', model, effort })
+
+    // Disallowed providers, stale models, and stale thinking levels reject without fallback.
+    for (const unsupported of ['codex/gpt-6.2-sol', 'agy-badkeys/gemini-4-neon', 'agy-badauth/gemini-4-neon', 'agy-symlink/gemini-4-neon']) {
+      await assert.rejects(complete(unsupported), /supervisor model/i)
+    }
+    await assert.rejects(complete('antigravity/stale-model'), /unavailable/i)
+    await assert.rejects(complete('antigravity/gemini-4-neon', 'xhigh'), /thinking level/i)
+    assert.equal(eventsLog().filter((e) => e.event === 'session/prompt').length, 0)
+
+    // Valid completion runs with strict isolation, hard zero-tool protocol, and full cleanup.
+    assert.equal(await complete('antigravity/gemini-4-neon', 'low'), 'agy-decision')
+    const initEvent = eventsLog().filter((e) => e.event === 'initialize').at(-1)!
+    assert.deepEqual((initEvent.params as { clientCapabilities: unknown }).clientCapabilities, { fs: { readTextFile: false, writeTextFile: false }, terminal: false })
+    assert.notEqual(initEvent.home, home)
+    assert.notEqual(initEvent.geminiHome, join(folder, 'userdata'))
+    assert.equal(initEvent.harnessPath, harnessBin)
+    assert.deepEqual(initEvent.acpFiles, ['acp_token.json', 'settings.json'])
+    assert.equal(existsSync(String(initEvent.tmpdir)), false, 'ephemeral runDir must be removed after completion')
+    const sessionNew = eventsLog().filter((e) => e.event === 'session/new').at(-1)!
+    assert.deepEqual(sessionNew.params, { cwd: initEvent.cwd, mcpServers: [], _meta: { antigravity: { enabledTools: [] } } })
+    assert.ok(eventsLog().some((e) => e.event === 'session/delete'))
+
+    // Any tool_call or permission request kills the supervisor immediately.
+    writeFileSync(modeFile, 'tool_call')
+    await assert.rejects(complete('antigravity/gemini-4-neon', 'low'), /tool call/i)
+    writeFileSync(modeFile, 'permission')
+    await assert.rejects(complete('antigravity/gemini-4-neon', 'low'), /tool/i)
+
+    // Rate-limit detection across RPC error, swallowed chunk, and refusal; never leaks secrets.
+    for (const rlMode of ['rpc_rate_limit', 'chunk_rate_limit', 'refusal_rate_limit']) {
+      writeFileSync(modeFile, rlMode)
+      await assert.rejects(complete('antigravity/gemini-4-neon', 'low'), (err: Error) => {
+        assert.match(err.message, /rate limit/i)
+        assert.doesNotMatch(err.message, /secret-oauth-token-leak/)
+        return true
+      })
+    }
+
+    // Bounded timeout kills hanging child and cleans up ephemeral runDir.
+    writeFileSync(modeFile, 'hang')
+    const beforeHang = eventsLog().length
+    await assert.rejects(
+      supervisorText({ kind: 'antigravity', bin: binary, harnessPath: harnessBin, authMethod: 'oauth-personal', tokenPath: validToken, id: 'gemini-4-neon', variant: 'low' }, 'hi', { startupMs: 5000, requestMs: 500 }),
+      /timed out/i,
+    )
+    const hangInit = eventsLog().slice(beforeHang).find((e) => e.event === 'initialize')!
+    assert.equal(existsSync(String(hangInit.tmpdir)), false, 'ephemeral runDir must be removed after timeout')
+    assert.throws(() => process.kill(Number(hangInit.pid), 0), 'hanging child process must be killed')
+
+    // No tool-bearing T3 thread was ever launched.
+    assert.ok(calls.slice(startCalls).every((c) => c.name === 'orchestrator_capabilities'))
+  } finally {
+    supervisorProviders = undefined
+    writeFileSync(config, original)
+    H.refreshT3()
   }
 })
 

@@ -121,3 +121,11 @@ test('clicks require a unique contiguous label in the page area of the current s
   assert.throws(() => clickPoint([...screen, ...screen], 'Next page'), /more than once/)
   assert.throws(() => clickPoint(screen, 'elsewhere'), /couldn’t find/)
 })
+
+test('supervisor rate-limit errors surface cleanly without running browser actions', async () => {
+  const { chat, admin, actions } = fixture(async () => { throw new Error('The T3 Antigravity supervisor reached its rate limit.') })
+  chat.send(admin, crypto.randomUUID(), 'Open https://example.com')
+  const reply = await finish(chat, admin)
+  assert.match(reply ?? '', /usage limit/i)
+  assert.deepEqual(actions, [])
+})
