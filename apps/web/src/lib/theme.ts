@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 export type ThemePref = 'light' | 'dark' | 'system'
+export type ResolvedTheme = 'light' | 'dark'
 const KEY = 'devdash-theme'
 const dark = matchMedia('(prefers-color-scheme: dark)')
 const listeners = new Set<() => void>()
@@ -14,9 +15,13 @@ export function getTheme(): ThemePref {
   }
 }
 
-function apply() {
+export function getResolvedTheme(): ResolvedTheme {
   const t = getTheme()
-  const on = t === 'dark' || (t === 'system' && dark.matches)
+  return t === 'dark' || (t === 'system' && dark.matches) ? 'dark' : 'light'
+}
+
+function apply() {
+  const on = getResolvedTheme() === 'dark'
   document.documentElement.classList.toggle('dark', on)
   document.querySelector('meta[name=theme-color]')?.setAttribute('content', on ? '#0A0A0A' : '#FFFFFF')
 }
@@ -32,8 +37,12 @@ export function setTheme(t: ThemePref) {
   for (const fn of listeners) fn()
 }
 
-dark.addEventListener('change', apply)
+dark.addEventListener('change', () => {
+  apply()
+  for (const fn of listeners) fn()
+})
 apply()
 
-export const useTheme = () =>
-  useSyncExternalStore((fn) => (listeners.add(fn), () => void listeners.delete(fn)), getTheme)
+const subscribe = (fn: () => void) => (listeners.add(fn), () => void listeners.delete(fn))
+export const useTheme = () => useSyncExternalStore(subscribe, getTheme)
+export const useResolvedTheme = () => useSyncExternalStore(subscribe, getResolvedTheme)
