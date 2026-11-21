@@ -55,13 +55,15 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
   const activeLabel = active
     ? `${HARNESS[harnessOf({ harness: active.harness })].label}${active.model && !isDefaultModel(active.model) ? ` · ${active.model}` : ''}${active.effort ? ` (${effortLabel(active.effort)})` : ''}`
     : null
+  const submit = () => {
+    if (draft.trim() && !send.isPending && !state.data?.busy && !state.error) send.mutate()
+  }
   return (
-    <aside aria-label="Browser chat" className="flex min-h-0 flex-1 flex-col gap-3 rounded-2xl border bg-background p-3 md:max-w-sm md:p-4">
-      <div className="flex items-start justify-between gap-2">
+    <aside aria-label="Browser chat" className="flex min-h-0 flex-1 flex-col gap-2 rounded-2xl border bg-background px-3 py-2 md:max-w-sm md:p-3">
+      <div className="flex items-center justify-between gap-2 border-b pb-2">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold">Browser chat</h2>
-          {activeLabel && <p className="mt-0.5 truncate text-xs text-muted-foreground">{activeLabel}</p>}
-          <p className="mt-1 text-xs text-muted-foreground">Can open sites, click, type, press keys, and scroll. Actions are visible to everyone watching.</p>
+          <h2 className="text-sm leading-tight font-semibold">Browser chat</h2>
+          {activeLabel && <p className="truncate text-[11px] leading-tight text-muted-foreground">{activeLabel}</p>}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <Button size="icon-sm" variant="ghost" aria-label="Clear browser chat" title="Clear browser chat"
@@ -73,30 +75,36 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
           <Button size="icon-sm" variant="ghost" aria-label="Close browser chat" onClick={onClose}><X /></Button>
         </div>
       </div>
-      <div role="log" aria-label="Conversation" aria-live="polite" className="min-h-0 flex-1 space-y-3 overflow-y-auto text-sm">
+      <div role="log" aria-label="Conversation" aria-live="polite" className="min-h-0 flex-1 space-y-2.5 overflow-y-auto text-sm">
         {state.isPending && <Spinner />}
         <ErrorAlert error={state.error} />
+        {!state.isPending && !state.error && !turns?.length && (
+          <p className="py-2 text-xs text-muted-foreground">Ask about the page or tell the agent to open sites, click, type, press keys, or scroll. Actions are visible to everyone watching.</p>
+        )}
         {!state.error && turns?.map((turn) => (
-          <div key={turn.id} className="flex flex-col gap-2">
-            <p className="ml-6 self-end whitespace-pre-wrap break-words rounded-xl bg-surface px-3 py-2">{turn.message}</p>
+          <div key={turn.id} className="flex flex-col gap-1.5">
+            <p className="ml-6 self-end whitespace-pre-wrap break-words rounded-xl bg-surface px-3 py-1.5">{turn.message}</p>
             <p className="mr-4 whitespace-pre-wrap break-words">{turn.reply ?? state.data?.status ?? 'Working…'}</p>
           </div>
         ))}
         <div ref={bottom} />
       </div>
-      <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (draft.trim() && !send.isPending && !state.data?.busy && !state.error) send.mutate() }}>
+      <form className="flex flex-col gap-1.5" onSubmit={(e) => { e.preventDefault(); submit() }}>
         <ErrorAlert error={send.error ?? clear.error ?? stop.error} />
-        <Textarea aria-label="Message the browser assistant" placeholder="Open a site, search, click, type, or ask about the page…" maxLength={3000} rows={2}
-          className="max-h-28 min-h-14" value={draft} disabled={send.isPending} onChange={(e) => { setDraft(e.target.value); requestId.current = crypto.randomUUID() }} />
-        <div className="flex items-center justify-end gap-2">
-          {state.data?.canStop && (
-            <Button size="sm" type="button" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
-              <Square className="size-3" />Stop
+        <div className="flex items-end gap-1.5">
+          <Textarea aria-label="Message the browser assistant" placeholder="Message browser agent…" maxLength={3000} rows={1}
+            className="max-h-24 min-h-10 flex-1 py-2" value={draft} disabled={send.isPending}
+            onChange={(e) => { setDraft(e.target.value); requestId.current = crypto.randomUUID() }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit() } }} />
+          {state.data?.canStop ? (
+            <Button size="icon" type="button" variant="outline" className="size-10 shrink-0" aria-label="Stop" title="Stop" disabled={stop.isPending} onClick={() => stop.mutate()}>
+              <Square className="size-3.5" />
+            </Button>
+          ) : (
+            <Button size="icon" type="submit" className="size-10 shrink-0" aria-label="Send" title="Send" disabled={!draft.trim() || !state.data || !!state.error || send.isPending || state.data.busy}>
+              {send.isPending || state.data?.busy ? <Spinner /> : <Send />}
             </Button>
           )}
-          <Button size="sm" type="submit" disabled={!draft.trim() || !state.data || !!state.error || send.isPending || state.data.busy}>
-            {send.isPending || state.data?.busy ? <Spinner /> : <Send />}Send
-          </Button>
         </div>
       </form>
     </aside>
