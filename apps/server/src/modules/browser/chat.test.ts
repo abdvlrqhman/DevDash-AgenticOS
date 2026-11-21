@@ -6,10 +6,10 @@ import { AppError } from '../../core/http.ts'
 import type { User } from '../auth/repo.ts'
 import { authMiddleware } from '../auth/routes.ts'
 import type { AuthService } from '../auth/service.ts'
-import { browserChat, type BrowserChatModel } from './chat.ts'
+import { browserChat, type BrowserAction, type BrowserChatModel } from './chat.ts'
 import { browserRoutes } from './routes.ts'
 import type { BrowserService } from './service.ts'
-import { clickPoint, screenLines } from './screen.ts'
+import { clickPoint, screenLines, screenSnapshot, type Screen } from './screen.ts'
 
 const DEFAULT_T3_MODELS = [
   { value: 'opencode/gpt-5.4', supportsSupervisor: true, supportedEffortLevels: ['low', 'medium', 'high'] },
@@ -17,9 +17,15 @@ const DEFAULT_T3_MODELS = [
   { value: 'codex/gpt-5.4', supportsSupervisor: false, supportedEffortLevels: ['medium', 'high'] },
 ]
 
+const DEFAULT_SCREEN: Screen = [
+  [{ text: 'Private tab title', x: 100, y: 20, w: 120, h: 20 }],
+  [{ text: 'Documentation', x: 100, y: 160, w: 120, h: 20 }],
+]
+
 function fixture(
-  choose = async () => '{"kind":"read"}',
+  respond: (prompt: string, stepIndex: number) => Promise<string> = async () => '{"kind":"done","reply":"The page shows Documentation."}',
   t3Catalog: Parameters<typeof browserChat>[3] = async () => ({ models: DEFAULT_T3_MODELS }),
+  screenFn?: (actions: BrowserAction[]) => Screen,
 ) {
   const db = openDb(':memory:')
   const users = ['admin', 'member', 'member'].map((role, i) => {
@@ -30,16 +36,14 @@ function fixture(
   })
   const [admin, member, other] = users as [User, User, User]
   const calls: { username: string; prompt: string; model: BrowserChatModel }[] = []
-  const actions: unknown[] = []
+  const actions: BrowserAction[] = []
+  let callIndex = 0
   const chat = browserChat(db, {
     act: async (a) => { actions.push(a) },
-    screen: async () => [
-      [{ text: 'Private tab title', x: 100, y: 20, w: 120, h: 20 }],
-      [{ text: 'Documentation', x: 100, y: 160, w: 120, h: 20 }],
-    ],
-  }, async (owner, system, prompt, model) => {
+    screen: async () => (screenFn ? screenFn(actions) : DEFAULT_SCREEN),
+  }, async (owner, _system, prompt, model) => {
     calls.push({ username: owner.username, prompt, model })
-    return system.startsWith('Choose') ? choose() : 'The page shows Documentation.'
+    return respond(prompt, callIndex++)
   }, t3Catalog)
   const mw = authMiddleware({ sessionUser: (token?: string) => {
     const user = users.find((u) => u.username === token)
@@ -67,6 +71,7 @@ test('only admins grant access, watch links cannot chat, and granted members sha
     assert.equal((await request('/chat', user, 'POST', turn)).status, status)
     assert.equal((await request('/chat', user)).status, status)
     assert.equal((await request('/chat', user, 'DELETE')).status, status)
+    assert.equal((await request('/chat/cancel', user, 'POST')).status, status)
     assert.equal((await request('/chat/access', user)).status, status)
     assert.equal((await request('/chat/access/2', user, 'PUT', { allowed: true })).status, status)
     assert.equal((await request('/chat/settings', user)).status, status)
@@ -78,11 +83,11 @@ test('only admins grant access, watch links cannot chat, and granted members sha
   await finish(chat, member)
   assert.equal((await request('/chat', member, 'POST', turn)).status, 202)
   assert.deepEqual(actions, [])
-  assert.deepEqual(calls.map((c) => c.username), [admin.username, admin.username])
+  assert.deepEqual(calls.map((c) => c.username), [admin.username])
   assert.deepEqual(calls[0]!.model, { harness: 'claude', profile: 'default', model: 'sonnet', effort: null })
-  assert.equal(calls[0]!.prompt, turn.message)
-  assert.match(calls[1]!.prompt, /Documentation/)
-  assert.doesNotMatch(calls[1]!.prompt, /Private tab title/)
+  assert.match(calls[0]!.prompt, /What is on screen\?/)
+  assert.match(calls[0]!.prompt, /Documentation/)
+  assert.doesNotMatch(calls[0]!.prompt, /Private tab title/)
   assert.deepEqual(chat.state(admin).turns, [])
   assert.equal(chat.state(member).turns.length, 1)
   assert.throws(() => chat.state(other), /grant/)
@@ -92,14 +97,12 @@ test('only admins grant access, watch links cannot chat, and granted members sha
 
 test('browser agent has its own per-admin settings independent of autopilot and enforces tool-free model validation', async () => {
   const { request, admin, member, chat, db, calls } = fixture()
-  // Seed an Autopilot row with a completely different supervisor model to prove full independence.
   db.prepare("insert into autopilot(user_id, sv_harness, sv_profile, sv_model, sv_effort) values (?, 'opencode', 'work', 'custom-ap', null)")
     .run(admin.id)
 
   const initial = await (await request('/chat/settings', admin)).json()
   assert.deepEqual(initial, { model: { harness: 'claude', profile: 'default', model: 'sonnet', effort: null } })
 
-  // Save a verified T3 Code Antigravity model with thinking level.
   const t3Res = await request('/chat/settings', admin, 'PUT', {
     harness: 't3code',
     profile: 'default',
@@ -111,11 +114,9 @@ test('browser agent has its own per-admin settings independent of autopilot and 
     model: { harness: 't3code', profile: 'default', model: 'antigravity/gemini-4-neon', effort: 'low' },
   })
 
-  // Autopilot settings must remain untouched.
   const apRow = db.prepare('select sv_harness, sv_profile, sv_model from autopilot where user_id = ?').get(admin.id) as Record<string, string>
   assert.deepEqual({ ...apRow }, { sv_harness: 'opencode', sv_profile: 'work', sv_model: 'custom-ap' })
 
-  // Granted member sees active model summary (without profile) and uses the admin's dedicated Browser agent model.
   assert.equal((await request('/chat/access/2', admin, 'PUT', { allowed: true })).status, 200)
   const memberState = await (await request('/chat', member)).json() as { model: Record<string, unknown> }
   assert.deepEqual(memberState.model, { harness: 't3code', model: 'antigravity/gemini-4-neon', effort: 'low' })
@@ -125,10 +126,8 @@ test('browser agent has its own per-admin settings independent of autopilot and 
   await finish(chat, member)
   assert.deepEqual(calls.map((c) => c.model), [
     { harness: 't3code', profile: 'default', model: 'antigravity/gemini-4-neon', effort: 'low' },
-    { harness: 't3code', profile: 'default', model: 'antigravity/gemini-4-neon', effort: 'low' },
   ])
 
-  // Invalid configurations must fail with 400 and leave the saved model intact.
   for (const bad of [
     { harness: 'unknown', model: 'x' },
     { harness: 'codex', model: 'gpt-5' },
@@ -143,12 +142,10 @@ test('browser agent has its own per-admin settings independent of autopilot and 
     assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(bad)}, got ${res.status}`)
   }
 
-  // Saved T3 Code model is still intact after all rejected writes.
   assert.deepEqual(await (await request('/chat/settings', admin)).json(), {
     model: { harness: 't3code', profile: 'default', model: 'antigravity/gemini-4-neon', effort: 'low' },
   })
 
-  // Switching to OpenCode clears effort automatically and persists cleanly.
   const ocRes = await request('/chat/settings', admin, 'PUT', { harness: 'opencode', profile: 'work', model: 'openai/gpt-5' })
   assert.equal(ocRes.status, 200)
   assert.deepEqual(await ocRes.json(), {
@@ -162,12 +159,65 @@ test('concurrent browser agent update during T3 model verification returns 409',
   const pending = request('/chat/settings', admin, 'PUT', {
     harness: 't3code', profile: 'default', model: 'opencode/gpt-5.4', effort: 'medium',
   })
-  // Update to another agent while the T3 catalog check is in flight.
   const fast = await request('/chat/settings', admin, 'PUT', { harness: 'opencode', profile: 'default', model: '' })
   assert.equal(fast.status, 200)
   gate.resolve({ models: DEFAULT_T3_MODELS })
   const slow = await pending
   assert.equal(slow.status, 409)
+})
+
+test('multi-step browser control opens sites by name, clicks, types with submit, and presses keys', async () => {
+  const { chat, admin, actions } = fixture(
+    async (_prompt, step) => {
+      if (step === 0) return JSON.stringify({ kind: 'open', url: 'https://www.youtube.com' })
+      if (step === 1) return JSON.stringify({ kind: 'type', x: 568, y: 140, text: 'lofi beats', submit: true })
+      if (step === 2) return JSON.stringify({ kind: 'click', x: 340, y: 420, label: 'Lofi Hip Hop Radio' })
+      return JSON.stringify({ kind: 'done', reply: 'Opened YouTube, searched for lofi beats, and started Lofi Hip Hop Radio.' })
+    },
+    undefined,
+    (taken) => {
+      if (taken.length === 0) return DEFAULT_SCREEN
+      if (taken.length === 1) return [[{ text: 'Search', x: 520, y: 130, w: 96, h: 20 }]]
+      if (taken.length <= 4) return [[{ text: 'Lofi', x: 300, y: 410, w: 30, h: 20 }, { text: 'Hip', x: 335, y: 410, w: 25, h: 20 }, { text: 'Hop', x: 365, y: 410, w: 30, h: 20 }]]
+      return [[{ text: 'Now playing', x: 200, y: 650, w: 120, h: 20 }]]
+    },
+  )
+
+  chat.send(admin, crypto.randomUUID(), 'Open yt and play lofi beats')
+  const reply = await finish(chat, admin)
+  assert.match(reply ?? '', /Lofi Hip Hop Radio/)
+  assert.deepEqual(actions, [
+    { kind: 'open', url: 'https://www.youtube.com/' },
+    { kind: 'click', x: 568, y: 140 },
+    { kind: 'type', text: 'lofi beats' },
+    { kind: 'press', key: 'Enter' },
+    { kind: 'click', x: 340, y: 420 },
+  ])
+})
+
+test('blocks dangerous URLs, non-requested private/loopback URLs, and clicks on browser chrome (y < 100)', async () => {
+  for (const [message, plan, expectedAction] of [
+    ['Open https://example.com', { kind: 'open', url: 'https://example.com' }, { kind: 'open', url: 'https://example.com/' }],
+    ['Open yt', { kind: 'open', url: 'https://www.youtube.com' }, { kind: 'open', url: 'https://www.youtube.com/' }],
+    ['Open file:///etc/passwd', { kind: 'open', url: 'file:///etc/passwd' }, null],
+    ['Open secret', { kind: 'open', url: 'https://user:pass@example.com' }, null],
+    ['Open metadata', { kind: 'open', url: 'http://169.254.169.254/latest/meta-data/' }, null],
+    ['Open local', { kind: 'open', url: 'http://127.0.0.1:8787/' }, null],
+    ['Open http://localhost:3000/', { kind: 'open', url: 'http://localhost:3000/' }, { kind: 'open', url: 'http://localhost:3000/' }],
+    ['Click tab bar', { kind: 'click', x: 100, y: 20 }, null],
+    ['Click Documentation', { kind: 'click', label: 'Documentation' }, { kind: 'click', x: 160, y: 170 }],
+    ['Go back', { kind: 'press', key: 'Back' }, { kind: 'press', key: 'Back' }],
+    ['Scroll down', { kind: 'scroll', direction: 'down' }, { kind: 'scroll', direction: 'down' }],
+  ] as const) {
+    const { chat, admin, actions } = fixture(
+      async (_p, step) => step === 0 ? JSON.stringify(plan) : JSON.stringify({ kind: 'done', reply: 'Done.' }),
+      undefined,
+      (taken) => taken.length === 0 ? DEFAULT_SCREEN : [[{ text: 'Updated page', x: 100, y: 200, w: 120, h: 20 }]],
+    )
+    chat.send(admin, crypto.randomUUID(), message)
+    await finish(chat, admin)
+    assert.deepEqual(actions, expectedAction ? [expectedAction] : [], `case: ${message}`)
+  }
 })
 
 test('revoking and regranting during a model request cancels the outstanding action, and concurrent sends serialize', async () => {
@@ -183,6 +233,17 @@ test('revoking and regranting during a model request cancels the outstanding act
   assert.deepEqual(actions, [])
 })
 
+test('stopping an in-flight turn via /chat/cancel aborts cleanly without taking further actions', async () => {
+  const gate = Promise.withResolvers<string>()
+  const { admin, chat, actions, request } = fixture(() => gate.promise)
+  chat.send(admin, crypto.randomUUID(), 'Open yt')
+  assert.equal(chat.state(admin).canStop, true)
+  assert.equal((await request('/chat/cancel', admin, 'POST')).status, 200)
+  gate.resolve('{"kind":"open","url":"https://www.youtube.com"}')
+  assert.match((await finish(chat, admin))!, /Stopped/)
+  assert.deepEqual(actions, [])
+})
+
 test('a disabled granting admin immediately loses the ability to sponsor a member', () => {
   const { admin, member, chat, db } = fixture()
   chat.setAccess(admin, member.id, true)
@@ -191,28 +252,14 @@ test('a disabled granting admin immediately loses the ability to sponsor a membe
   assert.equal(chat.allowed(member.id), false)
 })
 
-test('model output can only click the named label or open a literal HTTP(S) address from the current request', async () => {
-  for (const [message, plan, action] of [
-    ['Click Documentation', { kind: 'click', label: 'Documentation' }, { kind: 'click', x: 160, y: 170 }],
-    ['Open https://example.com', { kind: 'open', url: 'https://example.com' }, { kind: 'open', url: 'https://example.com/' }],
-    ['Read this page', { kind: 'open', url: 'https://example.com' }, null],
-    ['Open file:///etc/passwd', { kind: 'open', url: 'file:///etc/passwd' }, null],
-    ['What is here?', { kind: 'click', label: 'Documentation' }, null],
-    ['Scroll down', { kind: 'scroll', direction: 'down' }, { kind: 'scroll', direction: 'down' }],
-  ] as const) {
-    const { chat, admin, actions } = fixture(async () => JSON.stringify(plan))
-    chat.send(admin, crypto.randomUUID(), message)
-    await finish(chat, admin)
-    assert.deepEqual(actions, action ? [action] : [])
-  }
-})
-
-test('clicks require a unique contiguous label in the page area of the current screenshot', () => {
+test('clicks require a unique contiguous label and screenSnapshot excludes browser chrome', () => {
   const word = (n: number, x: number, y: number, text: string) => ['5', '1', '1', '1', y, n, x, y, '25', '12', '85', text].join('\t')
   const screen = screenLines([word(1, 10, 20, 'Next'), word(1, 10, 150, 'Next'), word(2, 40, 150, 'page')].join('\n'))
   assert.deepEqual(clickPoint(screen, 'next page'), { x: 38, y: 156 })
   assert.throws(() => clickPoint([...screen, ...screen], 'Next page'), /more than once/)
   assert.throws(() => clickPoint(screen, 'elsewhere'), /couldn’t find/)
+  const snap = screenSnapshot(screen)
+  assert.equal(snap, '(38,156) Next page')
 })
 
 test('supervisor rate-limit errors surface cleanly without running browser actions', async () => {
@@ -228,7 +275,7 @@ test('supervisor rate-limit errors surface cleanly without running browser actio
 test('clearing browser chat only removes the caller’s own history and rejects while their turn is in flight', async () => {
   const gate = Promise.withResolvers<string>()
   let hold = false
-  const { request, admin, member, chat } = fixture(() => hold ? gate.promise : Promise.resolve('{"kind":"read"}'))
+  const { request, admin, member, chat } = fixture(() => hold ? gate.promise : Promise.resolve('{"kind":"done","reply":"OK."}'))
   assert.equal((await request('/chat/access/2', admin, 'PUT', { allowed: true })).status, 200)
 
   assert.equal((await request('/chat', admin, 'POST', { requestId: crypto.randomUUID(), message: 'Admin turn' })).status, 202)
@@ -238,17 +285,15 @@ test('clearing browser chat only removes the caller’s own history and rejects 
   assert.equal(chat.state(admin).turns.length, 1)
   assert.equal(chat.state(member).turns.length, 1)
 
-  // Member clearing only clears member's own turns; admin's history stays intact.
   assert.equal((await request('/chat', member, 'DELETE')).status, 200)
   assert.equal(chat.state(member).turns.length, 0)
   assert.equal(chat.state(admin).turns.length, 1)
 
-  // While admin has an active turn, admin cannot clear (409), while member still can.
   hold = true
   assert.equal((await request('/chat', admin, 'POST', { requestId: crypto.randomUUID(), message: 'In flight' })).status, 202)
   assert.equal((await request('/chat', admin, 'DELETE')).status, 409)
   assert.equal((await request('/chat', member, 'DELETE')).status, 200)
-  gate.resolve('{"kind":"read"}')
+  gate.resolve('{"kind":"done","reply":"OK."}')
   await finish(chat, admin)
   assert.equal((await request('/chat', admin, 'DELETE')).status, 200)
   assert.equal(chat.state(admin).turns.length, 0)

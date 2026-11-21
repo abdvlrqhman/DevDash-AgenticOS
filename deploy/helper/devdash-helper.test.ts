@@ -183,8 +183,12 @@ test('browser actions run as neko with fixed operations and validated arguments'
   assert.deepEqual(invoke({ kind: 'scroll', direction: 'down' }).planned, ['docker exec --user neko devdash-browser xdotool mousemove 400 300 click --repeat 5 5'])
   assert.deepEqual(invoke({ kind: 'click', x: 200, y: 300 }).planned, ['docker exec --user neko devdash-browser xdotool mousemove 200 300 click 1'])
   assert.equal(invoke({ kind: 'open', url: 'https://example.com/' }).ok, true)
+  assert.deepEqual(invoke({ kind: 'type', text: 'lofi beats' }).planned, ['docker exec --user neko devdash-browser xdotool type --clearmodifiers --delay 20 -- lofi beats'])
+  assert.deepEqual(invoke({ kind: 'press', key: 'Enter' }).planned, ['docker exec --user neko devdash-browser xdotool key --clearmodifiers Return'])
+  assert.deepEqual(invoke({ kind: 'press', key: 'Back' }).planned, ['docker exec --user neko devdash-browser xdotool key --clearmodifiers Alt+Left'])
   for (const args of [{ kind: 'key' }, { kind: 'click', x: 0, y: 10 }, { kind: 'scroll', direction: 'keyup' },
-    { kind: 'open', url: 'file:///tmp' }, { kind: 'open', url: 'https://user:password@example.test' }]) {
+    { kind: 'open', url: 'file:///tmp' }, { kind: 'open', url: 'https://user:password@example.test' },
+    { kind: 'type', text: '' }, { kind: 'type', text: 'a\nb' }, { kind: 'press', key: 'Alt+F4' }, { kind: 'press', key: 'toString' }]) {
     assert.equal(invoke(args).ok, false)
   }
 })

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Eraser, Send, SlidersHorizontal, X } from 'lucide-react'
+import { Eraser, Send, SlidersHorizontal, Square, X } from 'lucide-react'
 import { confirmAction } from '@/components/app/confirm'
 import { NativeSelect } from '@/components/app/native-select'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
@@ -42,6 +42,12 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
       await qc.invalidateQueries({ queryKey: key })
     },
   })
+  const stop = useMutation({
+    mutationFn: () => unwrap(chat.cancel.$post()),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: key })
+    },
+  })
   const turns = state.data?.turns
   const last = turns?.at(-1)
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'nearest' }) }, [last?.id, last?.reply])
@@ -55,7 +61,7 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
         <div className="min-w-0">
           <h2 className="text-sm font-semibold">Browser chat</h2>
           {activeLabel && <p className="mt-0.5 truncate text-xs text-muted-foreground">{activeLabel}</p>}
-          <p className="mt-1 text-xs text-muted-foreground">The model reads visible text. Browser actions are visible to everyone watching.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Can open sites, click, type, press keys, and scroll. Actions are visible to everyone watching.</p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <Button size="icon-sm" variant="ghost" aria-label="Clear browser chat" title="Clear browser chat"
@@ -73,18 +79,25 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
         {!state.error && turns?.map((turn) => (
           <div key={turn.id} className="flex flex-col gap-2">
             <p className="ml-6 self-end whitespace-pre-wrap break-words rounded-xl bg-surface px-3 py-2">{turn.message}</p>
-            <p className="mr-4 whitespace-pre-wrap break-words">{turn.reply ?? 'Working…'}</p>
+            <p className="mr-4 whitespace-pre-wrap break-words">{turn.reply ?? state.data?.status ?? 'Working…'}</p>
           </div>
         ))}
         <div ref={bottom} />
       </div>
       <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (draft.trim() && !send.isPending && !state.data?.busy && !state.error) send.mutate() }}>
-        <ErrorAlert error={send.error ?? clear.error} />
-        <Textarea aria-label="Message the browser assistant" placeholder="Ask about the page, open a URL, click a label, or scroll…" maxLength={3000} rows={2}
+        <ErrorAlert error={send.error ?? clear.error ?? stop.error} />
+        <Textarea aria-label="Message the browser assistant" placeholder="Open a site, search, click, type, or ask about the page…" maxLength={3000} rows={2}
           className="max-h-28 min-h-14" value={draft} disabled={send.isPending} onChange={(e) => { setDraft(e.target.value); requestId.current = crypto.randomUUID() }} />
-        <Button size="sm" type="submit" className="self-end" disabled={!draft.trim() || !state.data || !!state.error || send.isPending || state.data.busy}>
-          {send.isPending || state.data?.busy ? <Spinner /> : <Send />}Send
-        </Button>
+        <div className="flex items-center justify-end gap-2">
+          {state.data?.canStop && (
+            <Button size="sm" type="button" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate()}>
+              <Square className="size-3" />Stop
+            </Button>
+          )}
+          <Button size="sm" type="submit" disabled={!draft.trim() || !state.data || !!state.error || send.isPending || state.data.busy}>
+            {send.isPending || state.data?.busy ? <Spinner /> : <Send />}Send
+          </Button>
+        </div>
       </form>
     </aside>
   )

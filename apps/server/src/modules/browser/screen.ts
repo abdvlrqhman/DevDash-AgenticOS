@@ -49,3 +49,23 @@ export function clickPoint(screen: Screen, label: string) {
     : 'I couldn’t find that label on the current page. Use the text visible on the screen.')
   return matches[0]!
 }
+
+/** Visible page lines (y >= 100, excluding browser chrome) with clickable center coordinates. */
+export function screenSnapshot(screen: Screen): string {
+  const rows: { x: number; y: number; text: string }[] = []
+  for (const words of screen) {
+    const visible = words.filter((w) => w.y >= 100)
+    if (!visible.length) continue
+    const first = visible[0]!
+    const last = visible.at(-1)!
+    const top = Math.min(...visible.map((w) => w.y))
+    const bottom = Math.max(...visible.map((w) => w.y + w.h))
+    rows.push({
+      x: Math.round((first.x + last.x + last.w) / 2),
+      y: Math.round((top + bottom) / 2),
+      text: visible.map((w) => w.text).join(' '),
+    })
+  }
+  rows.sort((a, b) => Math.round(a.y / 16) - Math.round(b.y / 16) || a.x - b.x)
+  return rows.slice(0, 150).map((r) => `(${r.x},${r.y}) ${r.text}`).join('\n').slice(0, 10_000)
+}

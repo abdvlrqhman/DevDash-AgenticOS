@@ -103,7 +103,7 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
       lastSeen = Date.now()
       return readScreen(Buffer.from(await r.arrayBuffer()))
     },
-    async act(action: { kind: 'open'; url: string } | { kind: 'click'; x: number; y: number } | { kind: 'scroll'; direction: 'up' | 'down' }) {
+    async act(action: { kind: 'open'; url: string } | { kind: 'click'; x: number; y: number } | { kind: 'scroll'; direction: 'up' | 'down' } | { kind: 'type'; text: string } | { kind: 'press'; key: string }) {
       lastSeen = Date.now()
       await helper('browser-action', action)
     },

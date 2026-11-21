@@ -24,6 +24,10 @@ export function browserRoutes(browser: BrowserService, chat: BrowserChat, mw: Re
       chat.clear(c.get('user'))
       return c.json({ ok: true })
     })
+    .post('/chat/cancel', (c) => {
+      chat.stop(c.get('user'))
+      return c.json({ ok: true })
+    })
     .post('/chat', json(z.object({ requestId: z.uuid(), message: z.string().trim().min(1).max(3000) })), async (c) => {
       const user = c.get('user')
       if (!chat.allowed(user.id)) throw new AppError(403, 'browser_chat_denied', 'An admin must grant you Browser chat access.')
