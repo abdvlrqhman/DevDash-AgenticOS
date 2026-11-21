@@ -133,6 +133,14 @@ export function browserChat(db: Db, browser: Port, complete: Complete, t3Catalog
   }
   db.prepare("update browser_chat_turns set reply = 'The server restarted during this turn. Check the shared browser before repeating an action.' where reply is null").run()
   let active: ActiveTurn | undefined
+  const warmedAt = new Map<number, number>()
+  const maybeWarm = (admin: User, m: BrowserChatModel) => {
+    if (!t3Catalog || m.harness !== 't3code' || !m.model || active) return
+    const now = Date.now()
+    if (now - (warmedAt.get(admin.id) ?? 0) < 3 * 60_000) return
+    warmedAt.set(admin.id, now)
+    void t3Catalog(admin, m.profile, m.model).catch(() => { warmedAt.delete(admin.id) })
+  }
   const owner = (id: number) => q.admin.get(id) as User | undefined
   const history = (id: number) => (q.history.all(id) as Turn[]).reverse()
   const deny = () => new AppError(403, 'browser_chat_denied', 'An admin must grant you Browser chat access.')
@@ -311,6 +319,7 @@ export function browserChat(db: Db, browser: Port, complete: Complete, t3Catalog
       const admin = owner(user.id)
       if (!admin) throw deny()
       const m = modelOf(admin.id)
+      maybeWarm(admin, m)
       const isMine = active?.userId === user.id
       const isAdmin = admin.id === user.id
       return {

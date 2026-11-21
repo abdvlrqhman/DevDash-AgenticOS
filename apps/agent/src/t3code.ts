@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { assertRegularMemberUid } from './t3-local.ts'
 import {
   assertMemberOwnedRegularFile,
+  disposeSupervisorWorkers,
   supervisorModels,
   validateAntigravitySettingsFile,
   type SupervisorProvider,
@@ -175,11 +176,21 @@ async function expandShortlists(client: T3Client, caps: Capabilities) {
 const catalogCache = new Map<string, { at: number; models: ReturnType<typeof supervisorModels> }>()
 function nativeCatalog(provider: SupervisorProvider) {
   const hit = catalogCache.get(provider.key)
-  if (hit && Date.now() - hit.at < 60_000) return hit.models
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.models
   const models = supervisorModels(provider)
   catalogCache.set(provider.key, { at: Date.now(), models })
   void models.catch(() => { if (catalogCache.get(provider.key)?.models === models) catalogCache.delete(provider.key) })
   return models
+}
+let capsCache: { key: string; at: number; capabilities: Capabilities } | undefined
+async function cachedSupervisorCapabilities(): Promise<Capabilities> {
+  let key = String(generation)
+  try { key = `${generation}:${configPath()}:${statSync(configPath()).mtimeMs}` } catch { /* ignore */ }
+  if (capsCache && capsCache.key === key && Date.now() - capsCache.at < 60_000) return capsCache.capabilities
+  const started = generation
+  const { capabilities } = await inspect(5000)
+  if (generation === started) capsCache = { key, at: Date.now(), capabilities }
+  return capabilities
 }
 
 export async function nativeVariants(caps: Capabilities, instance: string, id: string) {
@@ -191,7 +202,7 @@ export async function nativeVariants(caps: Capabilities, instance: string, id: s
 
 export async function supervisorTarget(value: string, effort?: string): Promise<SupervisorTarget> {
   const { instanceId, model } = selection(value)
-  const { capabilities } = await inspect(5000)
+  const capabilities = await cachedSupervisorCapabilities()
   const provider = supervisorProviders(capabilities.providers).get(instanceId)
   if (!provider) throw new Error('Choose an available T3 Code supervisor model.')
   if (provider.kind === 'opencode') {
@@ -241,7 +252,7 @@ export async function modelChoices(search?: string, supervisor = false) {
 let cached: { key: string; at: number; value: Awaited<ReturnType<typeof probeInfo>> } | undefined
 let probing: { key: string; value: Promise<Awaited<ReturnType<typeof probeInfo>>> } | undefined
 let generation = 0
-export const invalidateInfo = () => { generation++; catalogCache.clear(); cached = undefined; probing = undefined }
+export const invalidateInfo = () => { generation++; catalogCache.clear(); capsCache = undefined; cached = undefined; probing = undefined; void disposeSupervisorWorkers() }
 async function probeInfo() {
   try {
     const { version, capabilities } = await inspect(1500)

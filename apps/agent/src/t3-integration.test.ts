@@ -476,22 +476,27 @@ rl.on('line', (line) => {
     await assert.rejects(complete('antigravity/gemini-4-neon', 'xhigh'), /thinking level/i)
     assert.equal(eventsLog().filter((e) => e.event === 'session/prompt').length, 0)
 
-    // Valid completion runs with strict isolation, hard zero-tool protocol, and full cleanup.
+    // Valid completions reuse the warm isolated ACP worker (no repeated initialize) while creating and deleting a fresh zero-tool session each call.
+    const sessionsBefore = eventsLog().filter((e) => e.event === 'session/new').length
     assert.equal(await complete('antigravity/gemini-4-neon', 'low'), 'agy-decision')
+    assert.equal(await complete('antigravity/gemini-4-neon', 'low'), 'agy-decision')
+    assert.equal(eventsLog().filter((e) => e.event === 'initialize').length, 1, 'warm worker avoids repeated ACP cold starts')
+    assert.equal(eventsLog().filter((e) => e.event === 'session/new').length, sessionsBefore + 2, 'each completion uses a fresh ephemeral session')
+    assert.ok(eventsLog().filter((e) => e.event === 'session/delete').length >= sessionsBefore + 2)
     const initEvent = eventsLog().filter((e) => e.event === 'initialize').at(-1)!
     assert.deepEqual((initEvent.params as { clientCapabilities: unknown }).clientCapabilities, { fs: { readTextFile: false, writeTextFile: false }, terminal: false })
     assert.notEqual(initEvent.home, home)
     assert.notEqual(initEvent.geminiHome, join(folder, 'userdata'))
     assert.equal(initEvent.harnessPath, harnessBin)
     assert.deepEqual(initEvent.acpFiles, ['acp_token.json', 'settings.json'])
-    assert.equal(existsSync(String(initEvent.tmpdir)), false, 'ephemeral runDir must be removed after completion')
     const sessionNew = eventsLog().filter((e) => e.event === 'session/new').at(-1)!
     assert.deepEqual(sessionNew.params, { cwd: initEvent.cwd, mcpServers: [], _meta: { antigravity: { enabledTools: [] } } })
-    assert.ok(eventsLog().some((e) => e.event === 'session/delete'))
 
-    // Any tool_call or permission request kills the supervisor immediately.
+    // Any tool_call or permission request kills the warm worker immediately and removes its ephemeral runDir.
     writeFileSync(modeFile, 'tool_call')
     await assert.rejects(complete('antigravity/gemini-4-neon', 'low'), /tool call/i)
+    assert.equal(existsSync(String(initEvent.tmpdir)), false, 'ephemeral runDir must be removed immediately after tool violation')
+    assert.throws(() => process.kill(Number(initEvent.pid), 0), 'violating worker process must be killed')
     writeFileSync(modeFile, 'permission')
     await assert.rejects(complete('antigravity/gemini-4-neon', 'low'), /tool/i)
 
@@ -507,14 +512,21 @@ rl.on('line', (line) => {
 
     // Bounded timeout kills hanging child and cleans up ephemeral runDir.
     writeFileSync(modeFile, 'hang')
-    const beforeHang = eventsLog().length
     await assert.rejects(
       supervisorText({ kind: 'antigravity', bin: binary, harnessPath: harnessBin, authMethod: 'oauth-personal', tokenPath: validToken, id: 'gemini-4-neon', variant: 'low' }, 'hi', { startupMs: 5000, requestMs: 500 }),
       /timed out/i,
     )
-    const hangInit = eventsLog().slice(beforeHang).find((e) => e.event === 'initialize')!
+    const hangInit = eventsLog().filter((e) => e.event === 'initialize').at(-1)!
     assert.equal(existsSync(String(hangInit.tmpdir)), false, 'ephemeral runDir must be removed after timeout')
     assert.throws(() => process.kill(Number(hangInit.pid), 0), 'hanging child process must be killed')
+
+    // Disposing on refresh tears down any remaining warm worker and removes its ephemeral runDir.
+    writeFileSync(modeFile, 'ok')
+    assert.equal(await complete('antigravity/gemini-4-neon', 'low'), 'agy-decision')
+    const warmInit = eventsLog().filter((e) => e.event === 'initialize').at(-1)!
+    H.refreshT3()
+    for (let i = 0; i < 40 && existsSync(String(warmInit.tmpdir)); i++) await new Promise((r) => setTimeout(r, 50))
+    assert.equal(existsSync(String(warmInit.tmpdir)), false, 'refresh must dispose warm worker and remove its runDir')
 
     // No tool-bearing T3 thread was ever launched.
     assert.ok(calls.slice(startCalls).every((c) => c.name === 'orchestrator_capabilities'))
