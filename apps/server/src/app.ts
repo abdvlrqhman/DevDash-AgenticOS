@@ -154,8 +154,12 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const builds = buildsService({ db, agents, projects, shares })
   const vault = vaultService({ db })
   const browser = browserService({ db, runDir: config.runDir, dataDir: config.dataDir, masterKey: config.masterKey, origin: config.origin })
-  const chat = browserChat(db, browser, (admin, system, prompt) =>
-    claude.complete(admin.username, prompt, { system, ...autopilot.supervisorModel(admin.id) }))
+  const chat = browserChat(
+    db,
+    browser,
+    (admin, system, prompt, model) => claude.complete(admin.username, prompt, { system, ...model }),
+    (admin, profile, model) => claude.commands(admin, profile, 't3code', model, true),
+  )
   // "Ready to review": a role's approved code proposal, finished with commits, ships in one tap. Team detects it (it has
   // the proposal context) and calls reviews.record; the claude module never imports Team.
   reviews = reviewsService({ db, hub, agents, projects, notify: notifications.notify, onMerged: (d, commit) => team?.service?.noteDeliveryMerged(d.session_id, commit) })

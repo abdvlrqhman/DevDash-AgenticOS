@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { Db } from '../../core/db.ts'
 import { AppError, rateLimit } from '../../core/http.ts'
 import type { User } from '../auth/repo.ts'
+import { HARNESSES, agentCapabilities, harnessOf, type Harness } from '../claude/service.ts'
 import { clickPoint, type Screen } from './screen.ts'
 
 const Plan = z.discriminatedUnion('kind', [
@@ -13,8 +14,15 @@ const Plan = z.discriminatedUnion('kind', [
 ])
 type Action = Exclude<z.infer<typeof Plan>, { kind: 'read' | 'click' }> | { kind: 'click'; x: number; y: number }
 type Port = { screen(): Promise<Screen>; act(action: Action): Promise<void> }
-type Complete = (admin: User, system: string, prompt: string) => Promise<string>
+export type BrowserChatModel = { harness: Harness; profile: string; model: string; effort: string | null }
+export type BrowserChatModelPatch = { harness?: string; profile?: string; model?: string; effort?: string | null }
+type T3Catalog = (admin: User, profile: string, model: string) => Promise<{
+  models: { value: string; supportsSupervisor?: boolean; supportedEffortLevels?: string[] }[]
+}>
+type Complete = (admin: User, system: string, prompt: string, model: BrowserChatModel) => Promise<string>
 type Turn = { id: number; message: string; reply: string | null }
+
+const DEFAULT_MODEL: BrowserChatModel = { harness: 'claude', profile: 'default', model: 'sonnet', effort: null }
 
 const instruction = [
   'Choose one operation for the member’s latest request in the shared browser. Return only one JSON object.',
@@ -36,7 +44,7 @@ function pageText(screen: Screen) {
     .filter(Boolean).join('\n').slice(0, 12_000)
 }
 
-export function browserChat(db: Db, browser: Port, complete: Complete) {
+export function browserChat(db: Db, browser: Port, complete: Complete, t3Catalog?: T3Catalog) {
   const q = {
     admin: db.prepare(`select a.id, a.username, a.email, a.name, a.role from users u
       left join browser_chat_grants g on g.user_id = u.id
@@ -45,6 +53,11 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
     members: db.prepare(`select u.id, u.name, u.username, exists(select 1 from browser_chat_grants g join users a
       on a.id = g.admin_id where g.user_id = u.id and a.role = 'admin' and a.disabled_at is null) as allowed
       from users u where u.role = 'member' and u.disabled_at is null order by u.name, u.id`),
+    model: db.prepare('select harness, profile, model, effort from browser_chat_settings where user_id = ?'),
+    saveModel: db.prepare(`insert into browser_chat_settings(user_id, harness, profile, model, effort, updated_at)
+      values (?, ?, ?, ?, ?, unixepoch())
+      on conflict(user_id) do update set harness = excluded.harness, profile = excluded.profile,
+        model = excluded.model, effort = excluded.effort, updated_at = unixepoch()`),
     history: db.prepare('select id, message, reply from browser_chat_turns where user_id = ? order by id desc limit 30'),
     add: db.prepare('insert into browser_chat_turns(user_id, request_id, message) values (?, ?, ?) returning id'),
     finish: db.prepare('update browser_chat_turns set reply = ? where id = ?'),
@@ -54,16 +67,22 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
   const owner = (id: number) => q.admin.get(id) as User | undefined
   const history = (id: number) => (q.history.all(id) as Turn[]).reverse()
   const deny = () => new AppError(403, 'browser_chat_denied', 'An admin must grant you Browser chat access.')
+  const modelOf = (adminId: number): BrowserChatModel => {
+    const r = q.model.get(adminId) as { harness: string; profile: string; model: string; effort: string | null } | undefined
+    if (!r) return { ...DEFAULT_MODEL }
+    return { harness: harnessOf(r.harness), profile: r.profile, model: r.model, effort: r.effort }
+  }
 
   async function run(admin: User, user: User, id: number, message: string, check: () => void) {
     let result = ''
     let beforeClick: string | undefined
+    const model = modelOf(admin.id)
     const ask = async (system: string, prompt: string) => {
-      try { return await complete(admin, system, prompt) }
+      try { return await complete(admin, system, prompt, model) }
       catch (err) {
         if (err instanceof Error && /rate limit/i.test(err.message))
-          throw new AppError(429, 'browser_model_limit', 'The browser model reached its usage limit. Try again when the limit resets, or ask an admin to select another supervisor model in Autopilot.')
-        throw new AppError(409, 'browser_model', 'The browser model could not answer. Check the granting admin’s supervisor model and connection in Autopilot.')
+          throw new AppError(429, 'browser_model_limit', 'The browser model reached its usage limit. Try again when the limit resets, or ask an admin to select another model in Browser agent settings.')
+        throw new AppError(409, 'browser_model', 'The browser model could not answer. Check the granting admin’s Browser agent model and connection.')
       }
     }
     try {
@@ -116,6 +135,37 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
   return {
     allowed: (id: number) => !!owner(id),
     members: () => (q.members.all() as { id: number; name: string; username: string; allowed: number }[]).map((m) => ({ ...m, allowed: !!m.allowed })),
+    settings(admin: User) {
+      if (owner(admin.id)?.id !== admin.id) throw deny()
+      return modelOf(admin.id)
+    },
+    async setModel(admin: User, p: BrowserChatModelPatch) {
+      if (owner(admin.id)?.id !== admin.id) throw deny()
+      const current = modelOf(admin.id)
+      if (p.harness !== undefined && !(HARNESSES as readonly string[]).includes(p.harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+      if (p.harness !== undefined && !agentCapabilities(p.harness).completions) throw new AppError(400, 'unsupported_browser_agent', 'This agent cannot run tool-free browser chat.')
+      if (p.profile !== undefined && !/^[a-z0-9][a-z0-9-]{0,20}$/.test(p.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
+      const harness = harnessOf(p.harness ?? current.harness)
+      if (!agentCapabilities(harness).completions) throw new AppError(400, 'unsupported_browser_agent', 'This agent cannot run tool-free browser chat.')
+      const profile = p.profile ?? (harness === current.harness ? current.profile : 'default')
+      const model = p.model?.trim() ?? (harness === current.harness ? current.model : harness === 'claude' ? DEFAULT_MODEL.model : '')
+      const sameModel = harness === current.harness && profile === current.profile && model === current.model
+      const effort = p.effort !== undefined ? (p.effort?.trim() || null) : sameModel ? current.effort : null
+      if (harness === 't3code' && profile !== 'default') throw new AppError(400, 'bad_profile', 'T3 Code uses your default member connection.')
+      if (effort && (harness !== 't3code' || !model)) throw new AppError(400, 'bad_effort', 'Choose a T3 Code model for the thinking level.')
+      if (harness === 't3code') {
+        if (!model) throw new AppError(400, 'bad_model', 'Choose a T3 Code model for tool-free browser chat.')
+        if (!t3Catalog) throw new AppError(400, 'bad_model', 'T3 Code models cannot be verified right now.')
+        const { models } = await t3Catalog(admin, profile, model)
+        const picked = models.find((m) => m.value === model)
+        if (!picked?.supportsSupervisor) throw new AppError(400, 'bad_model', 'This T3 Code model does not support tool-free browser chat.')
+        if (effort && !picked.supportedEffortLevels?.includes(effort)) throw new AppError(400, 'bad_effort', 'This thinking level is unavailable for the selected model.')
+        if (owner(admin.id)?.id !== admin.id) throw deny()
+        if (JSON.stringify(current) !== JSON.stringify(modelOf(admin.id))) throw new AppError(409, 'settings_changed', 'Browser agent settings changed while checking the model. Try again.')
+      }
+      q.saveModel.run(admin.id, harness, profile, model, effort)
+      return modelOf(admin.id)
+    },
     setAccess(admin: User, memberId: number, allowed: boolean) {
       if (owner(admin.id)?.id !== admin.id) throw deny()
       if (!db.prepare("select 1 from users where id = ? and role = 'member' and disabled_at is null").get(memberId))
@@ -125,8 +175,10 @@ export function browserChat(db: Db, browser: Port, complete: Complete) {
       if (active?.userId === memberId) active.cancelled = true
     },
     state(user: User) {
-      if (!owner(user.id)) throw deny()
-      return { turns: history(user.id), busy: !!active }
+      const admin = owner(user.id)
+      if (!admin) throw deny()
+      const m = modelOf(admin.id)
+      return { turns: history(user.id), busy: !!active, model: { harness: m.harness, model: m.model, effort: m.effort } }
     },
     send(user: User, requestId: string, message: string) {
       const admin = owner(user.id)

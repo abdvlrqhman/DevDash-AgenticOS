@@ -750,10 +750,6 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
   }
 
   return {
-    supervisorModel(userId: number) {
-      const r = row(userId)
-      return { harness: harnessOf(r.sv_harness), model: r.sv_model, profile: r.sv_profile, effort: r.sv_effort }
-    },
     state,
     entries,
     log,

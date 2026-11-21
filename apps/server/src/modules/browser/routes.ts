@@ -28,6 +28,13 @@ export function browserRoutes(browser: BrowserService, chat: BrowserChat, mw: Re
       chat.send(user, requestId, message)
       return c.json({ ok: true }, 202)
     })
+    .get('/chat/settings', mw.requireAdmin, (c) => c.json({ model: chat.settings(c.get('user')) }))
+    .put('/chat/settings', mw.requireAdmin, json(z.object({
+      harness: z.string().min(1).max(30).optional(),
+      profile: z.string().min(1).max(30).optional(),
+      model: z.string().max(200).optional(),
+      effort: z.string().max(40).nullable().optional(),
+    })), async (c) => c.json({ model: await chat.setModel(c.get('user'), c.req.valid('json')) }))
     .get('/chat/access', mw.requireAdmin, (c) => c.json({ members: chat.members() }))
     .put('/chat/access/:id', mw.requireAdmin, json(z.object({ allowed: z.boolean() })), (c) => {
       chat.setAccess(c.get('user'), Number(c.req.param('id')), c.req.valid('json').allowed)
