@@ -66,6 +66,7 @@ test('only admins grant access, watch links cannot chat, and granted members sha
   for (const [user, status] of [[undefined, 401], [member, 403]] as const) {
     assert.equal((await request('/chat', user, 'POST', turn)).status, status)
     assert.equal((await request('/chat', user)).status, status)
+    assert.equal((await request('/chat', user, 'DELETE')).status, status)
     assert.equal((await request('/chat/access', user)).status, status)
     assert.equal((await request('/chat/access/2', user, 'PUT', { allowed: true })).status, status)
     assert.equal((await request('/chat/settings', user)).status, status)
@@ -222,4 +223,33 @@ test('supervisor rate-limit errors surface cleanly without running browser actio
   assert.match(reply ?? '', /Browser agent settings/i)
   assert.doesNotMatch(reply ?? '', /Autopilot/i)
   assert.deepEqual(actions, [])
+})
+
+test('clearing browser chat only removes the caller’s own history and rejects while their turn is in flight', async () => {
+  const gate = Promise.withResolvers<string>()
+  let hold = false
+  const { request, admin, member, chat } = fixture(() => hold ? gate.promise : Promise.resolve('{"kind":"read"}'))
+  assert.equal((await request('/chat/access/2', admin, 'PUT', { allowed: true })).status, 200)
+
+  assert.equal((await request('/chat', admin, 'POST', { requestId: crypto.randomUUID(), message: 'Admin turn' })).status, 202)
+  await finish(chat, admin)
+  assert.equal((await request('/chat', member, 'POST', { requestId: crypto.randomUUID(), message: 'Member turn' })).status, 202)
+  await finish(chat, member)
+  assert.equal(chat.state(admin).turns.length, 1)
+  assert.equal(chat.state(member).turns.length, 1)
+
+  // Member clearing only clears member's own turns; admin's history stays intact.
+  assert.equal((await request('/chat', member, 'DELETE')).status, 200)
+  assert.equal(chat.state(member).turns.length, 0)
+  assert.equal(chat.state(admin).turns.length, 1)
+
+  // While admin has an active turn, admin cannot clear (409), while member still can.
+  hold = true
+  assert.equal((await request('/chat', admin, 'POST', { requestId: crypto.randomUUID(), message: 'In flight' })).status, 202)
+  assert.equal((await request('/chat', admin, 'DELETE')).status, 409)
+  assert.equal((await request('/chat', member, 'DELETE')).status, 200)
+  gate.resolve('{"kind":"read"}')
+  await finish(chat, admin)
+  assert.equal((await request('/chat', admin, 'DELETE')).status, 200)
+  assert.equal(chat.state(admin).turns.length, 0)
 })

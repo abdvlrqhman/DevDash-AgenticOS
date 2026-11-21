@@ -20,6 +20,10 @@ export function browserRoutes(browser: BrowserService, chat: BrowserChat, mw: Re
     .get('/', async (c) => c.json(await browser.status()))
     .get('/chat/permission', (c) => c.json({ allowed: chat.allowed(c.get('user').id) }))
     .get('/chat', (c) => c.json(chat.state(c.get('user'))))
+    .delete('/chat', (c) => {
+      chat.clear(c.get('user'))
+      return c.json({ ok: true })
+    })
     .post('/chat', json(z.object({ requestId: z.uuid(), message: z.string().trim().min(1).max(3000) })), async (c) => {
       const user = c.get('user')
       if (!chat.allowed(user.id)) throw new AppError(403, 'browser_chat_denied', 'An admin must grant you Browser chat access.')

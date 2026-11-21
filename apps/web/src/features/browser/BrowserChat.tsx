@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, SlidersHorizontal, X } from 'lucide-react'
+import { Eraser, Send, SlidersHorizontal, X } from 'lucide-react'
+import { confirmAction } from '@/components/app/confirm'
 import { NativeSelect } from '@/components/app/native-select'
 import { ResponsiveDialog } from '@/components/app/responsive-dialog'
 import { Button } from '@/components/ui/button'
@@ -35,6 +36,12 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
       await qc.invalidateQueries({ queryKey: key })
     },
   })
+  const clear = useMutation({
+    mutationFn: () => unwrap(chat.$delete()),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: key })
+    },
+  })
   const turns = state.data?.turns
   const last = turns?.at(-1)
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'nearest' }) }, [last?.id, last?.reply])
@@ -51,6 +58,11 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
           <p className="mt-1 text-xs text-muted-foreground">The model reads visible text. Browser actions are visible to everyone watching.</p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          <Button size="icon-sm" variant="ghost" aria-label="Clear browser chat" title="Clear browser chat"
+            disabled={!turns?.length || clear.isPending || !!state.data?.busy}
+            onClick={async () => {
+              if (await confirmAction({ title: 'Clear browser chat?', description: 'Removes your Browser chat messages. The shared browser and settings stay.', action: 'Clear' })) clear.mutate()
+            }}><Eraser /></Button>
           {onOpenSettings && <Button size="icon-sm" variant="ghost" aria-label="Browser agent settings" title="Browser agent settings" onClick={onOpenSettings}><SlidersHorizontal /></Button>}
           <Button size="icon-sm" variant="ghost" aria-label="Close browser chat" onClick={onClose}><X /></Button>
         </div>
@@ -67,7 +79,7 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
         <div ref={bottom} />
       </div>
       <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (draft.trim() && !send.isPending && !state.data?.busy && !state.error) send.mutate() }}>
-        <ErrorAlert error={send.error} />
+        <ErrorAlert error={send.error ?? clear.error} />
         <Textarea aria-label="Message the browser assistant" placeholder="Ask about the page, open a URL, click a label, or scroll…" maxLength={3000} rows={2}
           className="max-h-28 min-h-14" value={draft} disabled={send.isPending} onChange={(e) => { setDraft(e.target.value); requestId.current = crypto.randomUUID() }} />
         <Button size="sm" type="submit" className="self-end" disabled={!draft.trim() || !state.data || !!state.error || send.isPending || state.data.busy}>

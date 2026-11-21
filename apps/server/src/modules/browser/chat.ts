@@ -61,6 +61,7 @@ export function browserChat(db: Db, browser: Port, complete: Complete, t3Catalog
     history: db.prepare('select id, message, reply from browser_chat_turns where user_id = ? order by id desc limit 30'),
     add: db.prepare('insert into browser_chat_turns(user_id, request_id, message) values (?, ?, ?) returning id'),
     finish: db.prepare('update browser_chat_turns set reply = ? where id = ?'),
+    clear: db.prepare('delete from browser_chat_turns where user_id = ?'),
   }
   db.prepare("update browser_chat_turns set reply = 'The server restarted during this turn. Check the shared browser before repeating an action.' where reply is null").run()
   let active: { userId: number; cancelled: boolean } | undefined
@@ -191,6 +192,11 @@ export function browserChat(db: Db, browser: Port, complete: Complete, t3Catalog
       void run(admin, user, id, message, () => {
         if (turn.cancelled || owner(user.id)?.id !== admin.id) throw deny()
       })
+    },
+    clear(user: User) {
+      if (!owner(user.id)) throw deny()
+      if (active?.userId === user.id) throw new AppError(409, 'browser_busy', 'Wait for your current browser request to finish before clearing.')
+      q.clear.run(user.id)
     },
     cancel() { if (active) active.cancelled = true },
   }
