@@ -15,9 +15,9 @@ import { useTopic } from '@/lib/live'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
-import { commandsQuery, FALLBACK_MODELS, profilesQuery } from '../claude/data'
-import { HARNESS, harnessOf, type Harness } from '../claude/harness'
-import { isDefaultModel, modelLabel, type ModelInfo } from '../claude/models'
+import { useOfferedModels, FALLBACK_MODELS, profilesQuery } from '../claude/data'
+import { agentCapabilities, HARNESS, harnessOf, type Harness } from '../claude/harness'
+import { effortLevels, effortLabel, isDefaultModel, modelLabel, type ModelInfo } from '../claude/models'
 
 type State = Awaited<ReturnType<typeof fetchState>>
 export type Entry = Awaited<ReturnType<typeof fetchRecent>>['entries'][number]
@@ -226,26 +226,31 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
       toast.success('Saved.')
     },
   })
-  const dirty = JSON.stringify({ harness: v.harness, profile: v.profile, model: v.model, dailyCap: v.dailyCap })
-    !== JSON.stringify({ harness: supervisor.harness, profile: supervisor.profile, model: supervisor.model, dailyCap: supervisor.dailyCap })
+  const dirty = JSON.stringify({ harness: v.harness, profile: v.profile, model: v.model, effort: v.effort, dailyCap: v.dailyCap })
+    !== JSON.stringify({ harness: supervisor.harness, profile: supervisor.profile, model: supervisor.model, effort: supervisor.effort, dailyCap: supervisor.dailyCap })
 
   const profiles = useQuery(profilesQuery)
   const agents = (profiles.data?.agents as { harness: string; installed: boolean; profiles: { name: string }[] }[] | undefined) ?? []
   const claudeProfiles = (profiles.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? []
   const installed = agents.filter((a) => a.installed).map((a) => a.harness)
   const availableAgents: Harness[] = (['claude' as const, ...installed.filter((h) => h !== 'claude')]).filter(
-    (h, i, arr) => arr.indexOf(h) === i,
+    (h, i, arr) => agentCapabilities(h).completions && arr.indexOf(h) === i,
   ) as Harness[]
 
   const agentProfiles = v.harness === 'claude'
     ? claudeProfiles.map((p) => p.name)
     : (agents.find((a) => a.harness === v.harness)?.profiles ?? []).map((p) => p.name)
 
-  const models = useQuery({ ...commandsQuery(v.profile, harnessOf({ harness: v.harness })), enabled: agentProfiles.includes(v.profile) })
-  const offered = models.data?.models as ModelInfo[] | undefined
-  const modelList: ModelInfo[] = offered?.length ? offered : v.harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
+  const harness = harnessOf(v)
+  const t3 = harness === 't3code'
+  const offered = useOfferedModels(v.profile, harness, v.model, agentProfiles.includes(v.profile), t3)
+  const modelList: ModelInfo[] = t3 ? (offered ?? [])
+    : offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
+  const picked = modelList.find((m) => m.value === v.model)
+  const levels = t3 ? effortLevels(modelList, v.model) : []
+  const validT3 = !!picked?.supportsSupervisor && (!v.effort || levels.includes(v.effort))
 
-  const changeAgent = (h: string) => setV({ ...v, harness: h, profile: 'default', model: h === 'claude' ? 'sonnet' : '' })
+  const changeAgent = (h: string) => setV({ ...v, harness: h, profile: 'default', model: h === 'claude' ? 'sonnet' : '', effort: null })
 
   return (
     <SettingsSection title="Supervisor" description="Which agent, account and model the supervisor runs on. Stronger models judge better but use more of your plan; it runs every 10 minutes.">
@@ -253,6 +258,7 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
         <ErrorAlert error={save.error} />
         <Row id="sv-agent" label="Agent" description="Only agents installed on this server.">
           <NativeSelect id="sv-agent" className="w-44" value={v.harness} onChange={(e) => changeAgent(e.target.value)}>
+            {!availableAgents.includes(harness) && <option value={v.harness} disabled>{HARNESS[harness].label} (unavailable)</option>}
             {availableAgents.map((h) => <option key={h} value={h}>{HARNESS[h].label}</option>)}
           </NativeSelect>
         </Row>
@@ -263,13 +269,23 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
             </NativeSelect>
           </Row>
         )}
-        <Row id="sv-model" label="Model" description="The model the supervisor uses to read sessions and decide.">
-          <NativeSelect id="sv-model" className="w-44" value={v.model} onChange={(e) => setV({ ...v, model: e.target.value })}>
-            {modelList.map((m) => <option key={m.value} value={m.value}>{isDefaultModel(m.value) ? modelLabel(modelList, m.value, HARNESS[harnessOf({ harness: v.harness })].label) : m.displayName}</option>)}
+        <Row id="sv-model" label="Model" responsive={t3} description={t3 ? "Choose a T3 Code model that can review sessions with tools disabled." : "The model the supervisor uses to read sessions and decide."}>
+          <NativeSelect id="sv-model" className={t3 ? "min-w-56 max-w-full @md/field-group:max-w-80" : "w-44"} value={v.model} onChange={(e) => setV({ ...v, model: e.target.value, effort: null })}>
+            {t3 && !picked && <option value={v.model}>{v.model ? `${v.model} (unavailable)` : offered && !modelList.length ? 'No tool-free models available' : 'Choose a model'}</option>}
+            {modelList.map((m) => <option key={m.value} value={m.value} disabled={t3 && !m.supportsSupervisor}>{isDefaultModel(m.value) ? modelLabel(modelList, m.value, HARNESS[harnessOf({ harness: v.harness })].label) : m.displayName}{t3 && !m.supportsSupervisor ? ' (chat only)' : ''}</option>)}
           </NativeSelect>
         </Row>
+        {t3 && (levels.length > 0 || !!v.effort) && (
+          <Row id="sv-effort" label="Thinking level" description="The level this model uses for supervisor decisions.">
+            <NativeSelect id="sv-effort" className="w-44" value={v.effort ?? ''} onChange={(e) => setV({ ...v, effort: e.target.value || null })}>
+              <option value="">Default</option>
+              {v.effort && !levels.includes(v.effort) && <option value={v.effort}>{effortLabel(v.effort)} (unavailable)</option>}
+              {levels.map((e) => <option key={e} value={e}>{effortLabel(e)}</option>)}
+            </NativeSelect>
+          </Row>
+        )}
         {v.harness !== 'claude' && (
-          <Row id="sv-cap" label="Daily model-call cap" description="OpenCode plan usage can't be read, so the supervisor stops after this many model calls per day.">
+          <Row id="sv-cap" label="Daily model-call cap" description="This provider's plan usage can't be read, so the supervisor stops after this many model calls per day.">
             <Input id="sv-cap" type="number" inputMode="numeric" min={1} max={10000} className="w-24" value={v.dailyCap}
               onChange={(e) => setV({ ...v, dailyCap: Number(e.target.value) })} />
           </Row>
@@ -278,8 +294,8 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
           {supervisor.modelCallsToday} model call{supervisor.modelCallsToday === 1 ? '' : 's'} today
           {v.harness !== 'claude' && ` of ${supervisor.dailyCap}`}.
         </p>
-        <div><Button disabled={!dirty || save.isPending} onClick={() => save.mutate({
-          svHarness: v.harness, svProfile: v.profile, svModel: v.model, svDailyCap: v.dailyCap,
+        <div><Button disabled={!dirty || save.isPending || (t3 && !validT3)} onClick={() => save.mutate({
+          svHarness: v.harness, svProfile: v.profile, svModel: v.model, svEffort: v.effort, svDailyCap: v.dailyCap,
         })}>Save supervisor</Button></div>
       </FieldGroup>
     </SettingsSection>
@@ -312,6 +328,9 @@ function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: (s: 
           </FieldContent>
           <Switch id="ap-approvals" checked={settings.approvals} disabled={save.isPending} onCheckedChange={(on) => save.mutate({ approvals: on })} />
         </Field>
+        <Row id="ap-t3" label="Include T3 Code sessions" description="Let Autopilot send your rules to your T3 Chat sessions and continue them with your Linux account’s full access.">
+          <Switch id="ap-t3" checked={settings.t3Sessions} disabled={save.isPending} onCheckedChange={(on) => save.mutate({ t3Sessions: on })} />
+        </Row>
         <Row id="ap-wait" label="Wait before answering (minutes)" description="When a session asks something, you get this long to answer it yourself first. 1 to 5.">
           <Input id="ap-wait" type="number" inputMode="numeric" min={1} max={5} className="w-24" value={v.promptWaitMin} onChange={num('promptWaitMin')} />
         </Row>
@@ -327,15 +346,15 @@ function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: (s: 
         <Row id="ap-nudges" label="Nudges per goal" description="Then the session goes to Needs you.">
           <Input id="ap-nudges" type="number" inputMode="numeric" min={1} max={10} className="w-24" value={v.maxNudges} onChange={num('maxNudges')} />
         </Row>
-        <div><Button disabled={!dirty || save.isPending} onClick={() => save.mutate(v)}>Save settings</Button></div>
+        <div><Button disabled={!dirty || save.isPending} onClick={() => save.mutate({ pingAt: v.pingAt, promptWaitMin: v.promptWaitMin, quietMin: v.quietMin, nightCap: v.nightCap, maxNudges: v.maxNudges })}>Save settings</Button></div>
       </FieldGroup>
     </SettingsSection>
   )
 }
 
-function Row({ id, label, description, children }: { id: string; label: string; description: string; children: React.ReactNode }) {
+function Row({ id, label, description, children, responsive = false }: { id: string; label: string; description: string; children: React.ReactNode; responsive?: boolean }) {
   return (
-    <Field orientation="horizontal">
+    <Field orientation={responsive ? "responsive" : "horizontal"}>
       <FieldContent>
         <FieldLabel htmlFor={id}>{label}</FieldLabel>
         <FieldDescription>{description}</FieldDescription>

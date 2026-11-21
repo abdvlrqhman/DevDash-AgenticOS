@@ -27,12 +27,12 @@ const TICK_MS = 60_000
 const RETRY_MS = 10 * 60_000 // after a failed wake: the sessions ping them themselves meanwhile
 
 export type FollowRow = {
-  id: number; user_id: number; session_id: string; goal: string; started_at: number; seen_activity: number
+  retried_activity?: number | null; id: number; user_id: number; session_id: string; goal: string; started_at: number; seen_activity: number
   replies: number; max_replies: number; last_sent_uuid: string | null; replied_hash: string | null; state: 'on' | 'waiting_you'
 }
 export type SessionSeen = {
   id: string; owner_id: number; title: string; status: string; status_detail: string | null; archived: number
-  last_activity_at: number; mode: string; project_slug: string | null
+  last_activity_at: number; harness: string; mode: string; project_slug: string | null
 }
 export type Kind = 'finished' | 'failed' | 'asks' | 'approval' | 'waits' | 'gone'
 type Notify = (userId: number, kind: NotificationKind, n: { title: string; body?: string; url?: string; tag?: string }) => Promise<void>
@@ -83,7 +83,7 @@ export const hash = (t: string) => {
 
 export type Item = {
   follow: FollowRow; session: SessionSeen | undefined; kind: Kind; answer: string | null; ask: string | null
-  tookOver: boolean; loop: boolean
+  tookOver: boolean; loop: boolean; canContinue?: boolean
 }
 const SAID: Record<Kind, string> = {
   finished: 'finished a turn', failed: 'stopped with an error', asks: 'asks a question', approval: 'waits for their approval',
@@ -91,13 +91,14 @@ const SAID: Record<Kind, string> = {
 }
 
 /** The hidden message that wakes Hamasa in the member's chat: every changed session, oldest first. Pure, tested. */
-export function reminder(first: string, items: Item[], autopilotOn: boolean) {
+export function reminder(first: string, items: Item[], autopilotOn: boolean, rules = '') {
   const lines = items.map((it, i) => {
     const s = it.session
     const where = s ? ` (/sessions/${s.id})${s.project_slug ? ` in ${s.project_slug}` : ''}` : ''
     const head = `${i + 1}. "${s?.title ?? 'A session'}"${where} — ${SAID[it.kind]}. Goal: "${it.follow.goal}".`
     if (it.kind === 'gone') return head
     const parts = [head]
+    if (s && it.follow.retried_activity === s.last_activity_at) parts.push('   Your previous update left this goal open. Check the session and choose a follow tool before reporting back.')
     if (it.answer) parts.push(`   Its last answer: "${clip(it.answer.replace(/\s+/g, ' ').trim(), 1500)}"`)
     if (it.kind === 'failed' && s?.status_detail) parts.push(`   Error: ${clip(s.status_detail, 300)}`)
     if (it.ask) parts.push(`   ${it.kind === 'approval' ? `Asks permission for: ${it.ask} (only ${first} decides this; you never can).` : `Asks: ${it.ask}`}`)
@@ -110,7 +111,7 @@ export function reminder(first: string, items: Item[], autopilotOn: boolean) {
   })
   return `<system-reminder>Sessions you follow for ${first} changed (DevDash wrote this, not ${first}). Autopilot: ${autopilotOn ? 'on' : 'off, so you only report'}.
 ${lines.join('\n')}
-For each one: if the next step is clearly what ${first} already agreed in this chat and autopilot allows it, continue it with follow_reply (or answer its question with follow_answer), with tier and why. If there's nothing new for ${first} (it's still on it), call follow_keep for it and don't write to them. Otherwise tell ${first} in a few lines, with the link. When its goal is reached, session_unfollow it and tell them what was done. If you're not sure, ask them; don't guess.
+${rules ? 'Apply the member’s Autopilot rules below. follow_reply and follow_answer log your decision automatically.\n' + rules + '\n' : ''}For each one: if the next step is clearly what ${first} already agreed in this chat and autopilot allows it, continue it with follow_reply (or answer its question with follow_answer), with tier and why. When there is nothing new to report, call follow_keep and write nothing. If a decision belongs to the member, call follow_wait and explain what you need. A progress report alone leaves the goal open. When its goal is reached, session_unfollow it and tell them what was done. If you're not sure, ask them; don't guess.
 </system-reminder>`
 }
 
@@ -129,15 +130,17 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
     count: db.prepare('select count(*) as n from assistant_follows where user_id = ?'),
     add: db.prepare(`insert into assistant_follows (user_id, session_id, goal, started_at, seen_activity, last_sent_uuid, max_replies)
       values (?1, ?2, ?3, ?4, ?5, ?6, ?7) on conflict (user_id, session_id) do update set goal = ?3, seen_activity = ?5, last_sent_uuid = ?6,
-      replies = 0, replied_hash = null, state = 'on'`),
+      replies = 0, replied_hash = null, retried_activity = null, state = 'on'`),
     remove: db.prepare('delete from assistant_follows where user_id = ? and session_id = ?'),
     seen: db.prepare('update assistant_follows set seen_activity = ? where id = ?'),
+    retry: db.prepare(`update assistant_follows set retried_activity = seen_activity, seen_activity = seen_activity - 1
+      where id = ? and state = 'on' and seen_activity = ? and retried_activity is not seen_activity`),
     sent: db.prepare('update assistant_follows set last_sent_uuid = ?, seen_activity = max(seen_activity, ?) where id = ?'),
     replied: db.prepare('update assistant_follows set replies = replies + 1, last_sent_uuid = ?, seen_activity = max(seen_activity, ?), replied_hash = ? where id = ?'),
     state: db.prepare('update assistant_follows set state = ? where id = ?'),
     resetOne: db.prepare("update assistant_follows set replies = 0, state = 'on' where user_id = ? and session_id = ?"),
     resetAll: db.prepare("update assistant_follows set replies = 0, state = 'on' where user_id = ?"),
-    session: db.prepare(`select s.id, s.owner_id, s.title, s.status, s.status_detail, s.archived, s.last_activity_at, s.mode, p.slug as project_slug
+    session: db.prepare(`select s.id, s.owner_id, s.title, s.status, s.status_detail, s.archived, s.last_activity_at, s.harness, s.mode, p.slug as project_slug
       from claude_sessions s left join projects p on p.id = s.project_id where s.id = ?`),
     lastMsg: db.prepare('select message_uuid from claude_message_senders where session_id = ? order by rowid desc limit 1'),
   }
@@ -238,6 +241,11 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
       const items: Item[] = []
       const wait = autopilot.approvalsWait(userId)
       for (const f of q.mine.all(userId) as FollowRow[]) {
+        if (!claude.canViewSession(user, f.session_id)) {
+          q.remove.run(userId, f.session_id)
+          changed(userId)
+          continue
+        }
         const s = sessionOf(f.session_id)
         const w = s ? await waitingOn(user, s) : { kind: null, ask: null }
         const d = due(f, s, t, { waitingOn: w.kind, approvalsWait: wait, background: claude.background(f.session_id) })
@@ -270,10 +278,16 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
       try {
         const to = await assistant.current(user)
         const blocked = await autopilot.blocked(user).catch(() => 'Autopilot could not be checked')
+        const settings = blocked ? null : autopilot.state(user)
         const hashes = new Map(real.filter((i) => i.answer).map((i) => [i.follow.session_id, hash(i.answer!)]))
+        for (const i of real) {
+          i.canContinue = !blocked && i.kind === 'finished' && i.session?.owner_id === userId && i.session.mode === 'chat'
+            && !i.tookOver && !i.loop && i.follow.replies < i.follow.max_replies && i.follow.state === 'on'
+            && (i.session.harness !== 't3code' || settings?.settings.t3Sessions === true)
+        }
         waking.set(to, { userId, items, replied: new Set(), kept: new Set(), hashes })
         try {
-          await claude.send(user, to, reminder(first(user), items, !blocked), [])
+          await claude.send(user, to, reminder(first(user), items, !blocked, settings?.rules), [])
         } catch (err) {
           waking.delete(to)
           throw err
@@ -310,9 +324,13 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
     if (!user || t.aborted) return // stopped from the chat: they're there
     const real = w.items.filter((i) => i.kind !== 'gone')
     if (!t.ok) return fallback(user, real)
-    // Continued, or no news (follow_keep): nothing changes. Reported to them: automatic replies wait until they write.
     const told = real.filter((i) => !w.replied.has(i.follow.session_id) && !w.kept.has(i.follow.session_id))
-    for (const i of told) q.state.run('waiting_you', i.follow.id)
+    // Reported to them: automatic replies on those wait until they write.
+    for (const i of told) {
+      if (i.canContinue && q.retry.run(i.follow.id, i.session!.last_activity_at).changes) {
+        poke(user.id, (QUIET_S + 1) * 1000)
+      } else q.state.run('waiting_you', i.follow.id)
+    }
     changed(user.id)
     if (!told.length || !t.result?.trim()) return
     if (hub.viewers(`session:${chatId}`).some((v) => v.id === user.id)) return // reading it as it's written
@@ -326,16 +344,17 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
   function follow(user: User, sessionId: string, goal: string) {
     if (!on(user.id)) throw new AppError(409, 'follow_off', `Following sessions isn't turned on for ${first(user)} yet (${AGENT_NAME}'s settings).`)
     const s = sessionOf(sessionId)
-    if (!s || s.archived) throw new AppError(404, 'not_found', 'No such session, or it is archived.')
+    if (!s || s.archived || !claude.canViewSession(user, sessionId)) throw new AppError(404, 'not_found', 'No such session, or it is archived.')
     if (assistant.ofSession(user.username, sessionId)) throw new AppError(400, 'bad_args', `That is one of ${AGENT_NAME}'s own conversations.`)
     if (!q.get.get(user.id, sessionId) && (q.count.get(user.id) as { n: number }).n >= MAX_FOLLOWS) {
       throw new AppError(409, 'too_many', `Up to ${MAX_FOLLOWS} followed sessions: unfollow one first.`)
     }
     const text = goal.replace(/\s+/g, ' ').trim().slice(0, 300)
     if (!text) throw new AppError(400, 'bad_args', 'Give the goal: what should be done when it is finished, in one line.')
-    // From now on: what it already did before isn't news.
-    q.add.run(user.id, sessionId, text, nowS(), s.status === 'working' ? s.last_activity_at - 1 : s.last_activity_at, lastMsg(sessionId), MAX_REPLIES)
+    // An idle session may already have handed back unfinished work. Assess its current turn once.
+    q.add.run(user.id, sessionId, text, nowS(), s.last_activity_at - 1, lastMsg(sessionId), MAX_REPLIES)
     changed(user.id)
+    poke(user.id)
     return `Following "${s.title}". You'll be woken here when it finishes a turn, asks something or fails.`
   }
   function unfollow(user: User, sessionId: string) {
@@ -352,12 +371,13 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
     if (!f || !on(user.id)) throw new AppError(400, 'bad_args', "You don't follow that session: tell them instead.")
     const s = sessionOf(sessionId)
     if (!s || s.archived) throw new AppError(404, 'not_found', 'The session is gone.')
+    if (s.harness === 't3code' && s.status === 'waiting') throw new AppError(409, 'native_request', 'Open the native T3 conversation to answer its request.')
     const w = waking.get(chatId)
     const last = lastMsg(sessionId)
     const no = mayReply({
       own: s.owner_id === user.id, cli: s.mode === 'cli', state: f.state, replies: f.replies, max: f.max_replies,
       tookOver: !!last && last !== f.last_sent_uuid, loop: !!w?.items.find((i) => i.follow.id === f.id)?.loop,
-      tier: args.tier, why: args.why, blocked: s.owner_id === user.id ? await autopilot.blocked(user) : null,
+      tier: args.tier, why: args.why, blocked: s.owner_id === user.id ? await autopilot.blocked(user, s.harness) : null,
     })
     if (no) throw new AppError(403, 'not_now', no)
     return { f, s, w, tier: args.tier as 'green' | 'yellow', why: String(args.why).trim().slice(0, 300) }
@@ -390,6 +410,15 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
   agents.onRpc('mcp.session_unfollow', (username, params) => {
     const c = ctx(username, params)
     return unfollow(c.user, str(c.args.id, 'the session id'))
+  })
+  agents.onRpc('mcp.follow_wait', (username, params) => {
+    const c = ctx(username, params)
+    const id = str(c.args.id, 'the session id')
+    const item = waking.get(c.chatId)?.items.find((i) => i.follow.session_id === id)
+    if (!item) throw new AppError(409, 'not_follow_wake', 'Use this when a followed session needs the member during a follow reminder.')
+    q.state.run('waiting_you', item.follow.id)
+    changed(c.user.id)
+    return 'Paused. Tell the member what you need from them.'
   })
   // A wake-up with nothing new for the member: the follow stays as it was, nothing is shown, no ping.
   agents.onRpc('mcp.follow_keep', (username, params) => {
@@ -451,7 +480,7 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
     state(user: User) {
       return {
         on: on(user.id),
-        sessions: (q.mine.all(user.id) as FollowRow[]).map((f) => {
+        sessions: (q.mine.all(user.id) as FollowRow[]).filter((f) => claude.canViewSession(user, f.session_id)).map((f) => {
           const s = sessionOf(f.session_id)
           return { sessionId: f.session_id, title: s?.title ?? 'Session', status: s?.status ?? 'idle', goal: f.goal, replies: f.replies, maxReplies: f.max_replies, state: f.state }
         }),

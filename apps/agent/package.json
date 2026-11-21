@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "jsonc-parser": "^3.3.1",
     "node-pty": "^1.1.0",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "smol-toml": "^1.9.1",
+    "toml-eslint-parser": "^1.0.3"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1"

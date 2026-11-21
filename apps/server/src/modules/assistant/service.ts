@@ -1,13 +1,13 @@
-// Each member's personal agent: one conversation at a time with Claude Code or OpenCode, running as the member in their
+// Each member's personal agent: one conversation at a time on their chosen harness, running as the member in their
 // home folder, with DevDash tools across everything they can see (mcp.ts). Underneath it is an ordinary session
 // (unlisted, origin 'assistant'), so questions, permissions, models, history and notifications work as in any other.
 // Schedules send it a prompt at set times.
-import type { Db } from '../../core/db.ts'
+import { transaction, type Db } from '../../core/db.ts'
 import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
 import { dueSlots, nextRun, slotKey, validSlots, validTz, type Slot } from '../../core/schedule.ts'
 import type { User } from '../auth/repo.ts'
-import { HARNESSES, type ClaudeService, type Harness } from '../claude/service.ts'
+import { HARNESSES, agentCapabilities, type ClaudeService, type Harness } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { AGENT_NAME, instructions, READ_ONLY } from './prompt.ts'
 
@@ -17,6 +17,7 @@ type Row = {
 }
 /** How the agent works and what it reaches; each change applies to the current conversation too. */
 export type Settings = { model?: string | null; effort?: string | null; permissionMode?: string; fastMode?: boolean; reachTailnet?: boolean; drive?: boolean }
+type ConversationSettings = Pick<Row, 'harness' | 'profile' | 'tz' | 'model' | 'effort' | 'permission_mode' | 'fast' | 'drive' | 'reach_tailnet'>
 type ScheduleRow = {
   id: number; user_id: number; title: string; prompt: string; slots: string; run_at: number | null; tz: string; ran: string
   enabled: number; last_run_at: number | null; created_at: number
@@ -84,9 +85,13 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     setUnread: db.prepare('update assistants set unread = ? where user_id = ?'),
     everyone: db.prepare('select a.*, u.name, u.username from assistants a join users u on u.id = a.user_id where u.disabled_at is null'),
     settings: db.prepare('update assistants set model = ?, effort = ?, permission_mode = ?, fast = ?, reach_tailnet = ?, drive = ? where user_id = ?'),
-    session: db.prepare('select id, archived, started, harness, profile from claude_sessions where id = ?'),
+    session: db.prepare('select id, archived, started, harness, profile, model, effort from claude_sessions where id = ?'),
     ofSession: db.prepare(`select u.id, u.email, u.username, u.name, u.role from claude_sessions s join users u on u.id = s.owner_id
-      where s.id = ? and u.username = ? and s.origin_kind = 'assistant' and u.disabled_at is null`),
+      where s.id = ? and u.username = ? and s.origin_kind = 'assistant' and u.disabled_at is null
+        and (s.harness != 't3code' or (s.archived = 0 and exists (
+          select 1 from assistants a where a.user_id = u.id and a.harness = s.harness and a.profile = s.profile
+            and (a.session_id = s.id or exists (select 1 from assistant_schedules sch where sch.user_id = u.id and sch.session_id = s.id))
+        )))`),
     user: db.prepare('select id, email, username, name, role from users where id = ? and disabled_at is null'),
     schedules: db.prepare('select * from assistant_schedules where user_id = ? order by created_at'),
     schedule: db.prepare('select * from assistant_schedules where id = ? and user_id = ?'),
@@ -100,6 +105,7 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     bySession: db.prepare('select id, title from assistant_schedules where session_id = ? and user_id = ?'),
     // The schedules' own conversations that are still open (not archived): settings changes reach them too.
     scheduleSessions: db.prepare(`select s.id from assistant_schedules a join claude_sessions s on s.id = a.session_id
+      join assistants h on h.user_id = a.user_id and h.harness = s.harness and h.profile = s.profile
       where a.user_id = ? and s.archived = 0`),
   }
   hub.authorize('assistant', () => true) // events are published only to the member they're for
@@ -136,15 +142,17 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
   }
 
   /** A new conversation on the member's chosen agent, set up as they set it; the session starts on the first message. */
-  async function open(user: User, a: Row, title?: string) {
+  async function open(user: User, a: ConversationSettings, title?: string) {
     const s = await claude.create(user, {
       prompt: '', images: [], cwd: '~', profile: a.profile, model: a.model, effort: a.effort, permissionMode: a.permission_mode, mode: 'chat', harness: a.harness,
     }, {
-      instructions: instructions({ name: user.name, username: user.username, tz: a.tz }), toolPolicy: { allow: READ_ONLY }, listed: false,
+      instructions: instructions({ name: user.name, username: user.username, tz: a.tz }),
+      ...(agentCapabilities(a.harness).toolPolicies && { toolPolicy: { allow: READ_ONLY } }),
+      listed: false, ...(a.harness === 't3code' && { shared: false }),
       ...(title ? { title, origin: { kind: 'assistant', role: 'schedule' } as const } : { origin: { kind: 'assistant' } as const }),
     })
     // A tailnet disconnected since doesn't stop the conversation from starting; it just doesn't reach it.
-    if (a.fast || !a.drive) await claude.update(user, s.id, { fastMode: !!a.fast, drive: !!a.drive })
+    if (agentCapabilities(a.harness).devdashConnections && (a.fast || !a.drive)) await claude.update(user, s.id, { fastMode: !!a.fast, drive: !!a.drive })
     if (a.reach_tailnet) await claude.update(user, s.id, { reachTailnet: true }).catch(() => {})
     return s.id
   }
@@ -164,9 +172,14 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
   async function conversationFor(user: User, s: ScheduleRow) {
     const a = row(user.id)
     if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
-    const c = s.session_id ? (q.session.get(s.session_id) as { id: string; archived: number; harness: string; profile: string } | undefined) : undefined
+    const c = s.session_id ? (q.session.get(s.session_id) as { id: string; archived: number; started: number; harness: string; profile: string; model: string | null; effort: string | null } | undefined) : undefined
     // Never their chat (an earlier version could open a schedule's conversation as the chat).
-    if (c && !c.archived && c.harness === a.harness && c.profile === a.profile && c.id !== a.session_id) return c.id
+    const needsDefault = a.harness === 't3code' && !a.model && c?.started && c.model
+    if (c && !c.archived && !needsDefault && c.harness === a.harness && c.profile === a.profile && c.id !== a.session_id) {
+      // A schedule that was busy during an earlier settings change picks up the saved pair before its next turn.
+      if (a.harness === 't3code' && (a.model !== c.model || a.effort !== c.effort)) await claude.update(user, c.id, { model: a.model, effort: a.effort })
+      return c.id
+    }
     const id = await open(user, a, scheduleTitle(s.title))
     q.setScheduleSession.run(id, s.id)
     return id
@@ -194,12 +207,31 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     return s && !s.archived ? s.id : start(user, a)
   }
 
-  async function run(s: ScheduleRow, date: string | null) {
+  // Serialize switches, settings and scheduled sends so each turn uses the harness the member selected.
+  const editing = new Map<number, Promise<unknown>>()
+  function memberEdit<A extends unknown[], R>(fn: (user: User, ...args: A) => Promise<R>) {
+    return async (user: User, ...args: A) => {
+      const apply = () => fn(user, ...args)
+      const previous = editing.get(user.id)
+      const next = previous ? previous.then(apply, apply) : apply()
+      editing.set(user.id, next)
+      try { return await next } finally { if (editing.get(user.id) === next) editing.delete(user.id) }
+    }
+  }
+
+  // A due one-off has no recurrence date. Undefined means there is nothing to run.
+  function dueDate(s: ScheduleRow, now: number): string | null | undefined {
+    if (s.run_at !== null) return s.run_at * 1000 <= now ? null : undefined
+    return dueSlots(JSON.parse(s.slots) as Slot[], JSON.parse(s.ran) as Record<string, string>, s.tz, now)[0]?.date
+  }
+  const runDue = memberEdit(async (user: User, scheduleId: number, now: number) => {
+    const s = q.schedule.get(scheduleId, user.id) as ScheduleRow | undefined
+    if (!s?.enabled) return
+    const date = dueDate(s, now)
+    if (date === undefined) return
     const once = s.run_at != null
     const ran = date ? { ...(JSON.parse(s.ran) as Record<string, string>), ...Object.fromEntries((JSON.parse(s.slots) as Slot[]).map((x) => [slotKey(x), date])) } : JSON.parse(s.ran)
     q.ran.run(JSON.stringify(ran), once ? 0 : 1, s.id) // marked first: a slow or failed send never runs it twice
-    const user = q.user.get(s.user_id) as User | undefined
-    if (!user) return
     try {
       const chat = state(user).sessionId
       const where = chat ? `\n\n(Their chat with you is session ${chat}: session_read it for what they said there today.)` : ''
@@ -209,19 +241,16 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
         .catch(() => {})
     }
     changed(user.id)
-  }
+  })
   let ticking = false
   async function tick(now = Date.now()) {
     if (ticking) return
     ticking = true
     try {
       for (const s of q.enabled.all() as ScheduleRow[]) {
-        if (s.run_at != null) {
-          if (s.run_at * 1000 <= now) await run(s, null)
-          continue
-        }
-        const due = dueSlots(JSON.parse(s.slots) as Slot[], JSON.parse(s.ran) as Record<string, string>, s.tz, now)
-        if (due.length) await run(s, due[0]!.date)
+        if (dueDate(s, now) === undefined) continue
+        const user = q.user.get(s.user_id) as User | undefined
+        if (user) await runDue(user, s.id, now)
       }
     } finally {
       ticking = false
@@ -232,7 +261,8 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
   // Conversations are reused, never remade: after an update, each one gets the current instructions and allowed tools.
   for (const a of q.everyone.all() as (Row & { name: string; username: string })[]) {
     for (const id of [a.session_id, ...scheduleSessions(a.user_id)].filter((x): x is string => !!x && !!q.session.get(x))) {
-      claude.configure(id, { instructions: instructions({ name: a.name, username: a.username, tz: a.tz }), toolPolicy: { allow: READ_ONLY } })
+      claude.configure(id, { instructions: instructions({ name: a.name, username: a.username, tz: a.tz }),
+        ...(agentCapabilities(a.harness).toolPolicies && { toolPolicy: { allow: READ_ONLY } }) })
     }
   }
 
@@ -241,29 +271,64 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     state,
 
     /** Picks (or changes) the member's agent. Another agent or account starts a new conversation; the old one stays. */
-    async setup(user: User, input: { harness: string; profile: string; tz?: string }) {
-      if (!(HARNESSES as readonly string[]).includes(input.harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
-      if (!PROFILE_RE.test(input.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
+    setup: memberEdit(async (user: User, input: { harness: string; profile: string; tz?: string; fullAccess?: boolean }) => {
+      const harness = HARNESSES.find((h) => h === input.harness)
+      if (!harness || !agentCapabilities(harness).assistant) throw new AppError(400, 'bad_harness', 'Unknown personal agent.')
+      if (!PROFILE_RE.test(input.profile) || (!agentCapabilities(harness).profiles && input.profile !== 'default')) throw new AppError(400, 'bad_profile', 'Unknown profile.')
       const old = row(user.id)
       const tz = input.tz && validTz(input.tz) ? input.tz : old?.tz ?? 'UTC'
-      q.put.run(user.id, input.harness, input.profile, tz)
-      const a = row(user.id)!
-      if (!old?.session_id || old.harness !== a.harness || old.profile !== a.profile) {
+      if (harness === 't3code' && !input.fullAccess && !(old?.harness === harness && old.permission_mode === 'bypassPermissions')) {
+        throw new AppError(400, 'full_access_required', 'Select Full access to use T3 Code for Hamasa and its schedules.')
+      }
+      if (!old?.session_id || old.harness !== harness || old.profile !== input.profile) {
+        // Never carry elevated T3 permissions into another agent, or an incompatible model into T3.
+        const switchT3 = old?.harness !== harness && (harness === 't3code' || old?.harness === 't3code')
+        const previous = switchT3 ? undefined : old
+        const defaults = claude.defaults(user)
+        const selection = switchT3 && defaults.harness === harness ? defaults : previous
+        const a: ConversationSettings = {
+          harness, profile: input.profile, tz, model: selection?.model ?? null, effort: selection?.effort ?? null,
+          permission_mode: harness === 't3code' ? 'bypassPermissions' : previous?.permission_mode ?? 'default',
+          fast: previous?.fast ?? 0, reach_tailnet: previous?.reach_tailnet ?? 0, drive: harness === 't3code' ? 0 : previous?.drive ?? 1,
+        }
+        const id = await open(user, a)
+        transaction(db, () => {
+          q.put.run(user.id, harness, input.profile, tz)
+          q.settings.run(a.model, a.effort, a.permission_mode, a.fast, a.reach_tailnet, a.drive, user.id)
+          q.setSession.run(id, user.id)
+          q.setUnread.run(0, user.id)
+        })
         if (old?.session_id && q.session.get(old.session_id)) await claude.update(user, old.session_id, { archived: true }).catch(() => {})
-        await start(user, a)
       } else {
+        q.put.run(user.id, harness, input.profile, tz)
         for (const id of [old.session_id, ...scheduleSessions(user.id)]) claude.configure(id, { instructions: instructions({ name: user.name, username: user.username, tz }) })
       }
+      changed(user.id)
       return state(user)
-    },
+    }),
 
     /** Model, effort, permission level and what it reaches: kept for new conversations, and applied to the current one. */
-    async settings(user: User, p: Settings) {
+    settings: memberEdit(async (user: User, p: Settings) => {
       const a = row(user.id)
       if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
+      const id = state(user).sessionId
+      if (a.harness === 't3code') {
+        if (p.reachTailnet || p.drive || p.fastMode || (p.permissionMode !== undefined && p.permissionMode !== 'bypassPermissions')) {
+          throw new AppError(400, 'unsupported_setting', 'T3 Code uses Full access and the connections configured in your T3 instance.')
+        }
+        if (p.model !== undefined && p.model !== a.model && p.effort === undefined) p = { ...p, effort: null }
+        if (p.effort) {
+          const model = p.model === undefined ? a.model : p.model
+          if (!model) throw new AppError(400, 'bad_effort', 'Choose a model before saving its thinking level for Hamasa.')
+          if (!id) {
+            const { models } = await claude.commands(user, a.profile, a.harness, model)
+            if (!models.find((m) => m.value === model)?.supportedEffortLevels?.includes(p.effort)) throw new AppError(400, 'bad_effort', 'That thinking level is unavailable for this model.')
+          }
+        }
+      }
+      if (a.harness !== 't3code' && p.effort && !/^[a-z0-9][a-z0-9_.-]{0,39}$/i.test(p.effort)) throw new AppError(400, 'bad_effort', 'Unknown effort level.')
       if (p.reachTailnet && !tailnetConnected?.(user.id)) throw new AppError(409, 'no_tailnet', 'Connect your tailnet on the Network page first.')
       if (p.drive && !driveConnected?.(user.id)) throw new AppError(409, 'no_drive', 'Connect your Google Drive on the Storage page first.')
-      const id = state(user).sessionId
       // The session checks each value (a known effort, a permission mode); the settings keep what it accepted.
       if (id) await claude.update(user, id, p)
       // The schedules' conversations work the same way; one that refuses a value doesn't stop the change.
@@ -274,21 +339,21 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
         bit(p.fastMode, a.fast), bit(p.reachTailnet, a.reach_tailnet), bit(p.drive, a.drive), user.id)
       changed(user.id)
       return state(user)
-    },
+    }),
 
     /** Clears the conversation: the current one is archived (not deleted) and an empty one takes its place. */
-    async fresh(user: User) {
+    fresh: memberEdit(async (user: User) => {
       const a = row(user.id)
       if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
       const s = a.session_id ? (q.session.get(a.session_id) as { id: string; archived: number; started: number } | undefined) : undefined
       q.setUnread.run(0, user.id)
       if (s && !s.archived && !s.started) return state(user) // already a fresh one
-      if (s && !s.archived) await claude.update(user, s.id, { archived: true }).catch(() => {})
       await start(user, a)
+      if (s && !s.archived) await claude.update(user, s.id, { archived: true }).catch(() => {})
       return state(user)
-    },
+    }),
 
-    current,
+    current: memberEdit(current),
     /** They've seen their chat: the launchers' dot goes. */
     seen(user: User) {
       q.setUnread.run(0, user.id)
@@ -301,12 +366,15 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
      * A schedule's run needs them: the note goes to their chat with the agent as a reminder (hidden in the transcript),
      * the agent writes to them there, and its answer is the one notification they get.
      */
-    async handOff(user: User, title: string, note: string) {
+    handOff: memberEdit(async (user: User, sessionId: string, note: string) => {
+      const schedule = q.bySession.get(sessionId, user.id) as { title: string } | undefined
+      if (!schedule || !q.ofSession.get(sessionId, user.username)) throw new AppError(400, 'bad_args', "hand_off is for an active schedule's run.")
+      const { title } = schedule
       const chat = await current(user)
       await claude.send(user, chat, `<system-reminder>Their schedule "${title}" ran on its own and handed this to you (they didn't write it): ${note}\nWrite to them about it now, in a few lines, in your own words, as the start of a conversation they can answer.</system-reminder>`, [])
       handedOff.add(chat)
       return `Handed to their chat: ${AGENT_NAME} writes to them there, and they're notified.`
-    },
+    }),
     /** The member whose personal agent this session is, when it is one. */
     ofSession: (username: string, sessionId: string | null) =>
       sessionId ? ((q.ofSession.get(sessionId, username) as User | undefined) ?? null) : null,

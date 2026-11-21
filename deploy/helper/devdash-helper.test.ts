@@ -177,3 +177,14 @@ test('project-trash/restore/purge: only a project id and short name, fixed folde
     assert.match(call({ cmd: 'project-purge', args: { id, slug: 'x' } }).error!, /refused: invalid project id/, String(id))
   }
 })
+
+test('browser actions run as neko with fixed operations and validated arguments', () => {
+  const invoke = (args: object) => call({ cmd: 'browser-action', args })
+  assert.deepEqual(invoke({ kind: 'scroll', direction: 'down' }).planned, ['docker exec --user neko devdash-browser xdotool mousemove 400 300 click --repeat 5 5'])
+  assert.deepEqual(invoke({ kind: 'click', x: 200, y: 300 }).planned, ['docker exec --user neko devdash-browser xdotool mousemove 200 300 click 1'])
+  assert.equal(invoke({ kind: 'open', url: 'https://example.com/' }).ok, true)
+  for (const args of [{ kind: 'key' }, { kind: 'click', x: 0, y: 10 }, { kind: 'scroll', direction: 'keyup' },
+    { kind: 'open', url: 'file:///tmp' }, { kind: 'open', url: 'https://user:password@example.test' }]) {
+    assert.equal(invoke(args).ok, false)
+  }
+})

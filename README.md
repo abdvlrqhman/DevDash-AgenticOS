@@ -167,12 +167,16 @@ needs you or a yellow decision is new.
   <img alt="A session in DevDash: tool steps with a diff, test results, a teammate's message, to-dos, changed files and usage; beside it, a phone starting a new session with OpenCode picked as the agent" src=".github/assets/agents-light.png">
 </picture>
 
-Every session is a real coding agent, run as the member who started it.
+Every session is a real coding agent, running as the member who started the session. Optional T3 Code connections
+require a separate local T3 instance and private data directory owned by that same member.
 
 - **Your choice of agent.** Each session runs Claude Code, or OpenCode with any model provider: Anthropic, OpenAI,
   Google, OpenRouter, GitHub Copilot, local models and more. Pick it per session; team roles pick theirs too. DevDash
   drives Claude Code through its Agent SDK and OpenCode over the [Agent Client Protocol](https://agentclientprotocol.com),
   so more ACP agents can follow.
+- **T3 Code (optional).** Use the member’s T3 models and thinking levels in Chat and Hamasa. Members can also
+  enroll their full-access T3 chats in Autopilot and select an eligible model for supervisor decisions. See
+  [connection setup and supported features](docs/t3-code.md).
 - **Two ways to work.** A chat view with tool steps, diffs, subagents, to-do lists, permission prompts, questions and
   file links that open in a viewer, or the agent's own terminal app (the Claude Code CLI, OpenCode's TUI). Switch a
   session between them any time. In the chat, typing `/model` or `/effort` switches the session like its menu does, and
@@ -211,7 +215,10 @@ Everything the team and its agents work on, in one place.
   download limit.
 - **Terminals:** a persistent shell per member, on the web and in the apps, with a key bar on phones.
 - **Vault:** end-to-end encrypted passwords and secrets. The server only ever stores ciphertext.
-- **Remote browser:** one shared Chromium, streamed into DevDash and started on demand.
+- **Remote browser:** one shared Chromium, streamed into DevDash and started on demand. In Browser chat, ask about visible
+  text, open a web address, scroll, or click a named label. Admins can grant or revoke individual members under
+  **Browser chat access**. Each conversation is private to its member. It uses the granting admin’s Autopilot supervisor
+  model and sends it locally recognized screen text. Everyone watching sees the resulting browser actions.
 - **Search and pins** across all of it.
 
 ### Operations
@@ -283,7 +290,7 @@ The server takes care of itself.
 - A fresh **Ubuntu 24.04** server you can reach as root over SSH. 4 vCPUs and 8 GB of RAM is a comfortable start for a
   small team; agents, builds and services all run here, so more helps.
 - A **domain proxied by Cloudflare** (the firewall only admits Cloudflare on port 443).
-- Optional: **Docker**, for the shared remote browser.
+- Optional: **Docker** for the shared remote browser and **Tesseract OCR** for Browser chat.
 
 The setup installs Node 24, Caddy, the GitHub CLI, rclone and Tailscale (pinned and checksum-verified where
 applicable) and configures SSH hardening, a firewall, swap and automatic security updates. The coding agents,

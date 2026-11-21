@@ -13,7 +13,7 @@ import { ErrorAlert } from '../auth/LoginPage'
 import { useMembers } from '../work/TaskBits'
 import type { Person } from './Collab'
 import type { Session } from './data'
-import { agentName } from './harness'
+import { agentName, agentCapabilities } from './harness'
 
 type Audience = 'private' | 'everyone' | 'people'
 export type SharedPerson = Person & { canSend: boolean; full?: boolean }
@@ -48,7 +48,7 @@ const AUDIENCE: { value: Audience; label: string }[] = [
 
 /** One line for who can see a session, e.g. "Shared with 2 people". Empty when only the owner can. */
 export function sharingLabel(s: Pick<Session, 'audience' | 'sharedWith' | 'sharedCanSend'> & { harness?: string }) {
-  if (s.audience === 'everyone') return s.sharedCanSend ? `shared, others can ask ${agentName(s.harness)}` : 'shared'
+  if (s.audience === 'everyone') return s.sharedCanSend && agentCapabilities(s.harness).guests ? `shared, others can ask ${agentName(s.harness)}` : 'shared'
   if (s.audience === 'people') return `shared with ${s.sharedWith} ${s.sharedWith === 1 ? 'person' : 'people'}`
   return ''
 }
@@ -59,6 +59,7 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
   people: SharedPerson[]; writers: Person[]; onSaved: () => void
 }) {
   const qc = useQueryClient()
+  const fullAccessOnly = !agentCapabilities(s.harness).guests
   const members = useMembers().filter((m) => m.id !== me)
   const [audience, setAudience] = useState<Audience>(s.audience)
   const [everyoneCanSend, setEveryoneCanSend] = useState(s.sharedCanSend)
@@ -72,14 +73,14 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
   useEffect(() => {
     if (!open) return
     setAudience(s.audience)
-    setEveryoneCanSend(s.sharedCanSend)
-    setPicked(new Map(people.map((p) => [p.id, levelOf(p)])))
+    setEveryoneCanSend(!fullAccessOnly && s.sharedCanSend)
+    setPicked(new Map(people.map((p) => [p.id, fullAccessOnly && levelOf(p) === 'ask' ? 'watch' : levelOf(p)])))
     setCaps(new Set(savedCaps.split(',').filter(Boolean) as Cap[]))
     setFollow(s.guestCapsFromProject)
     setError(null)
-  }, [open, s.audience, s.sharedCanSend, people, savedCaps, s.guestCapsFromProject])
+  }, [open, s.audience, s.sharedCanSend, people, savedCaps, s.guestCapsFromProject, fullAccessOnly])
   const shown = follow && projectCaps.data ? new Set(projectCaps.data.caps) : caps
-  const capsJson = follow ? null : [...caps]
+  const capsJson = fullAccessOnly || follow ? null : [...caps]
 
   const save = useMutation({
     mutationFn: () => unwrap(api.api.claude.sessions[':id'].sharing.$put({
@@ -119,7 +120,8 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
             </ToggleGroup>
           </Field>
 
-          {audience === 'everyone' && (
+          {audience === 'everyone' && fullAccessOnly && <p className="text-sm text-muted-foreground">Everyone can watch and comment. To let someone send messages, choose Chosen people and give them Full access.</p>}
+          {audience === 'everyone' && !fullAccessOnly && (
             <>
               <label className="flex cursor-pointer items-center justify-between gap-3 text-sm">
                 <span className="flex flex-col gap-0.5">
@@ -158,7 +160,7 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
                         <ToggleGroup type="single" variant="outline" size="sm" value={picked.get(m.id) ?? 'watch'}
                           onValueChange={(v) => v && setPicked((p) => new Map(p).set(m.id, v as Level))} aria-label={`What ${m.name} can do`}>
                           <ToggleGroupItem value="watch">Watch</ToggleGroupItem>
-                          <ToggleGroupItem value="ask">Ask</ToggleGroupItem>
+                          {!fullAccessOnly && <ToggleGroupItem value="ask">Ask</ToggleGroupItem>}
                           <ToggleGroupItem value="full">Full</ToggleGroupItem>
                         </ToggleGroup>
                       )}
@@ -167,20 +169,20 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
                 })}
               </div>
               <FieldDescription>
-                Only the people you tick see this session. <b>Watch:</b> read along and comment. <b>Ask:</b> message Claude; what
-                would use your accounts or private files waits for your approval, unless you share it below.
-                <b> Full:</b> their messages run with your access, like yours, and they can use the CLI.
+                Only the people you tick see this session. <b>Watch:</b> read along and comment.
+                {!fullAccessOnly && <> <b>Ask:</b> message {agentName(s.harness)}; what would use your accounts or private files waits for your approval, unless you share it below.</>}
+                <b> Full:</b> their messages run with your access, like yours{!fullAccessOnly && ', and they can use the CLI'}.
               </FieldDescription>
               {[...picked.values()].includes('full') && (
                 <p className="rounded-md border border-attention/50 bg-attention-soft px-3 py-2 text-xs text-attention-foreground">
-                  Full access lets them use your GitHub, Drive, Tailscale and files through Claude without asking you. Only give it
+                  Full access lets them use the accounts, connections and files available to {agentName(s.harness)} without asking you. Only give it
                   to people you'd hand your laptop to.
                 </p>
               )}
             </Field>
           )}
 
-          {audience !== 'private' && (
+          {audience !== 'private' && !fullAccessOnly && (
             <Field>
               <FieldLabel>What their requests can use without asking you</FieldLabel>
               <div className="flex flex-col divide-y rounded-md border">
@@ -213,7 +215,7 @@ export function ShareDialog({ open, onOpenChange, s, me, people, writers, onSave
 
           <ErrorAlert error={error} />
           <p className="text-xs text-muted-foreground">
-            {audience === 'private' ? 'Only you can see this session.' : `${agentName(s.harness)} runs as you. When others ask it for something that would use your access, you decide.`}
+            {audience === 'private' ? 'Only you can see this session.' : fullAccessOnly ? 'DevDash guest approval rules are unavailable through this connection; only people with Full access can send.' : `${agentName(s.harness)} runs as you. When others ask it for something that would use your access, you decide.`}
           </p>
           <Button type="submit" className="h-10" disabled={save.isPending || emptyPick}>
             {save.isPending ? 'Saving…' : emptyPick ? 'Pick at least one person' : 'Save'}

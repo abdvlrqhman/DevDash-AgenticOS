@@ -23,9 +23,11 @@ const Settings = z.object({
   maxNudges: z.number().int().optional(),
   approvals: z.boolean().optional(),
   promptWaitMin: z.number().int().optional(),
+  t3Sessions: z.boolean().optional(),
+  svEffort: z.string().min(1).max(160).nullable().optional(),
   svHarness: z.string().max(20).optional(),
   svProfile: z.string().max(30).optional(),
-  svModel: z.string().max(100).optional(),
+  svModel: z.string().max(160).optional(),
   svDailyCap: z.number().int().optional(),
 })
 
@@ -37,7 +39,7 @@ export function autopilotRoutes(autopilot: AutopilotService, mw: ReturnType<type
     .get('/log', query(LogQuery), (c) => c.json(autopilot.entries(c.get('user'), c.req.valid('query'))))
     .put('/enabled', json(Enabled), (c) => c.json(autopilot.setEnabled(c.get('user'), c.req.valid('json').enabled)))
     .put('/rules', json(Rules), (c) => c.json(autopilot.setRules(c.get('user'), c.req.valid('json').rules)))
-    .patch('/settings', json(Settings), (c) => c.json(autopilot.setSettings(c.get('user'), c.req.valid('json'))))
+    .patch('/settings', json(Settings), async (c) => c.json(await autopilot.setSettings(c.get('user'), c.req.valid('json'))))
     .put('/team/:projectId', json(z.object({ on: z.boolean() })), (c) =>
       c.json(autopilot.setTeam(c.get('user'), Number(c.req.param('projectId')), c.req.valid('json').on)))
     .post('/seen', (c) => c.json(autopilot.seen(c.get('user'))))

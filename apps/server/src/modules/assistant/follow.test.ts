@@ -14,7 +14,7 @@ import { assistantService } from './service.ts'
 
 const T = Math.floor(Date.now() / 1000)
 const seen = (o: Partial<SessionSeen> = {}): SessionSeen => ({
-  id: 'work', owner_id: 1, title: 'Polish the panel', status: 'idle', status_detail: null, archived: 0, last_activity_at: T, mode: 'chat', project_slug: 'shop', ...o,
+  id: 'work', owner_id: 1, title: 'Polish the panel', status: 'idle', status_detail: null, archived: 0, last_activity_at: T, harness: 'claude', mode: 'chat', project_slug: 'shop', ...o,
 })
 
 test('due: what a followed session has to tell, from its row against the cursor alone', () => {
@@ -197,6 +197,21 @@ test('autopilot off: Hamasa only reports, and the reminder says so', async () =>
   await assert.rejects(t.rpc('session_send', t.chat, { id: 'work', text: 'Open the PR' }), /follow_reply/, 'not around the limits either')
 })
 
+test('Hamasa follow replies respect T3 enrollment and hand native requests to the owner', async () => {
+  const t = await ready()
+  t.autopilot.setEnabled(t.ann, true)
+  t.db.prepare("update claude_sessions set harness = 't3code', permission_mode = 'bypassPermissions', drive = 0 where id = 'work'").run()
+  t.set('work', 'idle', 5)
+  await t.follow.deliver(1)
+  const reply = () => t.rpc('follow_reply', t.chat, { id: 'work', text: 'Continue', tier: 'green', why: 'the agreed plan' })
+  await assert.rejects(reply(), /off for their T3 Code sessions/)
+  await t.autopilot.setSettings(t.ann, { t3Sessions: true })
+  t.set('work', 'waiting')
+  await assert.rejects(reply(), /native T3 conversation/)
+  t.set('work', 'idle')
+  assert.match(await reply() as string, /Sent/)
+})
+
 test(`at most ${MAX_REPLIES} automatic replies until they write; writing themself starts it again`, async () => {
   const t = await ready()
   t.autopilot.setEnabled(t.ann, true)
@@ -320,11 +335,44 @@ test('following only on their word; the supervisor leaves followed sessions to H
   assert.equal(hash('a'), hash('a'))
 })
 
+test('an eligible progress-only update gets one further decision and can continue the same idle session', async () => {
+  const t = await ready()
+  t.autopilot.setEnabled(t.ann, true)
+  t.set('work', 'idle', 5)
+  await t.follow.deliver(1)
+  const finish = () => t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: 'The first step is complete.' } })
+  finish()
+  t.tick(60_000)
+  t.quietChat(t.chat)
+  assert.equal(await t.follow.deliver(1), true)
+  assert.match(reminders(t).at(-1)!.text, /previous update left this goal open/)
+  await t.rpc('follow_reply', t.chat, { id: 'work', text: 'Run the agreed tests', tier: 'green', why: 'member requested verification' })
+  assert.match(t.sends().at(-1)!.text, /Run the agreed tests/)
+})
+
+test('explicit requests for input and repeated progress updates do not start an endless follow loop', async () => {
+  for (const wait of [true, false]) {
+    const t = await ready()
+    t.autopilot.setEnabled(t.ann, true)
+    t.set('work', 'idle', 5)
+    for (let i = 0; i < (wait ? 1 : 2); i++) {
+      assert.equal(await t.follow.deliver(1), true)
+      if (wait) await t.rpc('follow_wait', t.chat, { id: 'work' })
+      t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: 'Report' } })
+      t.tick(60_000)
+      t.quietChat(t.chat)
+    }
+    assert.equal(await t.follow.deliver(1), false)
+    assert.equal(t.follow.state(t.ann).sessions.find((s) => s.sessionId === 'work')?.state, 'waiting_you')
+  }
+})
+
 test('after Hamasa told them (waiting_you), the session finishing still wakes it once: report, no automatic reply', async () => {
   const t = await ready()
   t.autopilot.setEnabled(t.ann, true)
   t.set('work', 'idle', 5)
   await t.follow.deliver(1)
+  await t.rpc('follow_wait', t.chat, { id: 'work' })
   t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: 'Step 1 is done; shall it go on?' } })
   assert.equal(t.follow.state(t.ann).sessions.find((s) => s.sessionId === 'work')!.state, 'waiting_you')
   // The session carries on and really finishes later.

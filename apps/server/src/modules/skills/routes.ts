@@ -1,3 +1,5 @@
+import type { McpInventory } from '../../../../agent/src/member-mcps.ts'
+import type { ProviderSkill } from '../../../../agent/src/skills.ts'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
@@ -54,6 +56,12 @@ const Folders = z.object({ folders: z.array(z.string().min(1).max(500)).min(1).m
 const PluginId = z.string().regex(/^[A-Za-z0-9][\w.-]{0,99}@[A-Za-z0-9][\w.-]{0,99}$/)
 const Install = z.object({ path: z.string().max(1000), name: Name, project: Slug.optional(), replace: z.boolean().default(false) })
 
+export const McpChange = z.object({
+  source: z.string().max(200), name: Folder, revision: z.string().regex(/^[a-f0-9]{64}$/),
+  action: z.enum(['create', 'edit', 'remove']), enabled: z.boolean().optional(), url: z.string().max(4000).optional(),
+  command: z.array(z.string().max(4000)).max(100).optional(),
+})
+
 export function skillsRoutes(agents: AgentsService, projects: ProjectsService, mw: ReturnType<typeof authMiddleware>) {
   const as = (c: { get: (k: 'user') => { username: string } }) => c.get('user').username
   /** The project's main checkout (any member may change a project's skills, like its files). */
@@ -71,8 +79,13 @@ export function skillsRoutes(agents: AgentsService, projects: ProjectsService, m
 
   return new Hono<AuthEnv>()
     .use(mw.requireUser)
+    .get('/mcps', async (c) => c.json(await ask<McpInventory>(as(c), { op: 'mcps.list' })))
+    .post('/mcps/check', json(McpChange.pick({ source: true, name: true, revision: true })), async (c) =>
+      c.json(await ask<{status: string}>(as(c), { ...c.req.valid('json'), op: 'mcps.check' })))
+    .post('/mcps', json(McpChange), async (c) => c.json(await ask(as(c), { ...c.req.valid('json'), op: 'mcps.change' })))
+    .get('/provider/:id', async (c) => c.json(await ask<{markdown: string}>(as(c), { op: 'skills.providerRead', id: param(z.string().regex(/^[a-f0-9]{64}$/), c.req.param('id'), 'skill') })))
     // My skills
-    .get('/', async (c) => c.json(await ask<{ skills: SkillSummary[]; builtIn: BuiltInSkill[]; profiles: string[]; shadowed: { profile: string; name: string }[] }>(as(c), { op: 'skills.list' })))
+    .get('/', async (c) => c.json(await ask<{ discovered: ProviderSkill[]; skills: SkillSummary[]; builtIn: BuiltInSkill[]; profiles: string[]; shadowed: { profile: string; name: string }[] }>(as(c), { op: 'skills.list' })))
     .get('/mine/:name', async (c) => c.json(await ask<{ skill: SkillDetail }>(as(c), { op: 'skills.get', name: param(Folder, c.req.param('name'), 'skill name') })))
     .post('/mine', json(Write), async (c) => c.json(await ask<Changed>(as(c), { op: 'skills.write', ...c.req.valid('json') })))
     .put('/mine/:name/enabled', json(z.object({ enabled: z.boolean() })), async (c) =>

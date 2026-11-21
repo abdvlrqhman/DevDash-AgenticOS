@@ -4,6 +4,7 @@ import type { Db } from '../../core/db.ts'
 import { newToken, seal, sha256, unseal } from '../../core/crypto.ts'
 import { AppError } from '../../core/http.ts'
 import { requestLine } from '../../core/unix.ts'
+import { readScreen } from './screen.ts'
 import type { User } from '../auth/repo.ts'
 
 const NEKO = 'http://127.0.0.1:8090/browser'
@@ -36,9 +37,9 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
     return v
   }
 
-  async function helper<T = Record<string, unknown>>(cmd: string): Promise<T> {
+  async function helper<T = Record<string, unknown>>(cmd: string, args?: object): Promise<T> {
     if (!runDir) throw new AppError(409, 'no_host', 'The browser needs DevDash running on its Linux server.')
-    const r = await requestLine<{ ok: boolean; error?: string } & T>(join(runDir, 'helper.sock'), { cmd }, 180_000)
+    const r = await requestLine<{ ok: boolean; error?: string } & T>(join(runDir, 'helper.sock'), { cmd, args }, 180_000)
     if (!r.ok) throw new AppError(409, 'browser', r.error?.replace(/^refused: /, '') ?? 'The browser could not start.')
     return r
   }
@@ -93,6 +94,19 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
   const dto = (i: Invite) => ({ id: i.id, label: i.label, canControl: i.can_control === 1, expiresAt: i.expires_at, creator: i.creator_name, createdAt: i.created_at, url: link(i) })
 
   return {
+    async screen() {
+      const r = await fetch(NEKO + '/api/room/screen/shot.jpg', {
+        headers: { authorization: 'Bearer ' + apiToken() }, redirect: 'error', signal: AbortSignal.timeout(5000),
+      }).catch(() => null)
+      if (!r?.ok || !r.headers.get('content-type')?.startsWith('image/jpeg'))
+        throw new AppError(409, 'browser_screen', 'Could not capture the screen. Start the shared browser and try again.')
+      lastSeen = Date.now()
+      return readScreen(Buffer.from(await r.arrayBuffer()))
+    },
+    async act(action: { kind: 'open'; url: string } | { kind: 'click'; x: number; y: number } | { kind: 'scroll'; direction: 'up' | 'down' }) {
+      lastSeen = Date.now()
+      await helper('browser-action', action)
+    },
     status: async () => ({ running: (await helper<{ running: boolean }>('browser-status')).running }),
 
     /** Starts it if needed and returns the address that signs this member in (neko reads usr/pwd from the URL, then drops them). */

@@ -1,21 +1,22 @@
 import { Fragment, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { NativeSelect } from '@/components/app/native-select'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { FieldDescription } from '@/components/ui/field'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { HARNESS, type Harness } from './harness'
-import { groupModels, isDefaultModel, modelLabel, type ModelInfo } from './models'
+import { effortLabel, groupModels, isDefaultModel, modelLabel, type ModelInfo } from './models'
 
 /**
  * The model choices inside a dropdown: the agent's own default (naming the model it is), then each family; a family
  * with more than one version expands in place, and the one holding the current choice starts open. `null` means the
  * agent's default.
  */
-export function ModelChoices({ models, harness, value, onChange }: { models: ModelInfo[]; harness: Harness; value: string | null; onChange: (v: string | null) => void }) {
+export function ModelChoices({ models, harness, value, onChange, hideDefault = false }: { models: ModelInfo[]; harness: Harness; value: string | null; onChange: (v: string | null) => void; hideDefault?: boolean }) {
   const { defName, families } = useMemo(() => groupModels(models), [models])
   const current = isDefaultModel(value) ? 'default' : value!
   const holder = families.find((f) => f.rows.some((r) => r.value === current))
@@ -24,12 +25,12 @@ export function ModelChoices({ models, harness, value, onChange }: { models: Mod
 
   return (
     <DropdownMenuRadioGroup value={current} onValueChange={(v) => onChange(v === 'default' ? null : v)}>
-      <DropdownMenuRadioItem value="default" className="items-start">
+      {!hideDefault && <DropdownMenuRadioItem value="default" className="items-start">
         <span className="flex flex-col">
           <span>{HARNESS[harness].label}'s default{defName && <span className="text-muted-foreground"> · {defName}</span>}</span>
           <span className="text-xs text-muted-foreground">{HARNESS[harness].defaultModel}</span>
         </span>
-      </DropdownMenuRadioItem>
+      </DropdownMenuRadioItem>}
       {families.map((f) => f.rows.length === 1 ? (
         <DropdownMenuRadioItem key={f.name} value={f.rows[0]!.value}>
           <span className="flex-1">{f.rows[0]!.displayName}</span>
@@ -86,7 +87,7 @@ export function ModelField({ id, harness, models, value, onChange, onCommit, cus
         </DropdownMenuContent>
       </DropdownMenu>
       {custom && (
-        <Input aria-label="Model ID" className="h-10 font-mono" placeholder={harness === 'claude' ? 'claude-opus-4-1' : 'anthropic/claude-sonnet-4-5'} value={value}
+        <Input aria-label="Model ID" className="h-10 font-mono" placeholder={harness === 'claude' ? 'claude-opus-4-1' : harness === 't3code' ? 'provider/model' : 'anthropic/claude-sonnet-4-5'} value={value}
           onChange={(e) => onChange(e.target.value)} onBlur={onCommit && commit}
           onKeyDown={onCommit && ((e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } })}
           spellCheck={false} autoCapitalize="none" autoFocus />
@@ -95,5 +96,21 @@ export function ModelField({ id, harness, models, value, onChange, onCommit, cus
         {custom ? HARNESS[harness].modelHint : isDefaultModel(value) ? HARNESS[harness].defaultModel : picked?.description ? `${picked.description}${follows ? '. Always its newest version.' : ''}` : note}
       </FieldDescription>
     </>
+  )
+}
+
+export function ThinkingLevelField({ id, levels, value, onChange }: {
+  id: string; levels: string[]; value: string | null; onChange: (value: string | null) => void
+}) {
+  if (!levels.length && !value) return null
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>Thinking level</FieldLabel>
+      <NativeSelect id={id} value={value ?? ''} onChange={(e) => onChange(e.target.value || null)}>
+        <option value="">Default</option>
+        {value && !levels.includes(value) && <option value={value} disabled>{effortLabel(value)} (saved)</option>}
+        {levels.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
+      </NativeSelect>
+    </Field>
   )
 }

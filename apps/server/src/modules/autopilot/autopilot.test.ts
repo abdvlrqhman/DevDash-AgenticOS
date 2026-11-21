@@ -90,6 +90,10 @@ function setup(o: { team?: TeamPort } = {}) {
     onRpc: (m: string, fn: (username: string, params: unknown) => unknown) => void rpcs.set(m, fn),
     request: async (_u: string, req: Record<string, unknown>) => {
       sent.push(req)
+      if (req.op === 'claude.commands') return { commands: [], models: [
+        { value: 'opencode/test/model', supportsSupervisor: true, supportedEffortLevels: ['low', 'ultra'] },
+        { value: 'codex/gpt-chat', supportsSupervisor: false, supportedEffortLevels: ['high'] },
+      ] }
       if (req.op === 'claude.complete' && reply.error) throw new Error(reply.error)
       if (req.op === 'claude.complete') return { text: reply.decision }
       if (req.op === 'claude.usage') return { usage: { plan: 'max', available: true, limits: { five_hour: { utilization: reply.utilization, resets_at: '2026-11-06T05:00:00Z' } } } }
@@ -216,7 +220,7 @@ test('the sweep leaves red questions and approvals for the member, and answers g
 test('the nightly cap and the usage limit stop the supervisor', async () => {
   const t = setup()
   t.autopilot.setEnabled(t.yo, true)
-  t.autopilot.setSettings(t.yo, { nightCap: 2 })
+  await t.autopilot.setSettings(t.yo, { nightCap: 2 })
   for (const id of ['a', 'b', 'c']) t.session(id)
   const did = await t.autopilot.sweep()
   assert.equal(did.length, 2)
@@ -269,6 +273,12 @@ test("a role's reply in a thread the session started is passed on to it, once", 
   const msg = t.db.prepare('insert into team_messages (thread_id, kind, body, author_role_id, author_session_id, author_label) values (?, ?, ?, ?, ?, ?)')
   msg.run(th, 'question', 'Can we ship the pricing page?', null, 's1', 'Session s1')
   msg.run(th, 'reply', 'Yes, but drop the annual toggle.', ceo, null, 'CEO')
+  // A native question must stay with its owner even if a role answered the session's thread.
+  t.db.prepare("update claude_sessions set harness = 't3code', drive = 0, permission_mode = 'bypassPermissions', status = 'waiting' where id = 's1'").run()
+  await t.autopilot.setSettings(t.yo, { t3Sessions: true })
+  await t.autopilot.sweep()
+  assert.equal(t.sends().length, 0)
+  t.quiet('s1')
   const did = await t.autopilot.sweep()
   assert.ok(did.some((d) => d.what === 'relay'))
   assert.match(JSON.stringify(t.sends().at(-1)!.content), /CEO wrote in team thread #\d+ \\"Pricing page\\"[\s\S]*drop the annual toggle/)
@@ -356,7 +366,7 @@ test('approvals: which prompts autopilot may decide, how they read, and the shor
 test('approvals in the sweep: green approved, red declined and parked, guest gate and deploys never, viewers skipped', async () => {
   const t = setup()
   t.autopilot.setEnabled(t.yo, true)
-  t.autopilot.setSettings(t.yo, { approvals: true })
+  await t.autopilot.setSettings(t.yo, { approvals: true })
   const answers = () => t.sent.filter((r) => r.op === 'claude.answer') as { id: string; requestId: string; result: { behavior: string; message?: string; updatedInput?: Record<string, unknown> } }[]
 
   t.session('green', { status: 'waiting' })
@@ -460,7 +470,7 @@ test('obviously red requests: declined on sight, without reading the conversatio
 test('a prompt is handled on its own, soon after it appears: obvious red without a model call, green after a look', async () => {
   const t = setup()
   t.autopilot.setEnabled(t.yo, true)
-  t.autopilot.setSettings(t.yo, { approvals: true })
+  await t.autopilot.setSettings(t.yo, { approvals: true })
   t.session('soon', { status: 'waiting' })
   // Asked 3 minutes ago: past the 2-minute wait.
   t.db.prepare('update claude_sessions set last_activity_at = ? where id = ?').run(nowS - 180, 'soon')
@@ -584,24 +594,43 @@ test("the AI team's asks: only in projects turned on, after 30 minutes, approved
   assert.throws(() => u.autopilot.setTeam(u.yo, 99, true), /No AI team/)
 })
 
-test('supervisor settings: saved, returned in state, and logged', () => {
+test('supervisor settings: saved, returned in state, and logged', async () => {
   const t = setup()
   const s = t.autopilot.state(t.yo)
-  assert.deepEqual(s.supervisor, { harness: 'claude', profile: 'default', model: 'sonnet', dailyCap: 100, modelCallsToday: 0 })
-  t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svProfile: 'default', svModel: 'anthropic/claude-sonnet-4-5', svDailyCap: 50 })
+  assert.deepEqual(s.supervisor, { harness: 'claude', profile: 'default', model: 'sonnet', effort: null, dailyCap: 100, modelCallsToday: 0 })
+  await t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svProfile: 'default', svModel: 'anthropic/claude-sonnet-4-5', svDailyCap: 50 })
   const s2 = t.autopilot.state(t.yo)
   assert.equal(s2.supervisor.harness, 'opencode')
   assert.equal(s2.supervisor.model, 'anthropic/claude-sonnet-4-5')
   assert.equal(s2.supervisor.dailyCap, 50)
   assert.ok(t.autopilot.entries(t.yo, { limit: 100 }).entries.some((e) => /Supervisor: OpenCode/.test(e.what)))
-  assert.throws(() => t.autopilot.setSettings(t.yo, { svHarness: 'unknown' as string }), /Unknown agent/)
-  assert.throws(() => t.autopilot.setSettings(t.yo, { svProfile: '!!!bad' }), /Unknown profile/)
+  await assert.rejects(() => t.autopilot.setSettings(t.yo, { svHarness: 'unknown' as string }), /Unknown agent/)
+  await assert.rejects(() => t.autopilot.setSettings(t.yo, { svProfile: '!!!bad' }), /Unknown profile/)
+})
+
+test('T3 supervisor uses the member’s selected tool-free model, effort and daily cap', async () => {
+  const t = setup()
+  const before = t.autopilot.state(t.yo).supervisor
+  for (const patch of [{ svModel: '' }, { svModel: 'codex/gpt-chat' }, { svModel: 'unknown/model' }, { svModel: 'opencode/test/model', svEffort: 'absent' }, { svModel: 'opencode/test/model', svProfile: 'work' }]) {
+    await assert.rejects(t.autopilot.setSettings(t.yo, { svHarness: 't3code', ...patch }), /T3 Code|supervisor model/)
+    assert.deepEqual(t.autopilot.state(t.yo).supervisor, before)
+  }
+  await t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'opencode/test/model', svEffort: 'ultra', svDailyCap: 1 })
+  t.session('first')
+  t.session('second')
+  t.autopilot.setEnabled(t.yo, true)
+  await t.autopilot.sweep()
+  const calls = t.sent.filter((r) => r.op === 'claude.complete')
+  assert.equal(calls.length, 1)
+  assert.deepEqual([calls[0]!.harness, calls[0]!.profile, calls[0]!.model, calls[0]!.effort], ['t3code', 'default', 'opencode/test/model', 'ultra'])
+  assert.equal(t.autopilot.state(t.yo).supervisor.modelCallsToday, 1)
+  assert.equal(t.autopilot.state(t.bob).supervisor.harness, 'claude')
 })
 
 test('red checks run before any model call, regardless of supervisor settings', async () => {
   const t = setup()
   t.autopilot.setEnabled(t.yo, true)
-  t.autopilot.setSettings(t.yo, { approvals: true, svHarness: 'opencode', svModel: 'gpt-4o' })
+  await t.autopilot.setSettings(t.yo, { approvals: true, svHarness: 'opencode', svModel: 'gpt-4o' })
 
   // obviousRed: declined without a model call
   t.session('red-rm', { status: 'waiting' })
@@ -633,7 +662,7 @@ test('red checks run before any model call, regardless of supervisor settings', 
 test('the OpenCode daily cap pauses the supervisor until the next morning', async () => {
   const t = setup()
   t.autopilot.setEnabled(t.yo, true)
-  t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svModel: 'gpt-4o', svDailyCap: 2 })
+  await t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svModel: 'gpt-4o', svDailyCap: 2 })
   t.session('a')
   t.session('b')
   t.session('c')
@@ -647,7 +676,7 @@ test('the OpenCode daily cap pauses the supervisor until the next morning', asyn
 test('supervisor fallback: resets to defaults when the configured model or profile errors', async () => {
   const t = setup()
   t.autopilot.setEnabled(t.yo, true)
-  t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svProfile: 'gone', svModel: 'bad-model' })
+  await t.autopilot.setSettings(t.yo, { svHarness: 'opencode', svProfile: 'gone', svModel: 'bad-model' })
   t.session('s1')
   t.reply.error = 'Unknown profile: gone'
   await t.autopilot.sweep()
@@ -657,4 +686,100 @@ test('supervisor fallback: resets to defaults when the configured model or profi
   assert.equal(s.supervisor.profile, 'default')
   assert.equal(s.supervisor.model, 'sonnet')
   assert.ok(t.autopilot.entries(t.yo, { limit: 100 }).entries.some((e) => /reset to the default/.test(e.what)))
+})
+
+
+test('full-access T3 workers require enrollment and an owner turn, independently of the supervisor', async () => {
+  const t = setup()
+  t.session('external', { shared: true })
+  t.db.prepare("update claude_sessions set harness = 't3code', permission_mode = 'bypassPermissions', drive = 0 where id = 'external'").run()
+  // Give Bob full access to send through T3 as a named writer.
+  t.claude.setSharing(t.yo, 'external', { audience: 'people', people: [{ id: t.bob.id, canSend: true, full: true }] })
+  t.autopilot.setEnabled(t.yo, true)
+  assert.equal(t.autopilot.toolsHere('yo', 'external'), false)
+  await t.claude.send(t.yo, 'external', 'work on this', [])
+  assert.deepEqual(t.sends().at(-1)!.content, [{ type: 'text', text: 'work on this' }])
+  t.quiet('external')
+  assert.deepEqual(await t.autopilot.sweep(), [])
+  await t.autopilot.setSettings(t.yo, { t3Sessions: true })
+  await t.claude.send(t.yo, 'external', 'next step', [])
+  assert.match(t.sends().at(-1)!.content[0]!.text!, /Autopilot is ON for Yara/)
+  assert.equal(t.sent.filter((r) => r.op === 'claude.send').at(-1)!.t3Autopilot, true)
+  assert.equal(t.autopilot.toolsHere('yo', 'external'), true)
+  assert.equal(await t.rpc('autopilot_log', 'yo', 'external', { tier: 'green', what: 'Reviewed the plan' }), 'Logged.')
+  t.quiet('external')
+  assert.ok((await t.autopilot.sweep()).some((d) => d.what === 'continue'))
+  await t.claude.send(t.bob, 'external', 'read the plan', [])
+  assert.ok(!t.sent.filter((r) => r.op === 'claude.send').at(-1)!.t3Autopilot)
+  assert.equal(t.autopilot.toolsHere('yo', 'external'), false)
+  await assert.rejects(t.rpc('autopilot_rules', 'yo', 'external'), /teammate/)
+  await t.autopilot.setSettings(t.yo, { t3Sessions: false })
+  await t.claude.send(t.yo, 'external', 'next step', [])
+  assert.match(t.sends().at(-1)!.content[0]!.text!, /now OFF/)
+  assert.ok(!t.sent.filter((r) => r.op === 'claude.send').at(-1)!.t3Autopilot)
+  await assert.rejects(t.rpc('autopilot_rules', 'yo', 'external'), /off/)
+})
+
+
+test('a missing T3 supervisor stays selected and the member can retry the review', async () => {
+  const t = setup()
+  await t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'opencode/test/model', svEffort: 'low' })
+  t.autopilot.setEnabled(t.yo, true)
+  t.session('quiet')
+  t.reply.error = 'Unknown provider model'
+  await t.autopilot.sweep()
+  const state = t.autopilot.state(t.yo)
+  assert.equal(state.supervisor.harness, 't3code')
+  assert.equal(state.supervisor.effort, 'low')
+  assert.match(state.inbox[0]!.detail!, /supervisor model/)
+  assert.equal(t.sends().length, 0)
+  t.reply.error = null
+  t.autopilot.dismiss(t.yo, state.inbox[0]!.id)
+  await t.autopilot.sweep()
+  assert.equal(t.sends().length, 1)
+  assert.ok(t.sent.filter((r) => r.op === 'claude.complete').every((r) => r.model === 'opencode/test/model'))
+})
+
+test('disabling T3 enrollment during a supervisor decision also skips later T3 transcripts', async () => {
+  const t = setup()
+  await t.autopilot.setSettings(t.yo, { t3Sessions: true })
+  t.autopilot.setEnabled(t.yo, true)
+  t.session('first')
+  t.session('second')
+  t.db.prepare("update claude_sessions set harness = 't3code', permission_mode = 'bypassPermissions', drive = 0").run()
+  const complete = t.claude.complete
+  t.claude.complete = async (...args) => {
+    await t.autopilot.setSettings(t.yo, { t3Sessions: false })
+    return complete(...args)
+  }
+  assert.deepEqual(await t.autopilot.sweep(), [])
+  assert.equal(t.sent.filter((r) => r.op === 'claude.history').length, 1)
+  assert.equal(t.sends().length, 0)
+})
+
+test('a T3 supervisor cannot answer a team ask after its project is turned off mid-decision', async () => {
+  const answers: string[] = []
+  const t = setup({ team: {
+    projects: () => [{ id: 1, slug: 'shop', name: 'Shop' }],
+    waiting: () => ({ proposals: [], asks: [{ id: 7, title: 'Wording', ask: 'Short or long?', role: 'CEO', project: 'shop',
+      updatedAt: nowS - 3600, lastMessage: 1, url: '/projects/shop/team/threads/7', recent: ['Short or long?'] }] }),
+    approve: async () => {},
+    answer: (_u, _slug, _id, text) => answers.push(text),
+  } })
+  t.db.prepare("insert into projects (id, slug, name, created_by) values (1, 'shop', 'Shop', 1)").run()
+  t.autopilot.setEnabled(t.yo, true)
+  t.autopilot.setTeam(t.yo, 1, true)
+  await t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'opencode/test/model' })
+  const complete = t.claude.complete
+  t.claude.complete = async () => {
+    t.autopilot.setTeam(t.yo, 1, false)
+    return '{"action":"answer","tier":"green","message":"Short","why":"agreed"}'
+  }
+  assert.deepEqual(await t.autopilot.teamAsks(t.yo), [])
+  assert.equal(answers.length, 0)
+  t.claude.complete = complete
+  t.reply.decision = '{"action":"answer","tier":"green","message":"Short","why":"agreed"}'
+  t.autopilot.setTeam(t.yo, 1, true)
+  await t.autopilot.teamAsks(t.yo)
+  assert.equal(answers.length, 1)
 })

@@ -5,6 +5,7 @@ import { HARNESSES, PERMISSION_MODES, type ClaudeService, type Harness } from '.
 import type { NotificationKind } from '../notifications/service.ts'
 import { Create as ProjectCreate } from '../projects/routes.ts'
 import type { ProjectsService } from '../projects/service.ts'
+import { McpChange } from '../skills/routes.ts'
 import type { BuiltInSkill, Review, SkillSummary } from '../skills/routes.ts'
 import { AGENT_NAME, PAGE_TAG, VOICE_TAG } from './prompt.ts'
 import type { FollowService } from './follow.ts'
@@ -100,10 +101,14 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     const same = harness === d.harness
     const mode = str(c.args.permission_mode) ?? d.permission_mode
     if (!(PERMISSION_MODES as readonly string[]).includes(mode)) throw new AppError(400, 'bad_args', `permission_mode is one of: ${PERMISSION_MODES.join(', ')}.`)
+    const model = str(c.args.model) ?? (same ? d.model : null)
+    const effort = harness === 't3code'
+      ? str(c.args.effort) ?? (same && model === d.model ? d.effort : null)
+      : same ? d.effort : null
     const project = str(c.args.project)
     const s = await claude.create(c.user, {
       prompt, images: [], cwd: str(c.args.folder) ?? '~', harness, profile: str(c.args.profile) ?? (same ? d.profile : 'default'),
-      model: str(c.args.model) ?? (same ? d.model : null), effort: same ? d.effort : null, permissionMode: mode, mode: 'chat',
+      model, effort, permissionMode: mode, mode: 'chat',
       project, worktree: project ? c.args.worktree !== false : undefined,
     })
     // Followed from its first message: its whole run reports back here.
@@ -166,13 +171,21 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     if (p.archived) throw new AppError(409, 'archived', `${slug} is archived.`)
     return p.path
   }
+  on('mcp_servers_list', (c) => ask(c, { op: 'mcps.list' }))
+  on('mcp_server_change', (c) => {
+    if (!claude.typedByOwner(c.sessionId)) throw new AppError(403, 'not_asked', 'Ask for this change directly in your Hamasa chat.')
+    const edit = McpChange.safeParse(c.args)
+    if (!edit.success) throw new AppError(400, 'bad_args', 'List the connections and supply a provider, server name, revision and action.')
+    return ask(c, { ...edit.data, op: 'mcps.change' })
+  })
+  on('provider_skill_read', (c) => ask(c, { op: 'skills.providerRead', id: c.args.id }))
   on('skills_list', async (c) => {
     const slug = str(c.args.project)
     if (slug) {
       const r = await ask<{ skills: SkillSummary[] }>(c, { op: 'skills.list', project: checkout(c, slug) })
       return { project: slug, skills: r.skills.map((x) => ({ name: x.name, description: x.description })), note: 'Committed in the project: every session there gets them, for the whole team.' }
     }
-    const r = await ask<{ skills: SkillSummary[]; builtIn: BuiltInSkill[] }>(c, { op: 'skills.list' })
+    const r = await ask<{ skills: SkillSummary[]; discovered?: unknown[]; builtIn: BuiltInSkill[] }>(c, { op: 'skills.list' })
     const plugins = new Map<string, { id: string; skills: number; on: boolean; only_in: string[] | null; claude_keeps_it_to: string | null }>()
     for (const b of r.builtIn) {
       if (!b.plugin) continue
@@ -182,6 +195,7 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     }
     return {
       mine: r.skills.map((x) => ({ name: x.name, description: x.description, on: x.enabled !== false, only_in: x.folders ?? null })),
+      provider_skills: r.discovered ?? [],
       plugins: [...plugins.values()],
       devdash: r.builtIn.filter((b) => b.kind === 'devdash').map((b) => b.name),
       note: 'Their own skills work in Claude Code and OpenCode; plugins only in Claude Code. only_in null = every session.',
@@ -235,11 +249,7 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     return `Opened ${path} wherever ${c.user.name.split(' ')[0]} has DevDash open.`
   })
   // A schedule's run doesn't reach them itself: it hands over to their chat, so there's one place and one notification.
-  on('hand_off', async (c) => {
-    const s = assistant.scheduleOf(c.user, c.sessionId)
-    if (!s) throw new AppError(400, 'bad_args', "hand_off is for a schedule's run; here you're already talking to them.")
-    return assistant.handOff(c.user, s.title, clip(need(c.args.note, 'the note: what you found, and what to tell or ask them'), 2000))
-  })
+  on('hand_off', (c) => assistant.handOff(c.user, c.sessionId, clip(need(c.args.note, 'the note: what you found, and what to tell or ask them'), 2000)))
   on('notify_me', async (c) => {
     if (assistant.scheduleOf(c.user, c.sessionId)) throw new AppError(400, 'use_hand_off', 'From a schedule, use hand_off: you tell them in their chat, and that notifies them.')
     const title = clip(need(c.args.title, 'a title'), 120)

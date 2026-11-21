@@ -48,6 +48,7 @@ export type Launch = {
   title?: string
   /** Added to Claude's system prompt after DevDash's own rules (sessions other features start, e.g. a team role's). */
   instructions?: string | null
+  originKind?: string | null
   /** Limits the session: `tools` = the built-in tools it has, `allow` = the tools that run without asking. */
   toolPolicy?: { tools?: string[]; allow?: string[] } | null
   /** Reach my tailnet: route the session's shell tools (ssh/curl/frida) through the owner's SOCKS/HTTP proxy. */

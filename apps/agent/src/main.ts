@@ -21,6 +21,7 @@ import * as memory from './memory.ts'
 import * as mentions from './mentions.ts'
 import { busy as projectBusy, ops as project } from './project.ts'
 import * as sqlite from './sqlite.ts'
+import * as memberMcps from './member-mcps.ts'
 import * as skills from './skills.ts'
 import * as gh from './gh.ts'
 import { attachPty, hasSession, listSessions, send, tmux, TMUX_CONF } from './tmux.ts'
@@ -101,13 +102,23 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   // The member's cloud storage remote (apps/agent/src/storage.ts): set up when they connect, removed when they disconnect.
   'storage.configure': async (r) => ({ changed: await storage.configure(r.storage as storage.Storage) }),
   'storage.remove': async (r) => ({ changed: await storage.remove(str(r.remote, 'remote'), str(r.tokenUrl, 'tokenUrl')) }),
-  'claude.send': async (r) => (await (acp(r) ? harness : claude).send(launchOf(r), r.content as unknown[], str(r.uuid, 'uuid'), guestFrom(r.guest)), { ok: true }),
+  'claude.send': async (r) => {
+    const l = launchOf(r), content = r.content as unknown[], uuid = str(r.uuid, 'uuid'), guest = guestFrom(r.guest)
+    if (acp(r)) await harness.send(l, content, uuid, guest, r.t3Autopilot === true)
+    else await claude.send(l, content, uuid, guest)
+    return { ok: true }
+  },
   'claude.answer': (r) => (running(str(r.id, 'id')).answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never, { owner: (r.by as { owner?: unknown } | undefined)?.owner === true }), { ok: true }),
   'claude.interrupt': async (r) => (await running(str(r.id, 'id')).interrupt(str(r.id, 'id')), { ok: true }),
   'claude.set': async (r) => (await running(str(r.id, 'id')).setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
+  'claude.selection': async (r) => {
+    if ((r.model !== null && typeof r.model !== 'string') || (r.effort !== null && typeof r.effort !== 'string')) throw new Error('Invalid T3 Code model or effort.')
+    await harness.setSelection(str(r.id, 'id'), r.model as string | null, r.effort as string | null, launchOf(r))
+    return { ok: true }
+  },
   'claude.remote': (r) => (acp(r) ? { url: null } : claude.remote(launchOf(r), r.enabled === true)),
   'claude.complete': async (r) => {
-    const o = { model: typeof r.model === 'string' ? r.model : undefined, system: typeof r.system === 'string' ? r.system : undefined }
+    const o = { model: typeof r.model === 'string' ? r.model : undefined, effort: typeof r.effort === 'string' ? r.effort : undefined, system: typeof r.system === 'string' ? r.system : undefined }
     return { text: harness.isAcp(r.harness) ? await harness.complete(r.harness, str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) : await claude.complete(str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) }
   },
   'claude.files': async (r) => ({ paths: await mentions.search(str(r.cwd, 'cwd'), typeof r.q === 'string' ? r.q : '') }),
@@ -121,13 +132,16 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   // Another agent's subagents are in the transcript itself, nested under their Task step.
   'claude.subagent': (r) => (acp(r) ? { found: false, agentType: null, description: null, messages: [] } : claude.subagent(launchOf(r), str(r.toolUseId, 'toolUseId'))),
   'claude.task.stop': async (r) => (await claude.stopTask(str(r.id, 'id'), str(r.taskId, 'taskId')), { ok: true }),
-  'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile')) : claude.commandsAndModels(str(r.profile, 'profile'))),
+  'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile'), typeof r.model === 'string' ? r.model : undefined, r.supervisor === true) : claude.commandsAndModels(str(r.profile, 'profile'))),
   'claude.title': (r) => (acp(r) ? harness : claude).title(launchOf(r)),
   'claude.rename': async (r) => (await (acp(r) ? harness : claude).rename(launchOf(r), str(r.title, 'title')), { ok: true }),
-  'claude.profiles': async () => ({
-    profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })),
-    agents: await harness.agents().catch(() => []),
-  }),
+  'claude.profiles': async (r) => {
+    if (r.refresh === true) harness.refreshT3()
+    return {
+      profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })),
+      agents: await harness.agents().catch(() => []),
+    }
+  },
   'claude.memory': async (r) => (await memory.set(str(r.profile, 'profile'), r.enabled === true), { ok: true }),
   'claude.memory.health': async () => ({ health: await memory.health(claude.profileNames()) }),
   'claude.memory.restart': async () => (await memory.restart(claude.profileNames()), { ok: true }),
@@ -143,6 +157,10 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   },
   // Skills for the member's agents (skills.ts): theirs in ~/.claude/skills, or a project's .claude/skills.
   'skills.list': (r) => skills.ops.list(r),
+  'skills.providerRead': (r) => skills.ops.providerRead(r),
+  'mcps.list': () => memberMcps.inventory(),
+  'mcps.check': (r) => memberMcps.check(r),
+  'mcps.change': async (r) => { await memberMcps.change(r); return { ok: true } },
   'skills.get': (r) => skills.ops.get(r),
   'skills.write': (r) => skills.ops.write(r),
   'skills.review.github': (r) => skills.ops.reviewGithub(r),

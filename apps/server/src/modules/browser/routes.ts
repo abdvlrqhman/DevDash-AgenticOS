@@ -1,13 +1,15 @@
 import { Hono } from 'hono'
 import { getCookie, setCookie } from 'hono/cookie'
 import { z } from 'zod'
-import { json, rateLimit } from '../../core/http.ts'
+import { AppError, json, rateLimit } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
 import type { BrowserService } from './service.ts'
 
+import type { BrowserChat } from './chat.ts'
+
 const WATCH_COOKIE = 'dd_watch'
 
-export function browserRoutes(browser: BrowserService, mw: ReturnType<typeof authMiddleware>) {
+export function browserRoutes(browser: BrowserService, chat: BrowserChat, mw: ReturnType<typeof authMiddleware>) {
   return new Hono<AuthEnv>()
     // Caddy asks this before every /browser/ request (forward_auth): a signed-in member, or a guest with a live invite.
     .get('/check', (c) => {
@@ -16,13 +18,29 @@ export function browserRoutes(browser: BrowserService, mw: ReturnType<typeof aut
     })
     .use(mw.requireUser)
     .get('/', async (c) => c.json(await browser.status()))
+    .get('/chat/permission', (c) => c.json({ allowed: chat.allowed(c.get('user').id) }))
+    .get('/chat', (c) => c.json(chat.state(c.get('user'))))
+    .post('/chat', json(z.object({ requestId: z.uuid(), message: z.string().trim().min(1).max(3000) })), async (c) => {
+      const user = c.get('user')
+      if (!chat.allowed(user.id)) throw new AppError(403, 'browser_chat_denied', 'An admin must grant you Browser chat access.')
+      if (!(await browser.status()).running) throw new AppError(409, 'browser_stopped', 'Start the shared browser first.')
+      const { requestId, message } = c.req.valid('json')
+      chat.send(user, requestId, message)
+      return c.json({ ok: true }, 202)
+    })
+    .get('/chat/access', mw.requireAdmin, (c) => c.json({ members: chat.members() }))
+    .put('/chat/access/:id', mw.requireAdmin, json(z.object({ allowed: z.boolean() })), (c) => {
+      chat.setAccess(c.get('user'), Number(c.req.param('id')), c.req.valid('json').allowed)
+      return c.json({ ok: true })
+    })
     .post('/open', async (c) => c.json({ url: await browser.open(c.get('user')) }))
     .post('/heartbeat', (c) => {
       browser.heartbeat()
       return c.json({ ok: true })
     })
-    .post('/stop', async (c) => {
+    .post('/stop', mw.requireAdmin, async (c) => {
       console.log(`browser stopped by ${c.get('user').username}`)
+      chat.cancel()
       await browser.stop()
       return c.json({ ok: true })
     })

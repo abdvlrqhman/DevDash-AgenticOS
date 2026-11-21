@@ -17,6 +17,7 @@ import { confirmAction } from '@/components/app/confirm'
 import { api, unwrap } from '@/lib/api'
 import { ErrorAlert } from '../auth/LoginPage'
 import { relativeTime } from '../claude/data'
+import { agentName, harnessOf } from '../claude/harness'
 import { Prose } from '../claude/Prose'
 import { nextLabel, roleQuery, useLiveTeam, type RoleDetail } from './data'
 import { RoleDialog } from './RoleDialog'
@@ -71,7 +72,7 @@ function RoleView({ slug, id }: { slug: string; id: number }) {
   return (
     <>
       <PageHeader back={`/projects/${slug}`} title={r.name}
-        description={<span className="truncate">{project.name}{r.harness === 'opencode' ? `, on OpenCode${r.model ? ` (${r.model})` : ''}` : r.model ? `, on ${r.model[0]!.toUpperCase()}${r.model.slice(1)}` : ''}</span>}
+        description={<span className="truncate">{project.name}{harnessOf(r) !== 'claude' ? `, on ${agentName(r.harness)}${r.model ? ` (${r.model})` : ''}` : r.model ? `, on ${r.model[0]!.toUpperCase()}${r.model.slice(1)}` : ''}</span>}
         actions={<>
           <Button size="sm" variant="outline" disabled={!!r.shift || shift.isPending} onClick={() => shift.mutate()}>
             {shift.isPending ? <Spinner /> : <Play />}<span className="hidden sm:inline">Run a shift</span>
