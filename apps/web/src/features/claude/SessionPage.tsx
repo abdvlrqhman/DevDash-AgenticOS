@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { Archive, ArchiveRestore, AudioLines, Bot, Check, ChevronDown, Circle, Ellipsis, FileCode, Gauge, LoaderCircle, MessageSquare, Network, Pencil, Plus, Share2, SquareTerminal, Shield, ShieldOff, SlidersHorizontal, X, Zap } from 'lucide-react'
+import { Archive, ArchiveRestore, AudioLines, Bot, Check, ChevronDown, ChevronRight, Circle, Ellipsis, FileCode, Gauge, LoaderCircle, MessageSquare, Network, Pencil, Plus, Share2, SquareTerminal, Shield, ShieldOff, SlidersHorizontal, X, Zap } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { Orb } from '@/components/app/orb'
@@ -46,6 +46,7 @@ import { buildTranscript, lastTurnSpoken, mergePage, mergeRaw, sessionFacts, tou
 import { SubagentCtx } from './ToolSteps'
 import { useTopic } from '@/lib/live'
 import { usePageTitle } from '@/lib/title'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 import { useMarkSeen } from '../assistant/AssistantDock'
 import { ReplyProse } from '../voice/ReplyProse'
@@ -539,14 +540,41 @@ export type Updater = (v: {
 }) => void
 
 /** Model, effort and permissions, changed in place from the chip row. `compact`: always just the icon (a small window). */
-export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Session; disabled: boolean; isOwner: boolean; onUpdate: Updater; compact?: boolean }) {
-  const agent = HARNESS[harnessOf(s)]
-  const models = useQuery({ ...commandsQuery(s.profile, harnessOf(s)), enabled: !disabled }).data?.models as ModelInfo[] | undefined
-  const list: ModelInfo[] = models?.length ? models : harnessOf(s) === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
-  // Claude Code's levels for its model; another agent's are its model's own, reported while the session runs.
-  const levels = harnessOf(s) === 'claude' ? effortLevels(list, s.model, EFFORTS) : s.efforts ?? []
+/** Desktop uses a portaled submenu; narrow mobile viewports expand inline so choices never clip off-screen. */
+function MenuSection({ mobile, open, onToggle, label, disabled, contentClassName, children }: {
+  mobile: boolean; open: boolean; onToggle: () => void; label: string; disabled?: boolean; contentClassName?: string; children: ReactNode
+}) {
+  if (!mobile) {
+    return (
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger disabled={disabled}>{label}</DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className={contentClassName}>{children}</DropdownMenuSubContent>
+      </DropdownMenuSub>
+    )
+  }
   return (
-    <DropdownMenu>
+    <>
+      <DropdownMenuItem disabled={disabled} aria-expanded={open} onSelect={(e) => { e.preventDefault(); onToggle() }}>
+        <ChevronRight className={cn('text-muted-foreground transition-transform duration-150', open && 'rotate-90')} />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      </DropdownMenuItem>
+      {open && <div className="mb-1 ml-2 border-l pl-1">{children}</div>}
+    </>
+  )
+}
+
+export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Session; disabled: boolean; isOwner: boolean; onUpdate: Updater; compact?: boolean }) {
+  const harness = harnessOf(s)
+  const agent = HARNESS[harness]
+  const mobile = useIsMobile()
+  const [section, setSection] = useState<'permissions' | 'effort' | 'advisor' | null>(null)
+  const models = useQuery({ ...commandsQuery(s.profile, harness), enabled: !disabled }).data?.models as ModelInfo[] | undefined
+  const list: ModelInfo[] = models?.length ? models : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
+  // Claude Code's levels for its model; another agent's are its model's own, reported while the session runs.
+  const levels = harness === 'claude' ? effortLevels(list, s.model, EFFORTS) : s.efforts ?? []
+  const toggle = (name: 'permissions' | 'effort' | 'advisor') => setSection((cur) => (cur === name ? null : name))
+  return (
+    <DropdownMenu onOpenChange={(open) => { if (!open) setSection(null) }}>
       <DropdownMenuTrigger asChild disabled={disabled}>
         {compact ? (
           <Button variant="ghost" size="icon" className="shrink-0" aria-label="Model, effort and permissions" title="Model, effort and permissions"><SlidersHorizontal /></Button>
@@ -562,44 +590,42 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
         </Button>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] w-72 overflow-y-auto">
+      <DropdownMenuContent align={mobile ? 'end' : 'start'} className="max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] w-[min(18rem,calc(100vw-1rem))] overflow-y-auto">
         <DropdownMenuLabel>Model</DropdownMenuLabel>
         <ModelChoices models={list} harness={harnessOf(s)} value={s.model} onChange={(v) => onUpdate({ model: v })} />
         <DropdownMenuSeparator />
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Permissions: {modeLabel(s.permissionMode)}</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-72">
-            <DropdownMenuRadioGroup value={s.permissionMode} onValueChange={(v) => onUpdate({ permissionMode: v as PermissionMode })}>
-              {PERMISSION_MODES.filter((p) => agent.modes.includes(p.value)).map((p) => (
-                <DropdownMenuRadioItem key={p.value} value={p.value} className="items-start">
-                  <span className="flex flex-col"><span>{p.label}</span><span className="text-xs text-muted-foreground">{p.hint}</span></span>
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        {agent.effort && (harnessOf(s) === 'claude' || levels.length > 0) && <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Effort: {s.effort ?? 'auto'}</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
+        <MenuSection mobile={mobile} open={section === 'permissions'} onToggle={() => toggle('permissions')}
+          label={`Permissions: ${modeLabel(s.permissionMode)}`} contentClassName="w-72">
+          <DropdownMenuRadioGroup value={s.permissionMode} onValueChange={(v) => onUpdate({ permissionMode: v as PermissionMode })}>
+            {PERMISSION_MODES.filter((p) => agent.modes.includes(p.value)).map((p) => (
+              <DropdownMenuRadioItem key={p.value} value={p.value} className="items-start">
+                <span className="flex flex-col"><span>{p.label}</span><span className="text-xs text-muted-foreground">{p.hint}</span></span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </MenuSection>
+        {agent.effort && (harness === 'claude' || levels.length > 0) && (
+          <MenuSection mobile={mobile} open={section === 'effort'} onToggle={() => toggle('effort')}
+            label={`Effort: ${s.effort ?? 'auto'}`}>
             <DropdownMenuRadioGroup value={s.effort ?? ''} onValueChange={(v) => onUpdate({ effort: (v || null) as Effort | null })}>
               <DropdownMenuRadioItem value="">Auto</DropdownMenuRadioItem>
               {levels.map((e) => <DropdownMenuRadioItem key={e} value={e} className="capitalize">{e}</DropdownMenuRadioItem>)}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <p className="px-2 py-1.5 text-xs text-muted-foreground">{s.mode === 'cli' ? 'In the CLI it applies when the CLI next opens; use /effort to change it right away.' : 'Applies right away, even mid-answer.'}</p>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>}
-        {agent.advisor && <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Advisor: {s.advisorModel ? (ADVISOR_LABEL[s.advisorModel as keyof typeof ADVISOR_LABEL] ?? s.advisorModel) : 'off'}</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-72">
+          </MenuSection>
+        )}
+        {agent.advisor && (
+          <MenuSection mobile={mobile} open={section === 'advisor'} onToggle={() => toggle('advisor')}
+            label={`Advisor: ${s.advisorModel ? (ADVISOR_LABEL[s.advisorModel as keyof typeof ADVISOR_LABEL] ?? s.advisorModel) : 'off'}`} contentClassName="w-72">
             <DropdownMenuRadioGroup value={s.advisorModel ?? ''} onValueChange={(v) => onUpdate({ advisorModel: (v || null) as 'sonnet' | 'opus' | 'fable' | null })}>
               <DropdownMenuRadioItem value="">Off</DropdownMenuRadioItem>
               {(Object.keys(ADVISOR_LABEL) as (keyof typeof ADVISOR_LABEL)[]).map((m) => <DropdownMenuRadioItem key={m} value={m}>{ADVISOR_LABEL[m]}</DropdownMenuRadioItem>)}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <p className="px-2 py-1.5 text-xs text-muted-foreground">{ADVISOR_HINT}</p>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>}
+          </MenuSection>
+        )}
         {(agent.fast || (agent.remote && isOwner)) && <DropdownMenuSeparator />}
         {agent.fast && <SwitchRow label="Fast mode" checked={s.fastMode} onChange={(v) => onUpdate({ fastMode: v })}
           hint={`${FAST_HINT}${s.mode === 'cli' ? ' In the CLI it applies when the CLI next opens; /fast switches it now.' : ''}`} />}
