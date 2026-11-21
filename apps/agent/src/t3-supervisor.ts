@@ -117,14 +117,26 @@ type OpenCodeWorker = {
   stopped: Promise<void>
   disposed: boolean
   idleTimer?: ReturnType<typeof setTimeout>
-  queue: Promise<void>
   dispose: (force?: boolean) => Promise<void>
   disposeSync: () => void
   touch: (idleMs: number) => void
 }
 
+let workerGeneration = 0
+
+function serializeSlot<T>(queues: Map<string, Promise<void>>, slot: string, fn: () => Promise<T>): Promise<T> {
+  const prev = queues.get(slot) ?? Promise.resolve()
+  let release!: () => void
+  const next = new Promise<void>((r) => { release = r })
+  queues.set(slot, next)
+  return prev.then(fn).finally(() => {
+    release()
+    if (queues.get(slot) === next) queues.delete(slot)
+  })
+}
+
 const openCodePool = new Map<string, OpenCodeWorker>()
-const openCodeStarting = new Map<string, { key: string; promise: Promise<OpenCodeWorker> }>()
+const openCodeQueues = new Map<string, Promise<void>>()
 
 function openCodeWorkerKey(bin: string): { slot: string; key: string } {
   const st = statSync(bin)
@@ -172,7 +184,7 @@ async function startOpenCodeWorker(bin: string, slot: string, key: string, start
 
   let disposePromise: Promise<void> | undefined
   const worker: OpenCodeWorker = {
-    key, slot, endpoint: '', headers, models: [], modelsAt: 0, child, ended, stopped, disposed: false, queue: Promise.resolve(),
+    key, slot, endpoint: '', headers, models: [], modelsAt: 0, child, ended, stopped, disposed: false,
     dispose: async (force = false) => {
       if (disposePromise) return disposePromise
       worker.disposed = true
@@ -248,34 +260,18 @@ async function withOpenCode<T>(
   const requestMs = timeouts.requestMs ?? 155_000
   const idleMs = timeouts.idleMs ?? DEFAULT_IDLE_MS
 
-  const acquireWorker = async (): Promise<OpenCodeWorker> => {
+  return serializeSlot(openCodeQueues, slot, async () => {
+    const startedGen = workerGeneration
     let w = openCodePool.get(slot)
     if (w && (w.key !== key || w.disposed || w.ended.signal.aborted)) {
       openCodePool.delete(slot)
       await w.dispose(false)
       w = undefined
     }
-    if (w) return w
-    if (idleMs > 0) {
-      const inflight = openCodeStarting.get(slot)
-      if (inflight && inflight.key === key) {
-        const started = await inflight.promise
-        if (!started.disposed && !started.ended.signal.aborted) return started
-      }
-      const promise = startOpenCodeWorker(bin, slot, key, startupMs, idleMs).then((started) => {
-        if (!started.disposed) openCodePool.set(slot, started)
-        return started
-      }).finally(() => {
-        if (openCodeStarting.get(slot)?.promise === promise) openCodeStarting.delete(slot)
-      })
-      openCodeStarting.set(slot, { key, promise })
-      return await promise
+    if (!w) {
+      w = await startOpenCodeWorker(bin, slot, key, startupMs, idleMs)
+      if (idleMs > 0 && !w.disposed && workerGeneration === startedGen) openCodePool.set(slot, w)
     }
-    return startOpenCodeWorker(bin, slot, key, startupMs, idleMs)
-  }
-  let worker = await acquireWorker()
-
-  const runOnWorker = async (w: OpenCodeWorker): Promise<T> => {
     if (w.disposed || w.ended.signal.aborted) throw new Error('The T3 OpenCode supervisor stopped.')
     if (w.idleTimer) { clearTimeout(w.idleTimer); w.idleTimer = undefined }
     const signal = AbortSignal.any([w.ended.signal, AbortSignal.timeout(requestMs)])
@@ -297,24 +293,13 @@ async function withOpenCode<T>(
       }
       return await use(request, w.models, markPoisoned)
     } finally {
-      if (poisoned || w.disposed || w.ended.signal.aborted || idleMs <= 0) {
+      if (poisoned || w.disposed || w.ended.signal.aborted || idleMs <= 0 || workerGeneration !== startedGen) {
         await w.dispose(true)
       } else {
         w.touch(idleMs)
       }
     }
-  }
-
-  const previous = worker.queue
-  let release!: () => void
-  worker.queue = new Promise<void>((r) => { release = r })
-  await previous
-  try {
-    if (worker.disposed || worker.ended.signal.aborted) worker = await acquireWorker()
-    return await runOnWorker(worker)
-  } finally {
-    release()
-  }
+  })
 }
 type AntigravityCallHooks = {
   onText: (text: string) => void
@@ -332,7 +317,6 @@ type AntigravityWorker = {
   stopped: Promise<void>
   disposed: boolean
   idleTimer?: ReturnType<typeof setTimeout>
-  queue: Promise<void>
   hooks?: AntigravityCallHooks
   dispose: (force?: boolean) => Promise<void>
   disposeSync: () => void
@@ -340,7 +324,7 @@ type AntigravityWorker = {
 }
 
 const antigravityPool = new Map<string, AntigravityWorker>()
-const antigravityStarting = new Map<string, { key: string; promise: Promise<AntigravityWorker> }>()
+const antigravityQueues = new Map<string, Promise<void>>()
 
 function antigravityWorkerKey(provider: Omit<AntigravityProvider, 'key'>, uid: number) {
   assertMemberOwnedRegularFile(provider.tokenPath, uid)
@@ -351,8 +335,8 @@ function antigravityWorkerKey(provider: Omit<AntigravityProvider, 'key'>, uid: n
     const st = lstatSync(provider.settingsPath)
     settingsSig = `${provider.settingsPath}:${st.mtimeMs}:${st.size}`
   }
-  const slot = `${provider.bin} ${provider.harnessPath ?? ''} ${provider.tokenPath}`
-  const key = `${slot} ${provider.authMethod} ${tokenStat.mtimeMs}:${tokenStat.size} ${settingsSig}`
+  const slot = `${provider.bin}\0${provider.harnessPath ?? ''}\0${provider.tokenPath}`
+  const key = `${slot}\0${provider.authMethod}\0${tokenStat.mtimeMs}:${tokenStat.size}\0${settingsSig}`
   return { slot, key }
 }
 
@@ -410,31 +394,32 @@ async function startAntigravityWorker(
     child.once('close', () => { ended.abort(new Error('The T3 Antigravity supervisor stopped.')); resolve() })
   })
 
+  let disposePromise: Promise<void> | undefined
   const worker: AntigravityWorker = {
-    key, slot, workDir, runDir, child, ended, stopped, disposed: false, queue: Promise.resolve(),
+    key, slot, workDir, runDir, child, ended, stopped, disposed: false,
     rpc: undefined as unknown as Rpc,
     dispose: async (force = false) => {
-      if (worker.disposed) {
-        await stopped
-        return
-      }
+      if (disposePromise) return disposePromise
       worker.disposed = true
       if (worker.idleTimer) { clearTimeout(worker.idleTimer); worker.idleTimer = undefined }
       if (antigravityPool.get(slot) === worker) antigravityPool.delete(slot)
-      try { child.stdin.end() } catch { /* already closed */ }
-      if (force) {
-        killGroup(child.pid, 'SIGKILL')
-        child.kill('SIGKILL')
-      } else {
-        killGroup(child.pid, 'SIGTERM')
-        child.kill('SIGTERM')
-      }
-      const kill = setTimeout(() => { killGroup(child.pid, 'SIGKILL'); child.kill('SIGKILL') }, 1500)
-      kill.unref?.()
-      try { await stopped } finally {
-        clearTimeout(kill)
-        rmSync(runDir, { recursive: true, force: true })
-      }
+      disposePromise = (async () => {
+        try { child.stdin.end() } catch { /* already closed */ }
+        if (force) {
+          killGroup(child.pid, 'SIGKILL')
+          child.kill('SIGKILL')
+        } else {
+          killGroup(child.pid, 'SIGTERM')
+          child.kill('SIGTERM')
+        }
+        const kill = setTimeout(() => { killGroup(child.pid, 'SIGKILL'); child.kill('SIGKILL') }, 1500)
+        kill.unref?.()
+        try { await stopped } finally {
+          clearTimeout(kill)
+          rmSync(runDir, { recursive: true, force: true })
+        }
+      })()
+      return disposePromise
     },
     disposeSync: () => {
       worker.disposed = true
@@ -506,6 +491,7 @@ async function startAntigravityWorker(
 }
 
 export async function disposeSupervisorWorkers(): Promise<void> {
+  workerGeneration++
   const agy = [...antigravityPool.values()]
   const oc = [...openCodePool.values()]
   antigravityPool.clear()
@@ -543,34 +529,19 @@ async function withAntigravity<T>(
   const requestMs = timeouts.requestMs ?? 155_000
   const idleMs = timeouts.idleMs ?? DEFAULT_IDLE_MS
 
-  const acquireWorker = async (): Promise<AntigravityWorker> => {
+  // Serialize per slot so worker startup, replacement, and session/update hooks never interleave.
+  return serializeSlot(antigravityQueues, slot, async () => {
+    const startedGen = workerGeneration
     let w = antigravityPool.get(slot)
     if (w && (w.key !== key || w.disposed || w.rpc.closed || w.ended.signal.aborted)) {
       antigravityPool.delete(slot)
       await w.dispose(false)
       w = undefined
     }
-    if (w) return w
-    if (idleMs > 0) {
-      const inflight = antigravityStarting.get(slot)
-      if (inflight && inflight.key === key) {
-        const started = await inflight.promise
-        if (!started.disposed && !started.rpc.closed && !started.ended.signal.aborted) return started
-      }
-      const promise = startAntigravityWorker(provider, slot, key, startupMs, idleMs).then((started) => {
-        if (!started.disposed) antigravityPool.set(slot, started)
-        return started
-      }).finally(() => {
-        if (antigravityStarting.get(slot)?.promise === promise) antigravityStarting.delete(slot)
-      })
-      antigravityStarting.set(slot, { key, promise })
-      return await promise
+    if (!w) {
+      w = await startAntigravityWorker(provider, slot, key, startupMs, idleMs)
+      if (idleMs > 0 && !w.disposed && workerGeneration === startedGen) antigravityPool.set(slot, w)
     }
-    return startAntigravityWorker(provider, slot, key, startupMs, idleMs)
-  }
-  let worker = await acquireWorker()
-
-  const runOnWorker = async (w: AntigravityWorker): Promise<T> => {
     if (w.disposed || w.rpc.closed || w.ended.signal.aborted) {
       throw new Error('The T3 Antigravity supervisor stopped.')
     }
@@ -616,7 +587,7 @@ async function withAntigravity<T>(
       })
     } finally {
       w.hooks = undefined
-      if (poisoned || toolViolation || w.disposed || w.rpc.closed || w.ended.signal.aborted || idleMs <= 0) {
+      if (poisoned || toolViolation || w.disposed || w.rpc.closed || w.ended.signal.aborted || idleMs <= 0 || workerGeneration !== startedGen) {
         await w.dispose(true)
       } else {
         if (sessionId) {
@@ -626,21 +597,7 @@ async function withAntigravity<T>(
         else w.touch(idleMs)
       }
     }
-  }
-
-  // Serialize calls on the warm worker so session/update chunks never interleave.
-  const previous = worker.queue
-  let release!: () => void
-  worker.queue = new Promise<void>((r) => { release = r })
-  await previous
-  try {
-    if (worker.disposed || worker.rpc.closed || worker.ended.signal.aborted) {
-      worker = await acquireWorker()
-    }
-    return await runOnWorker(worker)
-  } finally {
-    release()
-  }
+  })
 }
 
 export async function supervisorModels(provider: SupervisorProvider, timeouts?: SupervisorTimeouts): Promise<SupervisorModel[]> {

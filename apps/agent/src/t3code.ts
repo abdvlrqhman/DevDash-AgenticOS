@@ -273,10 +273,16 @@ function readOpenCodeDiskCache(bin: string): SupervisorModel[] | undefined {
     const file = openCodeDiskCachePath()
     const st = lstatSync(file)
     if (!st.isFile() || st.isSymbolicLink() || st.uid !== uid || (st.mode & 0o077) !== 0) return undefined
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { key?: string; at?: number; models?: SupervisorModel[] }
-    if (parsed.key !== expectedKey || typeof parsed.at !== 'number' || Date.now() - parsed.at >= CATALOG_TTL_MS) return undefined
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { key?: string; at?: number; models?: unknown }
+    const now = Date.now()
+    if (parsed.key !== expectedKey || typeof parsed.at !== 'number' || parsed.at > now + 5_000 || now - parsed.at >= CATALOG_TTL_MS) return undefined
     if (!Array.isArray(parsed.models)) return undefined
-    return parsed.models
+    const valid = parsed.models.every((m) =>
+      m && typeof m === 'object' && typeof (m as SupervisorModel).id === 'string'
+      && Array.isArray((m as SupervisorModel).variants) && (m as SupervisorModel).variants.every((v) => typeof v === 'string')
+      && ((m as SupervisorModel).displayName === undefined || typeof (m as SupervisorModel).displayName === 'string')
+    )
+    return valid ? parsed.models as SupervisorModel[] : undefined
   } catch {
     return undefined
   }
@@ -290,8 +296,13 @@ function writeOpenCodeDiskCache(bin: string, models: SupervisorModel[]): void {
     const file = openCodeDiskCachePath()
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
     const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
-    writeFileSync(tmp, JSON.stringify({ key, at: Date.now(), models }), { mode: 0o600 })
-    renameSync(tmp, file)
+    try {
+      writeFileSync(tmp, JSON.stringify({ key, at: Date.now(), models }), { mode: 0o600, flag: 'wx' })
+      renameSync(tmp, file)
+    } catch (err) {
+      try { unlinkSync(tmp) } catch { /* ignore */ }
+      throw err
+    }
   } catch { /* best-effort cache */ }
 }
 

@@ -298,3 +298,30 @@ test('clearing browser chat only removes the caller’s own history and rejects 
   assert.equal((await request('/chat', admin, 'DELETE')).status, 200)
   assert.equal(chat.state(admin).turns.length, 0)
 })
+
+test('browser URL filter blocks internal/IPv6-private hosts while allowing public fc*/fd* domains and rejects control chars in type', async () => {
+  const replies = [
+    JSON.stringify({ kind: 'open', url: 'https://fdic.gov/' }),
+    JSON.stringify({ kind: 'done', reply: 'Opened FDIC.' }),
+    JSON.stringify({ kind: 'open', url: 'http://devdash-browser:8080/' }),
+    JSON.stringify({ kind: 'open', url: 'http://localhost./' }),
+    JSON.stringify({ kind: 'open', url: 'http://[fe90::1]/' }),
+    JSON.stringify({ kind: 'type', text: 'bad\tcontrol' }),
+  ]
+  const { admin, chat, actions } = fixture(async () => replies.shift() ?? JSON.stringify({ kind: 'done', reply: 'ok' }))
+
+  chat.send(admin, crypto.randomUUID(), 'Open FDIC')
+  assert.equal(await finish(chat, admin), 'Opened FDIC.')
+  assert.deepEqual(actions, [{ kind: 'open', url: 'https://fdic.gov/' }])
+
+  for (const [label, expected] of [
+    ['Open docker service', /local or private URL/],
+    ['Open localhost with dot', /local or private URL/],
+    ['Open ipv6 link-local', /local or private URL/],
+    ['Type control char', /unreadable browser instruction/],
+  ] as const) {
+    chat.send(admin, crypto.randomUUID(), label)
+    assert.match((await finish(chat, admin)) ?? '', expected)
+  }
+  assert.equal(actions.length, 1)
+})

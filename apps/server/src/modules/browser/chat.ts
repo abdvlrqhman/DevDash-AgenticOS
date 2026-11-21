@@ -23,7 +23,7 @@ const Step = z.discriminatedUnion('kind', [
   }).refine((v) => (v.x !== undefined && v.y !== undefined) || !!v.label, 'click needs x/y or label'),
   z.object({
     kind: z.literal('type'),
-    text: z.string().min(1).max(500).refine((s) => !/[\r\n\0]/.test(s), 'single line only'),
+    text: z.string().min(1).max(500).refine((s) => !/[\x00-\x1f\x7f]/.test(s), 'printable single line only'),
     x: z.number().int().min(0).max(1599).optional(),
     y: z.number().int().min(100).max(899).optional(),
     label: z.string().trim().min(1).max(160).optional(),
@@ -86,14 +86,20 @@ function parseStep(raw: string) {
 }
 
 function isPrivateHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, '')
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '')
   if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true
-  if (h === '::1' || h === '::' || h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('::ffff:')) return true
+  if (h.includes(':')) {
+    // IPv6 loopback, unspecified, IPv4-mapped, link-local (fe80::/10), unique-local (fc00::/7)
+    return h === '::1' || h === '::' || h.startsWith('::ffff:') || /^fe[89ab][0-9a-f]:/.test(h) || /^f[cd][0-9a-f]{2}:/.test(h)
+  }
   const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
-  if (!m) return false
-  const [a, b] = [Number(m[1]), Number(m[2])]
-  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])]
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+  }
+  // Single-label hostnames (e.g. Docker container or intranet service names) are treated as private.
+  return !h.includes('.')
 }
 
 function resolveOpenUrl(raw: string, message: string): URL {
