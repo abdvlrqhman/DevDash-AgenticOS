@@ -4,12 +4,17 @@ import { z } from 'zod'
 import { AppError, json, rateLimit } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
 import type { BrowserService } from './service.ts'
-
 import type { BrowserChat } from './chat.ts'
 
 const WATCH_COOKIE = 'dd_watch'
 
 export function browserRoutes(browser: BrowserService, chat: BrowserChat, mw: ReturnType<typeof authMiddleware>) {
+  const runIdParam = (raw: string) => {
+    const id = Number(raw)
+    if (!Number.isInteger(id) || id < 1) throw new AppError(400, 'bad_run_id', 'Invalid browser run id.')
+    return id
+  }
+
   return new Hono<AuthEnv>()
     // Caddy asks this before every /browser/ request (forward_auth): a signed-in member, or a guest with a live invite.
     .get('/check', (c) => {
@@ -20,6 +25,7 @@ export function browserRoutes(browser: BrowserService, chat: BrowserChat, mw: Re
     .get('/', async (c) => c.json(await browser.status()))
     .get('/chat/permission', (c) => c.json({ allowed: chat.allowed(c.get('user').id) }))
     .get('/chat', (c) => c.json(chat.state(c.get('user'))))
+    .get('/chat/runs', (c) => c.json({ runs: chat.runs(c.get('user')) }))
     .delete('/chat', (c) => {
       chat.clear(c.get('user'))
       return c.json({ ok: true })
@@ -28,13 +34,41 @@ export function browserRoutes(browser: BrowserService, chat: BrowserChat, mw: Re
       chat.stop(c.get('user'))
       return c.json({ ok: true })
     })
-    .post('/chat', json(z.object({ requestId: z.uuid(), message: z.string().trim().min(1).max(3000) })), async (c) => {
+    .post('/chat/runs/:id/pause', (c) => {
+      chat.pause(c.get('user'), runIdParam(c.req.param('id')))
+      return c.json({ ok: true })
+    })
+    .post('/chat/runs/:id/resume', json(z.object({
+      message: z.string().trim().max(2000).optional(),
+      extraSteps: z.number().int().min(10).max(50).optional(),
+    }).optional()), async (c) => {
       const user = c.get('user')
       if (!chat.allowed(user.id)) throw new AppError(403, 'browser_chat_denied', 'An admin must grant you Browser chat access.')
       if (!(await browser.status()).running) throw new AppError(409, 'browser_stopped', 'Start the shared browser first.')
-      const { requestId, message } = c.req.valid('json')
-      chat.send(user, requestId, message)
-      return c.json({ ok: true }, 202)
+      const body = c.req.valid('json')
+      const res = chat.resume(user, runIdParam(c.req.param('id')), body?.message, body?.extraSteps)
+      return c.json({ ok: true, ...res }, 202)
+    })
+    .post('/chat/runs/:id/steer', json(z.object({ message: z.string().trim().min(1).max(2000) })), (c) => {
+      chat.steer(c.get('user'), runIdParam(c.req.param('id')), c.req.valid('json').message)
+      return c.json({ ok: true })
+    })
+    .post('/chat/runs/:id/stop', (c) => {
+      chat.stop(c.get('user'), runIdParam(c.req.param('id')))
+      return c.json({ ok: true })
+    })
+    .post('/chat', json(z.object({
+      requestId: z.uuid(),
+      message: z.string().trim().min(1).max(3000),
+      maxSteps: z.number().int().min(1).max(100).optional(),
+      maxRuntimeMin: z.number().int().min(1).max(30).optional(),
+    })), async (c) => {
+      const user = c.get('user')
+      if (!chat.allowed(user.id)) throw new AppError(403, 'browser_chat_denied', 'An admin must grant you Browser chat access.')
+      if (!(await browser.status()).running) throw new AppError(409, 'browser_stopped', 'Start the shared browser first.')
+      const { requestId, message, maxSteps, maxRuntimeMin } = c.req.valid('json')
+      const res = chat.send(user, requestId, message, { maxSteps, maxRuntimeMin })
+      return c.json({ ok: true, ...(res ?? {}) }, 202)
     })
     .get('/chat/settings', mw.requireAdmin, (c) => c.json({ model: chat.settings(c.get('user')) }))
     .put('/chat/settings', mw.requireAdmin, json(z.object({

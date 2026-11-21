@@ -325,3 +325,270 @@ test('browser URL filter blocks internal/IPv6-private hosts while allowing publi
   }
   assert.equal(actions.length, 1)
 })
+
+import { computeObservationFingerprint, type BrowserObservation, type CdpAction, type CdpActionResult } from './cdp.ts'
+
+function cdpFixture(
+  respond: (prompt: string, stepIndex: number) => Promise<string>,
+  opts?: {
+    observe?: (step: number) => BrowserObservation
+    actCdp?: (a: CdpAction) => Promise<CdpActionResult>
+  },
+) {
+  const db = openDb(':memory:')
+  const users = ['admin', 'member'].map((role, i) => {
+    const user = { id: i + 1, name: 'User' + i, username: 'user' + i, email: i + '@test', role } as User
+    db.prepare("insert into users(id,name,username,email,role,password_hash,totp_secret) values (?,?,?,?,?,'x','x')")
+      .run(user.id, user.name, user.username, user.email, user.role)
+    return user
+  })
+  const [admin, member] = users as [User, User]
+  const cdpActions: CdpAction[] = []
+  const prompts: string[] = []
+  const notifications: { userId: number; kind: string; title: string; body?: string }[] = []
+  let callIndex = 0
+  let obsCount = 0
+  let curUrl = 'https://example.com/'
+
+  const defaultObs = (idx: number): BrowserObservation => {
+    const base = {
+      url: curUrl,
+      title: `Page ${idx}`,
+      elements: [
+        { ref: 'e1', role: 'textbox', name: 'Search', tag: 'input', value: '' },
+        { ref: 'e2', role: 'button', name: 'Next', tag: 'button' },
+        { ref: 'e9', role: 'button', name: 'Place order ($199)', tag: 'button' },
+      ],
+      text: `Content for step ${idx}`,
+    }
+    return {
+      mode: 'cdp',
+      ...base,
+      tabs: [{ index: 0, id: 't1', title: base.title, url: base.url, active: true }],
+      scroll: { y: 0, maxY: 600, height: 900 },
+      fingerprint: computeObservationFingerprint(base),
+    }
+  }
+
+  const chat = browserChat(
+    db,
+    {
+      screen: async () => DEFAULT_SCREEN,
+      act: async () => {},
+      observe: async () => (opts?.observe ? opts.observe(obsCount++) : defaultObs(obsCount++)),
+      actCdp: async (a) => {
+        cdpActions.push(a)
+        if (opts?.actCdp) return opts.actCdp(a)
+        if (a.kind === 'navigate') curUrl = a.url
+        if (a.kind === 'extract_text') return { summary: 'Extracted 18 chars', url: curUrl, extractedText: 'Extracted fact 42.' }
+        return { summary: `Ran ${a.kind}`, url: curUrl }
+      },
+    },
+    async (_owner, _system, prompt) => {
+      prompts.push(prompt)
+      return respond(prompt, callIndex++)
+    },
+    async () => ({ models: DEFAULT_T3_MODELS }),
+    (userId, kind, n) => { notifications.push({ userId, kind, title: n.title, body: n.body }) },
+  )
+
+  const mw = authMiddleware({
+    sessionUser: (token?: string) => {
+      const user = users.find((u) => u.username === token)
+      return user ? { user } : null
+    },
+  } as AuthService)
+  const app = browserRoutes({ status: async () => ({ running: true }) } as BrowserService, chat, mw)
+  app.onError((e, c) => c.text(e.message, e instanceof AppError ? e.status : 500))
+  const request = (path: string, user?: User, method = 'GET', body?: object) => app.request(path, {
+    method,
+    headers: { 'content-type': 'application/json', cookie: user ? '__Host-devdash=' + user.username : '' },
+    ...(body && { body: JSON.stringify(body) }),
+  })
+  return { db, admin, member, chat, cdpActions, prompts, notifications, request }
+}
+
+async function waitIdle(chat: ReturnType<typeof browserChat>, user: User) {
+  for (let i = 0; i < 600 && chat.state(user).busy; i++) await delay(10)
+  assert.equal(chat.state(user).busy, false)
+  return chat.state(user)
+}
+
+test('persistent CDP run executes >8 steps with plan, scratchpad, extract_text, and completion notification', async () => {
+  const { admin, chat, cdpActions, prompts, notifications } = cdpFixture(async (_prompt, idx) => {
+    if (idx < 10) {
+      return JSON.stringify({
+        kind: idx === 5 ? 'extract_text' : 'navigate',
+        ...(idx === 5 ? { selector: 'main', note: 'Specs' } : { url: `https://example.com/page-${idx + 1}` }),
+        plan: [
+          { id: 'p1', text: 'Collect 10 pages', status: idx < 9 ? 'in_progress' : 'done' },
+        ],
+        scratchpadAppend: idx === 0 ? 'Started research' : undefined,
+      })
+    }
+    return JSON.stringify({ kind: 'done', reply: 'Collected all 10 pages.' })
+  })
+
+  chat.send(admin, crypto.randomUUID(), 'Research 10 pages', { maxSteps: 25 })
+  const st = await waitIdle(chat, admin)
+  assert.equal(st.run?.status, 'completed')
+  assert.equal(st.run?.stepCount, 10)
+  assert.equal(st.run?.result, 'Collected all 10 pages.')
+  assert.equal(st.run?.plan[0]?.status, 'done')
+  assert.match(st.run?.scratchpad ?? '', /Started research/)
+  assert.match(st.run?.scratchpad ?? '', /\[Specs\] Extracted fact 42\./)
+  assert.equal(cdpActions.length, 10)
+  // Working memory is carried into later prompts
+  assert.match(prompts.at(-1) ?? '', /Extracted fact 42/)
+  assert.ok(notifications.some((n) => n.kind === 'finished' && n.userId === admin.id))
+})
+
+test('ask_user pauses run in waiting_user, notifies user, and resumes cleanly with steering message', async () => {
+  const replies = [
+    JSON.stringify({
+      kind: 'ask_user',
+      category: 'login',
+      reason: 'Please sign in to Example in the shared browser, then click Continue.',
+      plan: [{ id: 'p1', text: 'Sign in', status: 'in_progress' }],
+      scratchpadAppend: 'Reached login screen',
+    }),
+    JSON.stringify({
+      kind: 'done',
+      reply: 'Finished after login.',
+      plan: [{ id: 'p1', text: 'Sign in', status: 'done' }],
+    }),
+  ]
+  const { admin, chat, prompts, notifications, request } = cdpFixture(async () => replies.shift()!)
+
+  const post = await request('/chat', admin, 'POST', { requestId: crypto.randomUUID(), message: 'Check my orders' })
+  assert.equal(post.status, 202)
+  const paused = await waitIdle(chat, admin)
+  assert.equal(paused.run?.status, 'waiting_user')
+  assert.equal(paused.run?.canResume, true)
+  assert.match(paused.run?.pauseReason ?? '', /sign in/i)
+  assert.ok(notifications.some((n) => n.kind === 'needs_you'))
+
+  const res = await request(`/chat/runs/${paused.run!.id}/resume`, admin, 'POST', { message: 'Signed in now' })
+  assert.equal(res.status, 202)
+  const done = await waitIdle(chat, admin)
+  assert.equal(done.run?.status, 'completed')
+  assert.equal(done.run?.result, 'Finished after login.')
+  assert.match(prompts[1] ?? '', /Signed in now/)
+  assert.match(prompts[1] ?? '', /Reached login screen/)
+})
+
+test('destructive action guardrail pauses before clicking Place order until user confirms', async () => {
+  const replies = [
+    JSON.stringify({ kind: 'click', ref: 'e9' }),
+    JSON.stringify({ kind: 'click', ref: 'e9' }),
+    JSON.stringify({ kind: 'done', reply: 'Order placed.' }),
+  ]
+  const { admin, chat, cdpActions, notifications, request } = cdpFixture(async () => replies.shift()!)
+
+  chat.send(admin, crypto.randomUUID(), 'Finish checkout')
+  const blocked = await waitIdle(chat, admin)
+  assert.equal(blocked.run?.status, 'waiting_user')
+  assert.match(blocked.run?.pauseReason ?? '', /Confirmation required.*Place order/i)
+  assert.equal(cdpActions.length, 0)
+  assert.ok(notifications.some((n) => n.kind === 'needs_you'))
+
+  await request(`/chat/runs/${blocked.run!.id}/resume`, admin, 'POST', { message: 'confirm' })
+  const done = await waitIdle(chat, admin)
+  assert.equal(done.run?.status, 'completed')
+  assert.equal(cdpActions.length, 1)
+  assert.equal(cdpActions[0]?.kind, 'click')
+})
+
+test('stall detection injects warning and auto-pauses into waiting_user on repeated identical actions', async () => {
+  const staticObs: BrowserObservation = {
+    mode: 'cdp',
+    url: 'https://example.com/stuck',
+    title: 'Stuck',
+    tabs: [{ index: 0, id: 't1', title: 'Stuck', url: 'https://example.com/stuck', active: true }],
+    elements: [{ ref: 'e2', role: 'button', name: 'Next', tag: 'button' }],
+    text: 'Nothing changes',
+    scroll: { y: 0, maxY: 0, height: 900 },
+    fingerprint: 'same-fingerprint',
+  }
+  const { admin, chat, prompts, notifications } = cdpFixture(
+    async () => JSON.stringify({ kind: 'click', ref: 'e2' }),
+    { observe: () => staticObs },
+  )
+
+  chat.send(admin, crypto.randomUUID(), 'Click next until done')
+  const st = await waitIdle(chat, admin)
+  assert.equal(st.run?.status, 'waiting_user')
+  assert.match(st.run?.pauseReason ?? '', /repeated the same step/i)
+  assert.match(prompts.at(-1) ?? '', /stall_warning.*did not change/i)
+  assert.ok(notifications.some((n) => n.kind === 'needs_you'))
+})
+
+test('pause, mid-run steer, and server restart recovery keep runs resumable', async () => {
+  const gate = Promise.withResolvers<string>()
+  let step = 0
+  const { db, admin, chat, request } = cdpFixture(async () => {
+    if (step++ === 0) return gate.promise
+    return JSON.stringify({ kind: 'done', reply: 'Resumed and completed.' })
+  })
+
+  await request('/chat', admin, 'POST', { requestId: crypto.randomUUID(), message: 'Long task' })
+  const runId = chat.state(admin).run!.id
+  assert.equal((await request(`/chat/runs/${runId}/steer`, admin, 'POST', { message: 'Focus on section 2' })).status, 200)
+  assert.equal((await request(`/chat/runs/${runId}/pause`, admin, 'POST')).status, 200)
+  gate.resolve(JSON.stringify({ kind: 'scroll', direction: 'down' }))
+  const paused = await waitIdle(chat, admin)
+  assert.equal(paused.run?.status, 'paused')
+  assert.deepEqual(paused.run?.pendingSteering, ['Focus on section 2'])
+
+  // Simulate server restart while a run row was left running in SQLite
+  db.prepare("update browser_runs set status = 'running', pause_reason = null where id = ?").run(runId)
+  const recovered = browserChat(
+    db,
+    {
+      screen: async () => DEFAULT_SCREEN,
+      act: async () => {},
+      observe: async () => ({
+        mode: 'cdp', url: 'https://example.com/', title: 'Recovered',
+        tabs: [{ index: 0, id: 't1', title: 'Recovered', url: 'https://example.com/', active: true }],
+        elements: [], text: 'Recovered page', fingerprint: 'rec',
+      }),
+      actCdp: async () => ({ summary: 'ok', url: 'https://example.com/' }),
+    },
+    async () => JSON.stringify({ kind: 'done', reply: 'Finished after server restart.' }),
+  )
+  const afterBoot = recovered.state(admin)
+  assert.equal(afterBoot.run?.status, 'paused')
+  assert.match(afterBoot.run?.pauseReason ?? '', /server restarted/i)
+  assert.equal(afterBoot.run?.canResume, true)
+
+  recovered.resume(admin, runId)
+  const completed = await waitIdle(recovered, admin)
+  assert.equal(completed.run?.status, 'completed')
+  assert.equal(completed.run?.result, 'Finished after server restart.')
+})
+
+test('post-navigation redirect to private metadata IP navigates away to about:blank and blocks run', async () => {
+  let redirected = false
+  const { admin, chat, cdpActions } = cdpFixture(
+    async () => JSON.stringify({ kind: 'navigate', url: 'https://public.example.com/start' }),
+    {
+      observe: (n) => {
+        const url = n > 0 && redirected ? 'http://169.254.169.254/latest/meta-data/' : 'https://public.example.com/'
+        return {
+          mode: 'cdp', url, title: 'Page', tabs: [{ index: 0, id: 't1', title: 'Page', url, active: true }],
+          elements: [], text: 'Page', fingerprint: `fp-${n}`,
+        }
+      },
+      actCdp: async (a) => {
+        if (a.kind === 'navigate' && a.url.includes('public.example.com')) redirected = true
+        return { summary: `Navigated ${a.kind}`, url: a.kind === 'navigate' ? a.url : undefined }
+      },
+    },
+  )
+
+  chat.send(admin, crypto.randomUUID(), 'Visit https://public.example.com/start')
+  const st = await waitIdle(chat, admin)
+  assert.equal(st.run?.status, 'failed')
+  assert.match(st.run?.result ?? '', /local or private URL/i)
+  assert.ok(cdpActions.some((a) => a.kind === 'navigate' && a.url === 'about:blank'))
+})

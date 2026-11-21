@@ -4,7 +4,14 @@ import type { Db } from '../../core/db.ts'
 import { newToken, seal, sha256, unseal } from '../../core/crypto.ts'
 import { AppError } from '../../core/http.ts'
 import { requestLine } from '../../core/unix.ts'
-import { readScreen } from './screen.ts'
+import {
+  computeObservationFingerprint,
+  createCdpClient,
+  type BrowserObservation,
+  type CdpAction,
+  type CdpActionResult,
+} from './cdp.ts'
+import { readScreen, screenSnapshot } from './screen.ts'
 import type { User } from '../auth/repo.ts'
 
 const NEKO = 'http://127.0.0.1:8090/browser'
@@ -12,10 +19,17 @@ const IDLE_MS = 30 * 60_000
 const ENV_FILE = '/etc/devdash/browser.env'
 
 type Invite = { id: number; token_hash: string; token_sealed: string; label: string; can_control: number; expires_at: number; created_by: number; created_at: number; revoked_at: number | null; creator_name: string }
+type LegacyAction =
+  | { kind: 'open'; url: string }
+  | { kind: 'click'; x: number; y: number }
+  | { kind: 'scroll'; direction: 'up' | 'down' }
+  | { kind: 'type'; text: string }
+  | { kind: 'press'; key: string }
 
 /**
  * The team's shared remote browser: one Chromium (neko) in Docker, started by the root helper when someone opens it
- * and stopped after 30 minutes with nobody watching. Logins and cookies persist in a volume between runs.
+ * and stopped after 30 minutes with nobody watching (and no autonomous browser run active). Logins and cookies persist
+ * in a volume between runs.
  *
  * Members join under their own name with full control; invite links let guests watch only. Caddy lets a request reach
  * /browser/ only with a DevDash session or a live invite cookie, so a revoked or expired invite stops working at once.
@@ -29,6 +43,7 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
     revoke: db.prepare('update browser_invites set revoked_at = unixepoch() where id = ?'),
   }
   let lastSeen = 0
+  let busyCheck: (() => boolean) | undefined
 
   /** The bundled neko client only signs in with neko's multiuser mode: members get the admin profile, guests the watch-only one. */
   const secret = (key: 'NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD' | 'NEKO_MEMBER_MULTIUSER_USER_PASSWORD') => {
@@ -46,6 +61,8 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
   const apiToken = () => {
     try { return readFileSync(ENV_FILE, 'utf8').match(/^NEKO_SESSION_API_TOKEN=(.+)$/m)?.[1] ?? '' } catch { return '' }
   }
+
+  const cdp = createCdpClient({ token: apiToken })
 
   async function start() {
     await helper('browser-start')
@@ -72,10 +89,14 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
     }
   }
 
-  // Every minute: an unwatched browser stops after 30 minutes.
+  // Every minute: an unwatched browser stops after 30 minutes, unless a browser agent run is actively executing.
   setInterval(() => {
     void (async () => {
       if (!runDir) return
+      if (busyCheck?.()) {
+        lastSeen = Date.now()
+        return
+      }
       if (!lastSeen) {
         const r = await helper<{ running: boolean }>('browser-status').catch(() => ({ running: false }))
         if (r.running) lastSeen = Date.now() // found running (e.g. after a DevDash restart): start counting
@@ -90,22 +111,86 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
     })()
   }, 60_000).unref()
 
+  async function captureScreen() {
+    const r = await fetch(NEKO + '/api/room/screen/shot.jpg', {
+      headers: { authorization: 'Bearer ' + apiToken() }, redirect: 'error', signal: AbortSignal.timeout(5000),
+    }).catch(() => null)
+    if (!r?.ok || !r.headers.get('content-type')?.startsWith('image/jpeg'))
+      throw new AppError(409, 'browser_screen', 'Could not capture the screen. Start the shared browser and try again.')
+    lastSeen = Date.now()
+    return readScreen(Buffer.from(await r.arrayBuffer()))
+  }
+
+  async function legacyAct(action: LegacyAction) {
+    lastSeen = Date.now()
+    await helper('browser-action', action)
+  }
+
   const link = (i: Invite) => `${origin}/watch/${unseal(masterKey, i.token_sealed, `browser-invite:${i.id}`).toString()}`
   const dto = (i: Invite) => ({ id: i.id, label: i.label, canControl: i.can_control === 1, expiresAt: i.expires_at, creator: i.creator_name, createdAt: i.created_at, url: link(i) })
 
   return {
-    async screen() {
-      const r = await fetch(NEKO + '/api/room/screen/shot.jpg', {
-        headers: { authorization: 'Bearer ' + apiToken() }, redirect: 'error', signal: AbortSignal.timeout(5000),
-      }).catch(() => null)
-      if (!r?.ok || !r.headers.get('content-type')?.startsWith('image/jpeg'))
-        throw new AppError(409, 'browser_screen', 'Could not capture the screen. Start the shared browser and try again.')
-      lastSeen = Date.now()
-      return readScreen(Buffer.from(await r.arrayBuffer()))
+    setBusyCheck(fn: () => boolean) {
+      busyCheck = fn
     },
-    async act(action: { kind: 'open'; url: string } | { kind: 'click'; x: number; y: number } | { kind: 'scroll'; direction: 'up' | 'down' } | { kind: 'type'; text: string } | { kind: 'press'; key: string }) {
+    screen: captureScreen,
+    act: legacyAct,
+    async observe(options?: { includeScreenshot?: boolean }): Promise<BrowserObservation> {
+      try {
+        const obs = await cdp.observe(options)
+        lastSeen = Date.now()
+        return obs
+      } catch {
+        // Fallback to OCR when running against an older container without CDP enabled.
+        const lines = await captureScreen()
+        const text = screenSnapshot(lines)
+        return {
+          mode: 'ocr',
+          url: '',
+          title: '',
+          tabs: [],
+          elements: [],
+          text,
+          fingerprint: computeObservationFingerprint({ url: '', title: '', elements: [], text }),
+        }
+      }
+    },
+    async actCdp(action: CdpAction, signal?: AbortSignal): Promise<CdpActionResult> {
       lastSeen = Date.now()
-      await helper('browser-action', action)
+      try {
+        return await cdp.act(action, signal)
+      } catch (err) {
+        if (await cdp.available()) {
+          throw new AppError(409, 'browser_action', err instanceof Error ? err.message : 'The shared browser could not carry out the action.')
+        }
+        // Fallback to legacy xdotool helper when CDP is unavailable.
+        if (action.kind === 'navigate') {
+          await legacyAct({ kind: 'open', url: action.url })
+          return { summary: `Opened ${action.url}`, url: action.url }
+        }
+        if (action.kind === 'click' && action.x !== undefined && action.y !== undefined) {
+          await legacyAct({ kind: 'click', x: action.x, y: action.y })
+          return { summary: `Clicked (${action.x}, ${action.y})` }
+        }
+        if (action.kind === 'fill') {
+          if (action.x !== undefined && action.y !== undefined) {
+            await legacyAct({ kind: 'click', x: action.x, y: action.y })
+          }
+          const singleLine = action.text.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 500)
+          if (singleLine) await legacyAct({ kind: 'type', text: singleLine })
+          if (action.submit) await legacyAct({ kind: 'press', key: 'Enter' })
+          return { summary: `Typed “${singleLine.slice(0, 60)}”${action.submit ? ' and pressed Enter' : ''}` }
+        }
+        if (action.kind === 'press') {
+          await legacyAct({ kind: 'press', key: action.key })
+          return { summary: `Pressed ${action.key}` }
+        }
+        if (action.kind === 'scroll') {
+          await legacyAct({ kind: 'scroll', direction: action.direction })
+          return { summary: `Scrolled ${action.direction}` }
+        }
+        throw new AppError(409, 'browser_cdp', 'This browser action requires CDP. Restart the shared browser to enable full DOM control.')
+      }
     },
     status: async () => ({ running: (await helper<{ running: boolean }>('browser-status')).running }),
 
