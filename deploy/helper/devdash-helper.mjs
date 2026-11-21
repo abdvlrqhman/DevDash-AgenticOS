@@ -49,6 +49,44 @@ const BROWSER_ENV = '/etc/devdash/browser.env'
 const BROWSER_PROFILE_DIR = '/home/neko/.devdash-chromium'
 const BROWSER_CHROMIUM_CONF = '/etc/devdash/browser-chromium.conf'
 const BROWSER_CDP_PROXY = '/etc/devdash/browser-cdp-proxy.py'
+const BROWSER_POLICIES = '/etc/devdash/browser-policies.json'
+// Neko's image ships DeveloperToolsAvailability: 2, which blocks CDP page attachment with "Not allowed".
+// Keep all of Neko's sandbox policies intact and set DeveloperToolsAvailability: 0 so loopback CDP works
+// on regular pages while force-installed extensions remain protected.
+const BROWSER_POLICIES_TEXT = JSON.stringify({
+  AutofillAddressEnabled: false,
+  AutofillCreditCardEnabled: false,
+  BrowserSignin: 0,
+  DefaultNotificationsSetting: 2,
+  DeveloperToolsAvailability: 0,
+  EditBookmarksEnabled: false,
+  FullscreenAllowed: true,
+  IncognitoModeAvailability: 1,
+  SyncDisabled: true,
+  AutoplayAllowed: true,
+  BrowserAddPersonEnabled: false,
+  BrowserGuestModeEnabled: false,
+  DefaultPopupsSetting: 2,
+  DownloadRestrictions: 3,
+  VideoCaptureAllowed: true,
+  AllowFileSelectionDialogs: false,
+  PromptForDownloadLocation: false,
+  BookmarkBarEnabled: false,
+  PasswordManagerEnabled: false,
+  BrowserLabsEnabled: false,
+  CommandLineFlagSecurityWarningsEnabled: false,
+  URLAllowlist: ['file:///home/neko/Downloads'],
+  URLBlocklist: ['file://*', 'chrome://policy'],
+  ExtensionInstallForcelist: [
+    'ddkjiahejlhfcafbddmgiahcphecmpfh;https://clients2.google.com/service/update2/crx',
+    'mnjggcdmjocbbbhaepdhchncahnbgone;https://clients2.google.com/service/update2/crx',
+  ],
+  ExtensionInstallAllowlist: [
+    'ddkjiahejlhfcafbddmgiahcphecmpfh',
+    'mnjggcdmjocbbbhaepdhchncahnbgone',
+  ],
+  ExtensionInstallBlocklist: ['*'],
+}, null, 2) + '\n'
 const BROWSER_CHROMIUM_CONF_TEXT = `[program:chromium]
 environment=HOME="/home/%(ENV_USER)s",USER="%(ENV_USER)s",DISPLAY="%(ENV_DISPLAY)s"
 command=/usr/bin/chromium
@@ -96,7 +134,7 @@ stdout_logfile_maxbytes=10MB
 stdout_logfile_backups=2
 redirect_stderr=true
 `
-const BROWSER_CDP_PROXY_TEXT = `#!/usr/bin/env python3
+const BROWSER_CDP_PROXY_TEXT = String.raw`#!/usr/bin/env python3
 import hmac, os, socket, threading
 
 TOKEN = os.environ.get("NEKO_SESSION_API_TOKEN", "")
@@ -327,6 +365,7 @@ const commands = {
     run('docker', ['run', '--rm', '--entrypoint', 'sh', '-v', 'devdash-browser-profile:/p', image, '-c', 'rm -f /p/Singleton*'], { allowFail: true })
     writeFileSync(BROWSER_CHROMIUM_CONF, BROWSER_CHROMIUM_CONF_TEXT, { mode: 0o644 })
     writeFileSync(BROWSER_CDP_PROXY, BROWSER_CDP_PROXY_TEXT, { mode: 0o755 })
+    writeFileSync(BROWSER_POLICIES, BROWSER_POLICIES_TEXT, { mode: 0o644 })
     run('docker', ['run', '-d', '--name', BROWSER, '--hostname', 'devdash-browser', '--restart', 'no', '--shm-size=2g', '--memory=2500m',
       '-p', '127.0.0.1:8090:8080', '-p', '127.0.0.1:9222:9223', '-p', '59000:59000/udp', '-p', '59001:59001/tcp',
       '--health-cmd', 'wget -q -O /dev/null http://127.0.0.1:8080/browser/health',
@@ -338,6 +377,7 @@ const commands = {
       '-v', `devdash-browser-profile:${BROWSER_PROFILE_DIR}`,
       '-v', `${BROWSER_CHROMIUM_CONF}:/etc/neko/supervisord/chromium.conf:ro`,
       '-v', `${BROWSER_CDP_PROXY}:/etc/neko/devdash-cdp-proxy.py:ro`,
+      '-v', `${BROWSER_POLICIES}:/etc/chromium/policies/managed/policies.json:ro`,
       image])
     return {}
   },

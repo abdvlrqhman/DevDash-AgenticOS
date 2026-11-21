@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const HELPER = new URL('./devdash-helper.mjs', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
@@ -191,4 +194,25 @@ test('browser actions run as neko with fixed operations and validated arguments'
     { kind: 'type', text: '' }, { kind: 'type', text: 'a\nb' }, { kind: 'type', text: 'a\tb' }, { kind: 'type', text: 'a\x1bb' }, { kind: 'press', key: 'Alt+F4' }, { kind: 'press', key: 'toString' }]) {
     assert.equal(invoke(args).ok, false)
   }
+})
+
+test('embedded browser CDP proxy compiles cleanly and Chromium policies preserve sandbox with CDP enabled', () => {
+  const src = readFileSync(HELPER, 'utf8')
+  const pyMatch = src.match(/const BROWSER_CDP_PROXY_TEXT = String\.raw`([\s\S]*?)`\n/)
+  assert.ok(pyMatch, 'BROWSER_CDP_PROXY_TEXT should use String.raw')
+  const dir = mkdtempSync(join(tmpdir(), 'dd-cdp-py-'))
+  try {
+    const tmpPy = join(dir, 'proxy.py')
+    writeFileSync(tmpPy, pyMatch[1])
+    execFileSync('python3', ['-m', 'py_compile', tmpPy])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+  assert.match(pyMatch[1], /hmac\.compare_digest/, 'CDP proxy uses constant-time token compare')
+  assert.match(pyMatch[1], /x-devdash-cdp-token/, 'CDP proxy requires X-DevDash-CDP-Token')
+
+  assert.match(src, /DeveloperToolsAvailability:\s*0/, 'policy enables CDP on regular pages while protecting force-installed extensions')
+  assert.match(src, /URLBlocklist:\s*\['file:\/\/\*',\s*'chrome:\/\/policy'\]/, 'policy keeps file:// blocklist')
+  assert.match(src, /DownloadRestrictions:\s*3/, 'policy keeps download restrictions')
+  assert.match(src, /AllowFileSelectionDialogs:\s*false/, 'policy keeps file dialog restriction')
 })
