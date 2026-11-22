@@ -256,16 +256,179 @@ Guidelines:
 - If a page is still loading or blank, use wait_for instead of giving up.
 - Only return "done" once the user's goal is truly fulfilled (or clearly explain why it cannot be completed).`
 
+const KIND_ALIASES: Record<string, string> = {
+  goto: 'navigate',
+  answer: 'done',
+  finish: 'done',
+  final: 'done',
+  waitfor: 'wait_for',
+  switchtab: 'switch_tab',
+  closetab: 'close_tab',
+  extracttext: 'extract_text',
+  askuser: 'ask_user',
+}
+
+const KEY_LOOKUP = new Map<string, (typeof KEYS)[number]>(
+  KEYS.map((k) => [k.toLowerCase(), k]),
+)
+KEY_LOOKUP.set('return', 'Enter')
+KEY_LOOKUP.set('esc', 'Escape')
+KEY_LOOKUP.set('refresh', 'Reload')
+
+function normalizePlanStatus(raw: unknown): PlanItem['status'] {
+  const s = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+  if (s === 'done' || s === 'completed' || s === 'complete' || s === 'finished') return 'done'
+  if (s === 'in_progress' || s === 'in-progress' || s === 'active' || s === 'running' || s === 'working' || s === 'current') return 'in_progress'
+  if (s === 'skipped' || s === 'skip' || s === 'cancelled' || s === 'canceled') return 'skipped'
+  return 'pending'
+}
+
+function normalizeRawStep(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const obj: Record<string, unknown> = { ...(input as Record<string, unknown>) }
+
+  // Accept "action" as alias for "kind" and normalize harmless kind aliases.
+  if (typeof obj.kind !== 'string' && typeof obj.action === 'string') {
+    obj.kind = obj.action
+  }
+  if (typeof obj.kind === 'string') {
+    const trimmed = obj.kind.trim()
+    obj.kind = KIND_ALIASES[trimmed.toLowerCase()] ?? trimmed
+  }
+
+  // Safely truncate metadata strings so an overly wordy thought/summary never kills a multi-step run.
+  if (typeof obj.thought === 'string') obj.thought = obj.thought.trim().slice(0, 240)
+  if (typeof obj.reply === 'string') obj.reply = obj.reply.slice(0, 8000)
+  if (typeof obj.scratchpad === 'string') obj.scratchpad = obj.scratchpad.slice(0, MAX_SCRATCHPAD_CHARS)
+  if (typeof obj.scratchpadAppend === 'string') obj.scratchpadAppend = obj.scratchpadAppend.slice(0, 4000)
+  if (typeof obj.note === 'string') obj.note = obj.note.trim().slice(0, 120)
+  if (typeof obj.reason === 'string') obj.reason = obj.reason.trim().slice(0, 600)
+  if (typeof obj.label === 'string') obj.label = obj.label.trim().slice(0, 160)
+  if (typeof obj.selector === 'string') obj.selector = obj.selector.trim().slice(0, 200)
+  if (obj.kind === 'wait_for' && typeof obj.text === 'string') obj.text = obj.text.trim().slice(0, 200)
+  if (obj.kind === 'ask_user' && typeof obj.category === 'string') {
+    const c = obj.category.trim().toLowerCase()
+    obj.category = ['login', 'captcha', '2fa', 'payment', 'confirm', 'other'].includes(c) ? c : 'other'
+  }
+
+  // Normalize plan items (drop empty entries, truncate long text, map status synonyms).
+  if (Array.isArray(obj.plan)) {
+    obj.plan = obj.plan.slice(0, 20).flatMap((item, idx) => {
+      if (!item || typeof item !== 'object') return []
+      const rec = item as Record<string, unknown>
+      const text = typeof rec.text === 'string' ? rec.text.trim().slice(0, 200) : ''
+      if (!text) return []
+      const rawId = rec.id !== undefined && rec.id !== null ? String(rec.id).trim() : String(idx + 1)
+      return [{ id: (rawId || String(idx + 1)).slice(0, 32), text, status: normalizePlanStatus(rec.status) }]
+    })
+  }
+
+  // Strip optional brackets around element refs (e.g. "[e12]" -> "e12").
+  if (typeof obj.ref === 'string') {
+    const cleanedRef = obj.ref.trim().replace(/^\[|\]$/g, '').trim()
+    if (cleanedRef) obj.ref = cleanedRef
+    else delete obj.ref
+  }
+
+  // Clamp non-security numeric budgets (ms, scroll amount) and round float coordinates/indices.
+  if (typeof obj.ms === 'number' && Number.isFinite(obj.ms)) {
+    obj.ms = Math.min(15000, Math.max(200, Math.round(obj.ms)))
+  }
+  if (typeof obj.amount === 'number' && Number.isFinite(obj.amount)) {
+    obj.amount = Math.min(2400, Math.max(100, Math.round(obj.amount)))
+  }
+  if (typeof obj.x === 'number' && Number.isFinite(obj.x)) obj.x = Math.round(obj.x)
+  if (typeof obj.y === 'number' && Number.isFinite(obj.y)) obj.y = Math.round(obj.y)
+  if (typeof obj.index === 'number' && Number.isFinite(obj.index)) obj.index = Math.round(obj.index)
+
+  if (obj.kind === 'press' && typeof obj.key === 'string') {
+    const mapped = KEY_LOOKUP.get(obj.key.trim().toLowerCase())
+    if (mapped) obj.key = mapped
+  }
+  if (obj.kind === 'scroll' && typeof obj.direction === 'string') {
+    obj.direction = obj.direction.trim().toLowerCase()
+  }
+
+  // Drop empty optional string fields that models sometimes emit as "".
+  for (const optKey of ['selector', 'label', 'note', 'thought', 'scratchpadAppend'] as const) {
+    if (obj[optKey] === '') delete obj[optKey]
+  }
+  if (obj.kind === 'wait_for' && obj.text === '') delete obj.text
+
+  return obj
+}
+
+function extractJsonCandidates(raw: string): string[] {
+  const candidates: string[] = []
+  const seen = new Set<string>()
+  const push = (s: string) => {
+    const t = s.trim()
+    if (t && !seen.has(t)) { seen.add(t); candidates.push(t) }
+  }
+
+  // 1. Prefer fenced JSON blocks if present.
+  for (const m of raw.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)) {
+    if (m[1]) push(m[1])
+  }
+
+  // 2. Scan balanced top-level { ... } objects respecting JSON string literals and escapes.
+  let depth = 0
+  let start = -1
+  let inStr = false
+  let escaped = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!
+    if (inStr) {
+      if (escaped) { escaped = false }
+      else if (ch === '\\') { escaped = true }
+      else if (ch === '"') { inStr = false }
+      continue
+    }
+    if (ch === '"') { inStr = true; continue }
+    if (ch === '{') {
+      if (depth === 0) start = i
+      depth++
+    } else if (ch === '}' && depth > 0) {
+      depth--
+      if (depth === 0 && start !== -1) {
+        push(raw.slice(start, i + 1))
+        start = -1
+      }
+    }
+  }
+
+  // 3. Fallback to outermost braces.
+  const first = raw.indexOf('{')
+  const last = raw.lastIndexOf('}')
+  if (first !== -1 && last > first) push(raw.slice(first, last + 1))
+  return candidates
+}
+
+function parseStepWithReason(raw: string): { ok: true; data: ParsedStep } | { ok: false; reason: string; retryable: boolean } {
+  const candidates = extractJsonCandidates(raw)
+  if (!candidates.length) return { ok: false, reason: 'no JSON object found', retryable: true }
+  let lastReason = 'invalid JSON syntax'
+  let retryable = true
+  for (const candidate of candidates) {
+    let parsed: unknown
+    try { parsed = JSON.parse(candidate) }
+    catch { continue }
+    const r = Step.safeParse(normalizeRawStep(parsed))
+    if (r.success) return { ok: true, data: r.data }
+    const hardSecurity = r.error.issues.some((i) =>
+      i.message.includes('printable single line') ||
+      i.message.includes('no control characters') ||
+      (i.path[0] === 'y' && i.code === 'too_small'),
+    )
+    if (hardSecurity) retryable = false
+    lastReason = r.error.issues.slice(0, 2).map((i) => `${i.path.join('.') || 'step'}: ${i.message}`).join('; ')
+  }
+  return { ok: false, reason: lastReason, retryable }
+}
+
 function parseStep(raw: string): ParsedStep {
-  const s = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')
-  const start = s.indexOf('{')
-  const end = s.lastIndexOf('}')
-  if (start === -1 || end <= start) throw new AppError(409, 'browser_step', 'The browser model returned an unreadable browser instruction.')
-  let parsed: unknown
-  try { parsed = JSON.parse(s.slice(start, end + 1)) }
-  catch { throw new AppError(409, 'browser_step', 'The browser model returned an unreadable browser instruction.') }
-  const r = Step.safeParse(parsed)
-  if (!r.success) throw new AppError(409, 'browser_step', 'The browser model returned an unreadable browser instruction.')
+  const r = parseStepWithReason(raw)
+  if (!r.ok) throw new AppError(409, 'browser_step', 'The browser model returned an unreadable browser instruction.')
   return r.data
 }
 
@@ -686,9 +849,25 @@ export function browserChat(
             }
 
         activeRun.status = stepCount === 0 ? 'Planning approach…' : 'Deciding next step…'
-        const raw = await ask(stepSystem, JSON.stringify(promptPayload))
+        const promptJson = JSON.stringify(promptPayload)
+        const raw = await ask(stepSystem, promptJson)
         check()
-        const step = parseStep(raw)
+        let parsed = parseStepWithReason(raw)
+        if (!parsed.ok && parsed.retryable) {
+          console.warn(`browser_step parse failed (run ${runId}, step ${stepCount + 1}): ${parsed.reason}`)
+          activeRun.status = 'Retrying browser instruction…'
+          const retryRaw = await ask(
+            stepSystem,
+            `${promptJson}\n\nIMPORTANT: Your previous response could not be parsed (${parsed.reason}). Reply with ONLY a single valid JSON object matching the schema (e.g. {"kind":"done","reply":"..."}).`,
+          )
+          check()
+          parsed = parseStepWithReason(retryRaw)
+        }
+        if (!parsed.ok) {
+          console.warn(`browser_step retry failed (run ${runId}, step ${stepCount + 1}): ${parsed.reason}`)
+          throw new AppError(409, 'browser_step', 'The browser model returned an unreadable browser instruction.')
+        }
+        const step = parsed.data
         if (step.thought) activeRun.thought = step.thought
 
         // Apply optional working memory updates on every step

@@ -47,6 +47,16 @@ function browserVersions() {
 /** The image the browser runs: the newest release downloaded, else the one it always had. */
 const browserImage = () => { const v = browserVersions().at(-1); return v ? `${BROWSER_REPO}:${v}` : BROWSER_IMAGE }
 const BROWSER_ENV = '/etc/devdash/browser.env'
+const BROWSER_VIDEO_PIPELINE = [
+  'ximagesrc display-name=:99.0 show-pointer=false use-damage=false',
+  'capsfilter caps=video/x-raw,framerate=25/1 name=framerate',
+  'videoconvert',
+  'video/x-raw,format=I420',
+  'queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream',
+  'x264enc name=encoder threads=2 bitrate=1400 key-int-max=60 vbv-buf-capacity=300 byte-stream=true tune=zerolatency speed-preset=ultrafast',
+  'video/x-h264,stream-format=byte-stream,profile=constrained-baseline',
+  'appsink name=appsink',
+].join(' ! ')
 const BROWSER_PROFILE_DIR = '/home/neko/.devdash-chromium'
 const BROWSER_CHROMIUM_CONF = '/etc/devdash/browser-chromium.conf'
 const BROWSER_CDP_PROXY = '/etc/devdash/browser-cdp-proxy.py'
@@ -104,6 +114,7 @@ command=/usr/bin/chromium
   --disable-gpu
   --disable-software-rasterizer
   --disable-dev-shm-usage
+  --disable-smooth-scrolling
   --renderer-process-limit=4
   --js-flags=--max-old-space-size=512
   --disk-cache-size=67108864
@@ -381,14 +392,15 @@ const commands = {
     writeFileSync(BROWSER_CDP_PROXY, BROWSER_CDP_PROXY_TEXT, { mode: 0o755 })
     writeFileSync(BROWSER_POLICIES, BROWSER_POLICIES_TEXT, { mode: 0o644 })
     run('docker', ['run', '-d', '--name', BROWSER, '--hostname', 'devdash-browser', '--restart', 'no',
-      '--cpus=2', '--shm-size=512m', '--memory=1800m', '--memory-swap=2300m',
+      '--cpu-shares=512', '--shm-size=512m', '--memory=2048m', '--memory-swap=2560m',
       '-p', '127.0.0.1:8090:8080', '-p', '127.0.0.1:9222:9223', '-p', '59000:59000/udp', '-p', '59001:59001/tcp',
-      '--health-cmd', 'wget -q -O /dev/null http://127.0.0.1:8080/browser/health',
+      '--health-cmd', 'wget -q -O /dev/null http://127.0.0.1:8080/browser/health', '--health-interval=60s',
       '--env-file', BROWSER_ENV,
       '-e', 'NEKO_SERVER_BIND=:8080', '-e', 'NEKO_SERVER_PATH_PREFIX=/browser/',
       '-e', 'NEKO_WEBRTC_UDPMUX=59000', '-e', 'NEKO_WEBRTC_TCPMUX=59001', '-e', `NEKO_WEBRTC_NAT1TO1=${ip}`,
       '-e', 'NEKO_MEMBER_PROVIDER=multiuser', '-e', `NEKO_MEMBER_MULTIUSER_USER_PROFILE=${GUEST_PROFILE}`,
-      '-e', 'NEKO_SESSION_IMPLICIT_HOSTING=true', '-e', 'NEKO_DESKTOP_SCREEN=1280x720@20',
+      '-e', 'NEKO_SESSION_IMPLICIT_HOSTING=true', '-e', 'NEKO_DESKTOP_SCREEN=1280x720@25',
+      '-e', 'NEKO_CAPTURE_VIDEO_CODEC=h264', '-e', `NEKO_CAPTURE_VIDEO_PIPELINE=${BROWSER_VIDEO_PIPELINE}`,
       '-e', 'NEKO_CAPTURE_MICROPHONE_ENABLED=false', '-e', 'NEKO_CAPTURE_SCREENCAST_RATE=5/1',
       '-v', `devdash-browser-profile:${BROWSER_PROFILE_DIR}`,
       '-v', `${BROWSER_CHROMIUM_CONF}:/etc/neko/supervisord/chromium.conf:ro`,

@@ -592,3 +592,64 @@ test('post-navigation redirect to private metadata IP navigates away to about:bl
   assert.match(st.run?.result ?? '', /local or private URL/i)
   assert.ok(cdpActions.some((a) => a.kind === 'navigate' && a.url === 'about:blank'))
 })
+
+test('normalizes verbose thoughts, long wait budgets, bracketed refs, plan synonyms, and retries once on malformed JSON', async () => {
+  const db = openDb(':memory:')
+  const admin = { id: 1, name: 'Ada', username: 'ada', email: 'ada@test', role: 'admin' } as User
+  db.prepare("insert into users(id,name,username,email,role,password_hash,totp_secret) values (?,?,?,?,?,'x','x')").run(admin.id, admin.name, admin.username, admin.email, admin.role)
+  const actions: CdpAction[] = []
+  let callCount = 0
+
+  const fakeObs = (url: string): BrowserObservation => ({
+    mode: 'cdp',
+    url,
+    title: 'Speedtest',
+    tabs: [{ index: 0, id: 't1', title: 'Speedtest', url, active: true }],
+    elements: [{ ref: 'e9', role: 'button', name: 'GO', tag: 'button' }],
+    text: 'Download 89.96 Mbps Upload 88.22 Mbps',
+    fingerprint: computeObservationFingerprint({ url, title: 'Speedtest', elements: [], text: `page-${callCount}` }),
+  })
+
+  const chat = browserChat(
+    db,
+    {
+      screen: async () => [],
+      act: async () => {},
+      observe: async () => fakeObs('https://www.speedtest.net/'),
+      actCdp: async (action) => {
+        actions.push(action)
+        return { summary: `Executed ${action.kind}`, url: 'https://www.speedtest.net/' }
+      },
+    },
+    async () => {
+      callCount++
+      if (callCount === 1) {
+        // Bracketed ref, >240-char thought, plan status "completed", wrapped in prose
+        return `Sure, here is the next step:\n\`\`\`json\n${JSON.stringify({
+          kind: 'click',
+          ref: '[e9]',
+          thought: 'A'.repeat(320),
+          plan: [{ id: 1, text: 'Run Ookla speed test', status: 'completed' }],
+        })}\n\`\`\`\nLet me know if you want anything else.`
+      }
+      if (callCount === 2) {
+        // Over-budget wait ms (25000 -> clamped to 15000)
+        return JSON.stringify({ kind: 'wait_for', ms: 25000 })
+      }
+      if (callCount === 3) {
+        // Malformed output -> should trigger 1 automatic retry instead of failing the run!
+        return 'Oops I forgot to wrap this as JSON.'
+      }
+      return JSON.stringify({ kind: 'done', reply: 'Download 89.96 Mbps, Upload 88.22 Mbps.' })
+    },
+  )
+
+  chat.send(admin, crypto.randomUUID(), 'Do speed tests')
+  const reply = await finish(chat, admin)
+  assert.equal(reply, 'Download 89.96 Mbps, Upload 88.22 Mbps.')
+  assert.equal(callCount, 4)
+  assert.equal(actions.length, 2)
+  assert.deepEqual(actions[0], { kind: 'click', ref: 'e9', label: undefined, x: undefined, y: undefined })
+  assert.deepEqual(actions[1], { kind: 'wait_for', selector: undefined, text: undefined, networkidle: undefined, ms: 15000 })
+  assert.equal(chat.state(admin).run?.status, 'completed')
+})
