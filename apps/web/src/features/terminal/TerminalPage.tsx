@@ -37,9 +37,12 @@ export function TerminalPage() {
   const names = [...new Set(['main', ...(list.data?.terminals ?? []).map((t) => t.name).filter((n) => n !== ADMIN), ...opened])]
   const isAdmin = active === ADMIN
   const onStatus = useCallback((s: Status) => setStatus(s), [])
-  // A Claude sign-in tab finished: refresh the sign-in status shown on Claude setup.
+  // A sign-in or setup tab finished: refresh the status shown on Agent setup.
   useEffect(() => {
-    if (status === 'ended' && active?.startsWith('login-')) void qc.invalidateQueries({ queryKey: ['claude', 'profiles'] })
+    if (status === 'ended' && (active?.startsWith('login-') || active?.startsWith('oc-') || active?.startsWith('t3-'))) {
+      void qc.invalidateQueries({ queryKey: ['claude', 'profiles'] })
+      if (active?.startsWith('t3-')) void qc.invalidateQueries({ queryKey: ['claude', 'commands', 't3code'] })
+    }
     if (status === 'ended' && active === 'github-login') void qc.invalidateQueries({ queryKey: ['github'] })
   }, [status, active, qc])
 

@@ -279,13 +279,15 @@ export function requestNotification(toolName: string, input: Record<string, unkn
   return { title: `${agent} needs permission: ${sessionTitle}`, body: clip(`Allow ${toolName}${what ? `: ${what}` : ''}`) }
 }
 
-export function claudeService({ db, agents, hub, notify, projects, tailnetConnected, storageFor }: {
+export function claudeService({ db, agents, hub, notify, projects, tailnetConnected, storageFor, ensureT3 }: {
   db: Db; agents: AgentsService; hub: Hub; notify: Notify; projects: ProjectsService
   /** Whether the member has a connected tailnet node (so "Reach my tailnet" can only go on when they do). Optional:
    *  wired late in app.ts like Team's isRole, since the tailnet service is built after this one. */
   tailnetConnected?: (userId: number) => boolean
   /** The owner's connected cloud storage, for the agent to set up as an rclone remote (null: none connected). */
   storageFor?: (userId: number) => LaunchStorage | null
+  /** Ensures the member's own devdash-t3@<user> service is running before their agent pairs with it. */
+  ensureT3?: (username: string) => Promise<{ port: number; baseDir: string; url: string } | null>
 }) {
   const repo = claudeRepo(db)
   const commands = (username: string, profile: string, harness: Harness, model?: string) =>
@@ -1413,6 +1415,18 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     },
     /** The last step of a browser sign-in in the member's terminal tab (agent harness.ts finishSignIn), delivered as them. */
     finishSignIn: (user: User, url: string) => agents.request<{ ok: boolean }>(user.username, { op: 'agent.signin.finish', url }, 20_000),
+    /** Provisions the member's local T3 service (if needed) and connects/renews their member-owned T3 credential. */
+    connectT3: async (user: User) => {
+      const ensured = ensureT3 ? await ensureT3(user.username) : null
+      return agents.request<{ agent: AgentInfo; expiresAt: string; renewed: boolean; revokedOld: boolean }>(
+        user.username,
+        { op: 't3.connect', ...(ensured ? { url: ensured.url, baseDir: ensured.baseDir } : {}) },
+        40_000,
+      )
+    },
+    /** Revokes this member's DevDash T3 OAuth session and removes their ~/.config/devdash/t3code.json. */
+    disconnectT3: (user: User) =>
+      agents.request<{ removed: boolean; revoked: boolean }>(user.username, { op: 't3.disconnect' }, 25_000),
     createProfile: (user: User, name: string, harness: Harness = 'claude') => agents.request(user.username, { op: 'claude.profile.create', name, ...(harness !== 'claude' ? { harness } : {}) }),
     memoryHealth: (user: User) => memoryHealth(agents, user.username),
     restartMemory: async (user: User) => {

@@ -177,3 +177,16 @@ test('project-trash/restore/purge: only a project id and short name, fixed folde
     assert.match(call({ cmd: 'project-purge', args: { id, slug: 'x' } }).error!, /refused: invalid project id/, String(id))
   }
 })
+
+test('t3-ensure validates member username/port and only manages systemd unit without touching member home', () => {
+  assert.match(call({ cmd: 't3-ensure', args: { username: 'root' } }).error!, /refused: not a member account/)
+  assert.match(call({ cmd: 't3-ensure', args: { username: '../etc' } }).error!, /refused: invalid username/)
+  assert.match(call({ cmd: 't3-ensure', args: { username: 'bob', port: 80 } }).error!, /refused: invalid port/)
+  const ok = call({ cmd: 't3-ensure', args: { username: 'bob', port: 3782 } })
+  assert.equal(ok.ok, true)
+  assert.equal(ok.port, 3782)
+  assert.equal(ok.url, 'http://127.0.0.1:3782/mcp')
+  assert.ok(ok.planned.includes('install -m 644 /opt/devdash/current/deploy/systemd/devdash-t3@.service /etc/systemd/system/devdash-t3@.service'))
+  assert.ok(ok.planned.includes('systemctl enable --now devdash-t3@bob'))
+  assert.ok(!ok.planned.some((cmd) => cmd.includes('/home/bob')), 'root helper must never touch /home/<user>')
+})

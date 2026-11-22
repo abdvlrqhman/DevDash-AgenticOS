@@ -1,4 +1,7 @@
-// T3 Code's own MCP integration. Credentials belong to the DevDash member; the configured T3 server runs the tools.
+// T3 Code's own MCP integration.
+import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util' Credentials belong to the DevDash member; the configured T3 server runs the tools.
 import { existsSync, statSync } from 'node:fs'
 import { T3Client, configPath } from './t3-client.ts'
 
@@ -67,4 +70,46 @@ export async function info() {
   const value = probeInfo().then((value) => { if (generation === started) cached = { key, at: Date.now(), value }; return value }).finally(() => { if (probing?.value === value) probing = undefined })
   probing = { key, value }
   return value
+}
+
+const execFileAsync = promisify(execFile)
+const SETUP_SCRIPT = fileURLToPath(new URL('../../../deploy/t3-setup.mjs', import.meta.url))
+
+export type T3SetupKind = 'connect' | 'pair' | 'status'
+
+/** Command launched inside a DevDash terminal tab (t3-connect / t3-pair / t3-status) as this member. */
+export function setupCommand(kind: T3SetupKind) {
+  return { env: {} as Record<string, string>, args: [process.execPath, SETUP_SCRIPT, kind, '--interactive'] }
+}
+
+/** Connects or renews this member's own T3 Code credential via deploy/t3-setup.mjs and refreshes capabilities. */
+export async function connectMember(opts: { url?: string; baseDir?: string; t3Bin?: string } = {}) {
+  const args = [SETUP_SCRIPT, 'connect', '--json']
+  if (opts.url) args.push('--url', opts.url)
+  if (opts.baseDir) args.push('--base-dir', opts.baseDir)
+  if (opts.t3Bin) args.push('--t3-bin', opts.t3Bin)
+  let stdout = ''
+  try {
+    ({ stdout } = await execFileAsync(process.execPath, args, { timeout: 30_000, maxBuffer: 1024 * 1024 }))
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string }
+    const msg = (e.stderr || e.message || 'Could not connect T3 Code.').trim()
+    throw new Error(msg.split('\n')[0] || 'Could not connect T3 Code.')
+  }
+  const parsed = JSON.parse(stdout.trim()) as { config: string; expiresAt: string; renewed: boolean; revokedOld: boolean }
+  const agent = await info()
+  return { agent, expiresAt: parsed.expiresAt, renewed: parsed.renewed, revokedOld: parsed.revokedOld }
+}
+
+/** Revokes this member's DevDash OAuth session in T3 Code and removes ~/.config/devdash/t3code.json. */
+export async function disconnectMember() {
+  let stdout = ''
+  try {
+    ({ stdout } = await execFileAsync(process.execPath, [SETUP_SCRIPT, 'disconnect', '--json'], { timeout: 20_000, maxBuffer: 1024 * 1024 }))
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string }
+    const msg = (e.stderr || e.message || 'Could not disconnect T3 Code.').trim()
+    throw new Error(msg.split('\n')[0] || 'Could not disconnect T3 Code.')
+  }
+  return JSON.parse(stdout.trim()) as { removed: boolean; revoked: boolean }
 }

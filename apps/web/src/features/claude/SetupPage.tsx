@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ChevronDown, LogIn, Plus, RotateCw } from 'lucide-react'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { ChevronDown, LogIn, Plug, Plus, RotateCw } from 'lucide-react'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { confirmAction } from '@/components/app/confirm'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -31,14 +32,6 @@ export function SetupPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const q = useQuery(profilesQuery)
-  const refreshT3 = useMutation({
-    mutationFn: () => unwrap(api.api.claude.profiles.$get({ query: { refresh: 'true' } })),
-    onSuccess: async (data) => {
-      qc.setQueryData(profilesQuery.queryKey, data)
-      await qc.invalidateQueries({ queryKey: ['claude', 'commands', 't3code'] })
-      toast.success('T3 Code connection refreshed')
-    },
-  })
   const profiles = (q.data?.profiles as Profile[] | undefined) ?? []
   const [name, setName] = useState('')
   const create = useMutation({
@@ -91,29 +84,144 @@ export function SetupPage() {
         </Group>
         {!q.isPending && profiles.length > 0 && <MemorySection profiles={profiles} />}
         {q.data && <OpenCodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 'opencode')} onConnect={(p, kind) => navigate({ to: '/terminal', search: { open: `oc-${kind}-${p}` } })} />}
-        {q.data && <T3CodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 't3code')} refresh={() => refreshT3.mutate()} refreshing={refreshT3.isPending} error={refreshT3.error} />}
+        {q.data && <T3CodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 't3code')} onTerminal={(tab) => navigate({ to: '/terminal', search: { open: tab } })} />}
         {q.data && <DefaultsCard profiles={profiles} agents={q.data.agents as Agent[]} initial={q.data.defaults} />}
       </PageBody>
     </>
   )
 }
 
-function T3CodeSection({ agent, refresh, refreshing, error }: { agent: Agent | undefined; refresh: () => void; refreshing: boolean; error?: unknown }) {
+function T3CodeSection({ agent, onTerminal }: { agent: Agent | undefined; onTerminal: (tab: 't3-connect' | 't3-pair' | 't3-status') => void }) {
+  const qc = useQueryClient()
   const connected = !!agent?.installed && !agent.error
   const providers = agent?.profiles.find((p) => p.name === 'default')?.providers ?? []
+
+  const syncT3Queries = async () => {
+    const data = await unwrap(api.api.claude.profiles.$get({ query: { refresh: 'true' } }))
+    qc.setQueryData(profilesQuery.queryKey, data)
+    await qc.invalidateQueries({ queryKey: ['claude', 'commands', 't3code'] })
+    return data
+  }
+
+  const refresh = useMutation({
+    mutationFn: syncT3Queries,
+    onSuccess: () => toast.success('T3 Code connection refreshed'),
+  })
+
+  const connect = useMutation({
+    mutationFn: () => unwrap(api.api.claude.t3.connect.$post()),
+    onSuccess: async (res) => {
+      await syncT3Queries()
+      const found = res.agent?.profiles?.find((p) => p.name === 'default')?.providers ?? []
+      if (found.length) {
+        toast.success(res.renewed ? 'T3 Code credential renewed' : `T3 Code connected (${found.join(', ')})`)
+      } else {
+        toast.success(res.renewed ? 'T3 Code credential renewed. Pair T3 Code to connect providers.' : 'T3 Code connected. Pair T3 Code to add model providers.')
+      }
+    },
+  })
+
+  const disconnect = useMutation({
+    mutationFn: () => unwrap(api.api.claude.t3.disconnect.$post()),
+    onSuccess: async () => {
+      await syncT3Queries()
+      toast.success('T3 Code disconnected')
+    },
+  })
+
+  const busy = connect.isPending || disconnect.isPending || refresh.isPending
+  const error = connect.error || disconnect.error || refresh.error
+
+  const handleDisconnect = async () => {
+    const ok = await confirmAction({
+      title: 'Disconnect T3 Code?',
+      description: 'Revokes DevDash’s T3 OAuth session and removes ~/.config/devdash/t3code.json from your account. Your T3 Code chats and providers stay untouched.',
+      action: 'Disconnect',
+      destructive: true,
+    })
+    if (ok) disconnect.mutate()
+  }
+
   return (
     <Group title="T3 Code connection" description="Use the providers and models connected in T3 Code. Sessions open in Chat and keep their conversation in T3 Code.">
-      <div className="flex items-center gap-3 rounded-2xl bg-surface px-4 py-3.5 text-sm">
-        <span className="flex size-5 shrink-0 items-center justify-center"><StatusLight state={connected ? 'live' : 'idle'} /></span>
-        <span className="min-w-0 flex-1">
-          <span className="block font-medium">{connected ? 'Connected' : 'Not connected'}</span>
-          <span className="block text-pretty text-muted-foreground">{agent?.error || (connected ? providers.join(', ') || 'T3 Code is ready.' : 'Configure a T3 Code connection for your account on this server, then check again.')}</span>
-          {connected && agent?.version && <span className="block text-muted-foreground">T3 Code {agent.version}</span>}
-        </span>
-        <Button size="sm" variant="outline" disabled={refreshing} onClick={refresh}><RotateCw className={refreshing ? 'animate-spin' : ''} />Refresh connection</Button>
+      <div className="flex flex-col gap-3 rounded-2xl bg-surface px-4 py-3.5 text-sm sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+          <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center sm:mt-0"><StatusLight state={connected ? 'live' : 'idle'} /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block font-medium">{connected ? 'Connected' : 'Not connected'}</span>
+            <span className="block text-pretty text-muted-foreground">
+              {agent?.error || (connected
+                ? providers.join(', ') || 'No model providers connected yet. Pair T3 app to sign in to providers, then refresh.'
+                : 'Start your account’s T3 Code service and link it in one click, or run the setup helper in Terminal.')}
+            </span>
+            {connected && agent?.version && <span className="block text-muted-foreground">T3 Code {agent.version}</span>}
+          </span>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 pl-8 sm:pl-0">
+          {!connected ? (
+            <Button size="sm" disabled={busy} onClick={() => connect.mutate()}>
+              {connect.isPending ? <Spinner /> : <Plug />}Connect T3 Code
+            </Button>
+          ) : (
+            <>
+              {!providers.length && (
+                <Button size="sm" disabled={busy} onClick={() => onTerminal('t3-pair')}>
+                  <LogIn />Pair T3 app
+                </Button>
+              )}
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => refresh.mutate()}>
+                <RotateCw className={refresh.isPending ? 'animate-spin' : ''} />Refresh
+              </Button>
+            </>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant={connected ? 'ghost' : 'outline'} className={connected ? 'hover:bg-surface-2 dark:hover:bg-surface-2' : undefined} disabled={busy}>
+                {connected ? 'Manage' : 'Setup tools'}<ChevronDown />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => onTerminal('t3-pair')}>
+                <span>Pair T3 app (add providers)</span>
+                <span className="text-xs text-muted-foreground">Show a pairing code & QR to sign into Claude, Codex, OpenCode, or Antigravity</span>
+              </DropdownMenuItem>
+              {connected && (
+                <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => connect.mutate()}>
+                  <span>Reconnect / renew credential</span>
+                  <span className="text-xs text-muted-foreground">Mint a fresh member OAuth session and revoke the previous one</span>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => onTerminal('t3-connect')}>
+                <span>Open setup script in terminal</span>
+                <span className="text-xs text-muted-foreground">Run deploy/t3-setup.mjs interactively in DevDash Terminal</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => onTerminal('t3-status')}>
+                <span>Check T3 status in terminal</span>
+                <span className="text-xs text-muted-foreground">Inspect binary, service port, listener ownership, and providers</span>
+              </DropdownMenuItem>
+              {!connected && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => refresh.mutate()}>Refresh connection</DropdownMenuItem>
+                </>
+              )}
+              {connected && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" className="flex-col items-start gap-0" onSelect={() => void handleDisconnect()}>
+                    <span>Disconnect T3 Code</span>
+                    <span className="text-xs text-muted-foreground">Revoke DevDash’s OAuth session and remove t3code.json</span>
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       <ErrorAlert error={error} />
-      <p className="text-sm text-pretty text-muted-foreground">Connect only a T3 Code instance running as your own Linux account. This connection supports text Chat with explicit Full access; DevDash approval prompts, Plan mode, guests and autopilot are unavailable.</p>
+      <p className="text-sm text-pretty text-muted-foreground">
+        One-click connect starts your account’s loopback T3 Code service and saves a private credential in ~/.config/devdash/t3code.json (never in DevDash). This connection supports text Chat with explicit Full access; DevDash approval prompts, Plan mode, guests, Hamasa, and Autopilot are unavailable.
+      </p>
     </Group>
   )
 }
