@@ -10,9 +10,12 @@ import {
   Laptop,
   Monitor,
   PlugZap,
+  Plus,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Smartphone,
+  Star,
   Terminal,
   Trash2,
 } from 'lucide-react'
@@ -28,25 +31,44 @@ import { api, unwrap } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 
+type DevicePlatform = 'windows' | 'android'
 type TailnetDevice = { name: string; dnsName: string; os: string; ip: string | null; online: boolean; lastSeen: string | null }
 type McpProvider = { id: string; label: string; installed: boolean; enabled: boolean }
-type AuditItem = { id: number; source: string; action: string; summary: string; ok: boolean; durationMs: number; createdAt: number }
-type PcStatus = {
-  tailnet: { connected: boolean; backendState: string; vpsIp: string | null; vpsName: string | null; devices: TailnetDevice[] }
-  device: { id: number; name: string; tailscaleIp: string; port: number; enabled: boolean; allowShell: boolean; createdAt: number; updatedAt: number; lastSeenAt: number | null } | null
+type AuditItem = { id: number; deviceId: number | null; deviceName: string | null; source: string; action: string; summary: string; ok: boolean; durationMs: number; createdAt: number }
+
+type PairedDevice = {
+  id: number
+  name: string
+  platform: DevicePlatform
+  tailscaleIp: string
+  port: number
+  enabled: boolean
+  allowShell: boolean
+  isDefault: boolean
+  createdAt: number
+  updatedAt: number
+  lastSeenAt: number | null
   peer: { name: string; os: string; ip: string | null; online: boolean; lastSeen: string | null } | null
   agent: {
     ok?: boolean
+    platform?: string
     hostname?: string
     user?: string
     os?: string
     tailscaleIp?: string
+    adbReady?: boolean
+    battery?: number | null
     paused?: boolean
     allowShell?: boolean
     monitors?: { index: number; width: number; height: number; primary: boolean }[]
     version?: string
   } | null
   agentError: string | null
+}
+
+type PcStatus = {
+  tailnet: { connected: boolean; backendState: string; vpsIp: string | null; vpsName: string | null; devices: TailnetDevice[] }
+  devices: PairedDevice[]
   mcpProviders: McpProvider[]
   audit: AuditItem[]
 }
@@ -66,7 +88,7 @@ type ScreenshotState = {
   cursorY: number
 }
 
-type WindowItem = { hwnd: string; pid: number; process: string; title: string; focused: boolean; minimized: boolean }
+type WindowItem = { hwnd: string; pid?: number; process: string; title: string; focused: boolean; minimized: boolean }
 
 const statusQuery = {
   queryKey: ['pc', 'status'] as const,
@@ -78,25 +100,32 @@ export function PcPage() {
   const q = useQuery(statusQuery)
   const s = q.data
   const qc = useQueryClient()
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [adding, setAdding] = useState(false)
   const [showSetup, setShowSetup] = useState(false)
 
+  const devices = s?.devices ?? []
+  const active = devices.find((d) => d.id === selectedId) ?? devices[0] ?? null
+
   const settings = useMutation({
-    mutationFn: (patch: { enabled?: boolean; allowShell?: boolean; rotateToken?: boolean }) =>
+    mutationFn: (patch: { deviceId: number; enabled?: boolean; allowShell?: boolean; rotateToken?: boolean; setDefault?: boolean }) =>
       unwrap(api.api.pc.settings.$patch({ json: patch })) as Promise<PcStatus>,
     onSuccess: (next, vars) => {
       qc.setQueryData(['pc', 'status'], next)
-      if (vars.rotateToken) toast.success('Secret token rotated — re-run the Windows installer to apply it')
-      else if (vars.enabled !== undefined) toast.success(vars.enabled ? 'PC Computer Use enabled' : 'PC Computer Use paused')
-      else if (vars.allowShell !== undefined) toast.success(vars.allowShell ? 'PowerShell access enabled' : 'PowerShell access turned off')
+      if (vars.rotateToken) toast.success('Secret token rotated — re-run the installer on that device')
+      else if (vars.setDefault) toast.success('Updated default device for AI agents')
+      else if (vars.enabled !== undefined) toast.success(vars.enabled ? 'Device control enabled' : 'Device control paused')
+      else if (vars.allowShell !== undefined) toast.success(vars.allowShell ? 'Shell access enabled' : 'Shell access turned off')
     },
     onError: (e: Error) => toast.error(e.message),
   })
 
   const unpair = useMutation({
-    mutationFn: () => unwrap(api.api.pc.device.$delete()),
+    mutationFn: (deviceId: number) => unwrap(api.api.pc.device.$delete({ query: { deviceId: String(deviceId) } })),
     onSuccess: () => {
+      setSelectedId(null)
       void qc.invalidateQueries({ queryKey: ['pc', 'status'] })
-      toast.success('PC unpaired')
+      toast.success('Device unpaired')
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -117,17 +146,25 @@ export function PcPage() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  const ready = Boolean(s?.device?.enabled && s.tailnet.connected && s.peer?.online && s.agent?.ok && !s.agent.paused)
+  const ready = Boolean(active?.enabled && s?.tailnet.connected && active.peer?.online && active.agent?.ok && !active.agent.paused)
+  const isAndroid = active?.platform === 'android'
 
   return (
     <>
       <PageHeader
-        title="My PC"
-        description="Codex-grade full computer use on your Windows PC — locked strictly to Tailscale"
+        title="My Devices"
+        description="Codex-grade computer use for your Windows PC & Android phone — locked strictly to Tailscale"
         actions={
-          <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => void q.refetch()}>
-            <RefreshCw className={q.isFetching ? 'animate-spin' : ''} />
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {devices.length > 0 && (
+              <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
+                <Plus className="size-4" />{adding ? 'Cancel' : 'Add device'}
+              </Button>
+            )}
+            <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => void q.refetch()}>
+              <RefreshCw className={q.isFetching ? 'animate-spin' : ''} />
+            </Button>
+          </div>
         }
       />
       <PageBody className="gap-8 md:py-10">
@@ -139,40 +176,80 @@ export function PcPage() {
               <StatusLight state="idle" />Tailscale node is offline
             </div>
             <p className="text-sm text-muted-foreground">
-              PC Computer Use works strictly over your private Tailscale network and refuses all connections whenever Tailscale is off. Connect your node in Network first.
+              Computer Use works strictly over your private Tailscale network and refuses all connections whenever Tailscale is off. Connect your node in Network first.
             </p>
             <div>
               <Button asChild><Link to="/network">Open Network</Link></Button>
             </div>
           </section>
-        ) : !s.device ? (
-          <PairSection s={s} onPaired={(next) => { qc.setQueryData(['pc', 'status'], next); setShowSetup(true) }} />
-        ) : (
+        ) : devices.length === 0 || adding ? (
+          <PairSection
+            s={s}
+            onPaired={(next, newlyPairedIp) => {
+              qc.setQueryData(['pc', 'status'], next)
+              const matched = next.devices.find((d) => d.tailscaleIp === newlyPairedIp)
+              if (matched) setSelectedId(matched.id)
+              setAdding(false)
+              setShowSetup(true)
+            }}
+          />
+        ) : active && (
           <div className="flex flex-col gap-8">
+            {/* Device Switcher Tabs */}
+            <div className="flex flex-wrap items-center gap-2">
+              {devices.map((d) => {
+                const dReady = Boolean(d.enabled && d.peer?.online && d.agent?.ok && !d.agent.paused)
+                const selected = d.id === active.id
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => { setSelectedId(d.id); setShowSetup(false) }}
+                    className={cn(
+                      'inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium transition-colors',
+                      selected ? 'bg-surface ring-1 ring-primary/50 text-foreground' : 'bg-surface/50 text-muted-foreground hover:bg-surface hover:text-foreground',
+                    )}
+                  >
+                    {d.platform === 'android' ? <Smartphone className="size-4" /> : <Monitor className="size-4" />}
+                    <span>{d.name}</span>
+                    <StatusLight state={dReady ? 'live' : 'idle'} />
+                    {d.isDefault && <span className="rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">Default</span>}
+                  </button>
+                )
+              })}
+            </div>
+
             {/* Hero Status + Kill-Switch */}
             <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
               <div className="flex flex-col gap-4 rounded-2xl bg-surface p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl bg-background', ready ? 'text-foreground' : 'text-muted-foreground')}>
-                      <Monitor className="size-5" />
+                      {isAndroid ? <Smartphone className="size-5" /> : <Monitor className="size-5" />}
                     </span>
                     <div>
                       <div className="flex items-center gap-2">
-                        <h2 className="text-lg font-semibold tracking-[-0.02em]">{s.device.name}</h2>
+                        <h2 className="text-lg font-semibold tracking-[-0.02em]">{active.name}</h2>
+                        <span className="rounded-md bg-background px-2 py-0.5 text-[11px] font-medium capitalize text-muted-foreground">{active.platform}</span>
                         <StatusLight state={ready ? 'live' : 'idle'} />
                       </div>
                       <p className="text-xs text-muted-foreground tabular-nums">
-                        Tailscale {s.device.tailscaleIp}:{s.device.port}
+                        Tailscale {active.tailscaleIp}:{active.port}
                         {s.tailnet.vpsIp ? ` ← VPS ${s.tailnet.vpsIp}` : ''}
+                        {isAndroid && typeof active.agent?.battery === 'number' ? ` · Battery ${active.agent.battery}%` : ''}
                       </p>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {!active.isDefault && (
+                      <Button variant="ghost" size="sm" disabled={settings.isPending} onClick={() => settings.mutate({ deviceId: active.id, setDefault: true })}>
+                        <Star className="size-4" />Make default
+                      </Button>
+                    )}
                     <Button variant="secondary" size="sm" onClick={() => setShowSetup((v) => !v)}>
-                      <Download className="size-4" />{showSetup ? 'Hide installer' : 'Windows installer'}
+                      <Download className="size-4" />{showSetup ? 'Hide setup' : isAndroid ? 'Android installer' : 'Windows installer'}
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => { if (confirm(`Unpair ${s.device?.name}?`)) unpair.mutate() }}>
+                    <Button variant="ghost" size="sm" onClick={() => { if (confirm(`Unpair ${active.name}?`)) unpair.mutate(active.id) }}>
                       <Trash2 className="size-4" />Unpair
                     </Button>
                   </div>
@@ -182,24 +259,29 @@ export function PcPage() {
                 <div className="grid gap-2 sm:grid-cols-3">
                   <GatePill
                     label="Tailscale Gate"
-                    ok={Boolean(s.peer?.online)}
-                    detail={s.peer?.online ? 'Online on tailnet' : s.peer?.lastSeen ? `Offline (${formatAgo(s.peer.lastSeen)})` : 'Offline — blocked'}
+                    ok={Boolean(active.peer?.online)}
+                    detail={active.peer?.online ? 'Online on tailnet' : active.peer?.lastSeen ? `Offline (${formatAgo(active.peer.lastSeen)})` : 'Offline — blocked'}
                   />
                   <GatePill
-                    label="Windows Agent"
-                    ok={Boolean(s.agent?.ok && !s.agent?.paused)}
-                    detail={s.agent?.paused ? 'Paused in PC tray' : s.agent?.ok ? `Ready (${s.agent.monitors?.length ?? 1} display)` : s.peer?.online ? 'Not running on PC' : 'Waiting for Tailscale'}
+                    label={isAndroid ? 'Termux & ADB Agent' : 'Windows Agent'}
+                    ok={Boolean(active.agent?.ok && !active.agent?.paused && (!isAndroid || active.agent?.adbReady))}
+                    detail={
+                      active.agent?.paused ? 'Paused on device'
+                        : active.agent?.ok
+                          ? (isAndroid ? (active.agent.adbReady ? `Ready (${active.agent.os ?? 'Android'})` : 'Agent up — run pair-adb.sh') : `Ready (${active.agent.monitors?.length ?? 1} display)`)
+                          : active.peer?.online ? 'Not running on device' : 'Waiting for Tailscale'
+                    }
                   />
                   <GatePill
                     label="Kill-Switch"
-                    ok={s.device.enabled}
-                    detail={s.device.enabled ? (s.device.allowShell ? 'Active + PowerShell' : 'Active (GUI only)') : 'Paused in DevDash'}
+                    ok={active.enabled}
+                    detail={active.enabled ? (active.allowShell ? (isAndroid ? 'Active + Shell' : 'Active + PowerShell') : 'Active (GUI only)') : 'Paused in DevDash'}
                   />
                 </div>
 
-                {s.agentError && s.peer?.online && s.device.enabled && (
+                {active.agentError && active.peer?.online && active.enabled && (
                   <p className="rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-                    {s.agentError} — Download and run the Windows installer below while Tailscale is connected on your PC.
+                    {active.agentError} — Download and run the {isAndroid ? 'Termux Android' : 'Windows'} installer below while Tailscale is connected.
                   </p>
                 )}
               </div>
@@ -208,56 +290,87 @@ export function PcPage() {
               <div className="flex flex-col justify-between gap-4 rounded-2xl bg-surface p-5">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium">Allow PC control</div>
+                    <div className="text-sm font-medium">Allow {isAndroid ? 'phone' : 'PC'} control</div>
                     <p className="text-xs text-muted-foreground">Instant kill-switch across all AI agents and UI.</p>
                   </div>
-                  <Switch checked={s.device.enabled} disabled={settings.isPending} onCheckedChange={(enabled) => settings.mutate({ enabled })} />
+                  <Switch checked={active.enabled} disabled={settings.isPending} onCheckedChange={(enabled) => settings.mutate({ deviceId: active.id, enabled })} />
                 </div>
                 <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-4">
                   <div>
-                    <div className="text-sm font-medium">Full PowerShell access</div>
-                    <p className="text-xs text-muted-foreground">Let AI run PowerShell commands in addition to GUI.</p>
+                    <div className="text-sm font-medium">{isAndroid ? 'Termux & ADB shell access' : 'Full PowerShell access'}</div>
+                    <p className="text-xs text-muted-foreground">Let AI run shell commands in addition to screen/touch/input.</p>
                   </div>
-                  <Switch checked={s.device.allowShell} disabled={settings.isPending} onCheckedChange={(allowShell) => settings.mutate({ allowShell })} />
+                  <Switch checked={active.allowShell} disabled={settings.isPending} onCheckedChange={(allowShell) => settings.mutate({ deviceId: active.id, allowShell })} />
                 </div>
                 <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-3">
                   <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <ShieldCheck className="size-3.5" />Tailscale-only + token locked
                   </span>
-                  <Button variant="ghost" size="sm" disabled={settings.isPending} onClick={() => { if (confirm('Rotate secret token? You will need to re-run the Windows installer once.')) settings.mutate({ rotateToken: true }) }}>
+                  <Button variant="ghost" size="sm" disabled={settings.isPending} onClick={() => { if (confirm('Rotate secret token? You will need to re-run the installer on this device once.')) settings.mutate({ deviceId: active.id, rotateToken: true }) }}>
                     <RotateCcw className="size-3.5" />Rotate token
                   </Button>
                 </div>
               </div>
             </section>
 
-            {/* Windows Installer Drawer */}
-            {(showSetup || !s.agent?.ok) && (
-              <section className="flex flex-col gap-4 rounded-2xl bg-surface p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-base font-semibold tracking-[-0.01em]">Install on {s.device.name} (Windows 10/11)</h3>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Zero dependencies — uses built-in Windows Win32 + UI Automation, binds strictly to {s.device.tailscaleIp}, locks Windows Firewall to VPS {s.tailnet.vpsIp}, and adds a System Tray kill-switch.
-                    </p>
+            {/* Platform-Specific Installer Drawer */}
+            {(showSetup || !active.agent?.ok) && (
+              isAndroid ? (
+                <section className="flex flex-col gap-4 rounded-2xl bg-surface p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold tracking-[-0.01em]">Install on {active.name} (Android — No Root Needed)</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Runs in Termux using Android Wireless Debugging (`adb`), binds strictly to {active.tailscaleIp}:{active.port}, accepts ONLY VPS {s.tailnet.vpsIp}, and auto-stops the instant Tailscale disconnects.
+                      </p>
+                    </div>
+                    <Button asChild>
+                      <a href={`/api/pc/installer?deviceId=${active.id}`} download>
+                        <Download className="size-4" />Download Termux installer (.sh)
+                      </a>
+                    </Button>
                   </div>
-                  <Button asChild>
-                    <a href="/api/pc/installer.ps1" download>
-                      <Download className="size-4" />Download installer (.ps1)
-                    </a>
-                  </Button>
-                </div>
-                <ol className="list-decimal space-y-1.5 pl-5 text-xs text-muted-foreground">
-                  <li>Make sure <strong>Tailscale</strong> is connected on your Windows PC.</li>
-                  <li>Download the installer above, then open <strong>PowerShell as Administrator</strong> (so Windows Firewall locks port <code className="text-foreground">{s.device.port}</code> strictly to <code className="text-foreground">{s.tailnet.vpsIp}</code>) and run:</li>
-                </ol>
-                <pre className="overflow-x-auto rounded-xl bg-background p-3 font-mono text-xs text-foreground">
-                  {`powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\install-devdash-pc-${s.device.name}.ps1"`}
-                </pre>
-                <p className="text-xs text-muted-foreground">
-                  Turning off Tailscale on your PC — or clicking <strong>Pause</strong> in the Windows System Tray shield icon — cuts off AI access immediately.
-                </p>
-              </section>
+                  <ol className="list-decimal space-y-1.5 pl-5 text-xs text-muted-foreground">
+                    <li>Install <strong>Termux</strong> (from F-Droid / GitHub) and make sure <strong>Tailscale</strong> is connected on your phone.</li>
+                    <li>Download the <code className="text-foreground">.sh</code> installer above on your phone, then run in Termux:</li>
+                  </ol>
+                  <pre className="overflow-x-auto rounded-xl bg-background p-3 font-mono text-xs text-foreground">
+                    {`termux-setup-storage\nbash ~/storage/downloads/install-devdash-android-${active.name.replace(/[^a-zA-Z0-9._-]+/g, '-')}.sh`}
+                  </pre>
+                  <ol start={3} className="list-decimal space-y-1.5 pl-5 text-xs text-muted-foreground">
+                    <li>Enable <strong>Developer options → Wireless debugging</strong> on your phone (split-screen with Termux) and run <code className="text-foreground">~/.devdash-android/pair-adb.sh</code> once to grant screen capture, UI tree, and touch control.</li>
+                  </ol>
+                  <p className="text-xs text-muted-foreground">
+                    Turning off Tailscale on Android — or running <code className="text-foreground">~/.devdash-android/stop.sh</code> — cuts off AI access immediately.
+                  </p>
+                </section>
+              ) : (
+                <section className="flex flex-col gap-4 rounded-2xl bg-surface p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold tracking-[-0.01em]">Install on {active.name} (Windows 10/11)</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Zero dependencies — built-in Windows Win32 + UI Automation, binds strictly to {active.tailscaleIp}, locks Windows Firewall to VPS {s.tailnet.vpsIp}, and adds a System Tray kill-switch.
+                      </p>
+                    </div>
+                    <Button asChild>
+                      <a href={`/api/pc/installer?deviceId=${active.id}`} download>
+                        <Download className="size-4" />Download installer (.ps1)
+                      </a>
+                    </Button>
+                  </div>
+                  <ol className="list-decimal space-y-1.5 pl-5 text-xs text-muted-foreground">
+                    <li>Make sure <strong>Tailscale</strong> is connected on your Windows PC.</li>
+                    <li>Download the installer above, then open <strong>PowerShell as Administrator</strong> (so Windows Firewall locks port <code className="text-foreground">{active.port}</code> strictly to <code className="text-foreground">{s.tailnet.vpsIp}</code>) and run:</li>
+                  </ol>
+                  <pre className="overflow-x-auto rounded-xl bg-background p-3 font-mono text-xs text-foreground">
+                    {`powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\install-devdash-pc-${active.name.replace(/[^a-zA-Z0-9._-]+/g, '-')}.ps1"`}
+                  </pre>
+                  <p className="text-xs text-muted-foreground">
+                    Turning off Tailscale on your PC — or clicking <strong>Pause</strong> in the Windows System Tray shield icon — cuts off AI access immediately.
+                  </p>
+                </section>
+              )
             )}
 
             {/* Connect AI Harnesses (Codex / Claude / OpenCode / Antigravity) */}
@@ -266,7 +379,7 @@ export function PcPage() {
                 <div>
                   <h3 className="text-base font-semibold tracking-[-0.01em]">AI Computer Use MCP (<code className="font-mono text-sm">my-pc</code>)</h3>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    Exposes 20 Codex-style tools (UI Automation tree + screenshots, click, drag, scroll, Unicode typing, hotkeys, window management, clipboard, filesystem, and PowerShell) to every AI harness with zero tokens in config files.
+                    Exposes 21 Codex-style tools across both your Windows PC and Android phone (`pc_list_devices`, UI Automation / Android UI tree + screenshots, tap/click, drag/swipe, typing, keys, apps, clipboard, filesystem, and shell).
                   </p>
                 </div>
                 <Button size="sm" disabled={installMcp.isPending || s.mcpProviders.length === 0} onClick={() => installMcp.mutate(undefined)}>
@@ -294,13 +407,20 @@ export function PcPage() {
             </section>
 
             {/* Live Interactive Screen & Remote Control */}
-            {ready && <LiveControl allowShell={s.device.allowShell && s.agent?.allowShell !== false} />}
+            {ready && (
+              <LiveControl
+                key={active.id}
+                deviceId={active.id}
+                platform={active.platform}
+                allowShell={active.allowShell && active.agent?.allowShell !== false}
+              />
+            )}
 
             {/* Recent AI / Remote Activity */}
             <section className="flex flex-col gap-3">
-              <h3 className="text-base font-semibold tracking-[-0.01em]">Recent PC activity</h3>
+              <h3 className="text-base font-semibold tracking-[-0.01em]">Recent activity</h3>
               {s.audit.length === 0 ? (
-                <p className="rounded-2xl bg-surface p-4 text-sm text-muted-foreground">No actions yet. Ask Codex, Claude, OpenCode, or Hamasa to inspect or control your PC once connected.</p>
+                <p className="rounded-2xl bg-surface p-4 text-sm text-muted-foreground">No actions yet. Ask Codex, Claude, OpenCode, or Hamasa to inspect or control your PC or Android phone once connected.</p>
               ) : (
                 <ul className="flex flex-col gap-0.5 rounded-2xl bg-surface p-1.5">
                   {s.audit.map((a) => (
@@ -309,6 +429,7 @@ export function PcPage() {
                         <span className={cn('rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase', a.ok ? 'bg-emerald-500/15 text-emerald-400' : 'bg-destructive/15 text-destructive')}>
                           {a.source}
                         </span>
+                        {a.deviceName && <span className="shrink-0 rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">{a.deviceName}</span>}
                         <span className="truncate font-medium text-foreground">{a.summary}</span>
                       </div>
                       <span className="shrink-0 text-muted-foreground tabular-nums">
@@ -337,21 +458,36 @@ function GatePill({ label, ok, detail }: { label: string; ok: boolean; detail: s
   )
 }
 
-function PairSection({ s, onPaired }: { s: PcStatus; onPaired: (next: PcStatus) => void }) {
-  const defaultPc = s.tailnet.devices.find((d) => /windows/i.test(d.os) && d.ip) ?? s.tailnet.devices.find((d) => d.ip) ?? null
-  const [name, setName] = useState(defaultPc?.name ?? 'my-windows-pc')
-  const [tailscaleIp, setTailscaleIp] = useState(defaultPc?.ip ?? '')
-  const [port, setPort] = useState('47821')
+function detectPlatform(os: string): DevicePlatform {
+  return /android/i.test(os) ? 'android' : 'windows'
+}
+
+function PairSection({ s, onPaired }: { s: PcStatus; onPaired: (next: PcStatus, ip: string) => void }) {
+  const pairedIps = new Set(s.devices.map((d) => d.tailscaleIp))
+  const candidates = s.tailnet.devices.filter((d) => d.ip)
+  const defaultDev = candidates.find((d) => !pairedIps.has(d.ip!)) ?? candidates[0] ?? null
+  const initialPlatform = defaultDev ? detectPlatform(defaultDev.os) : 'windows'
+
+  const [name, setName] = useState(defaultDev?.name ?? 'my-device')
+  const [platform, setPlatform] = useState<DevicePlatform>(initialPlatform)
+  const [tailscaleIp, setTailscaleIp] = useState(defaultDev?.ip ?? '')
+  const [port, setPort] = useState(initialPlatform === 'android' ? '47822' : '47821')
   const [allowShell, setAllowShell] = useState(true)
 
   const pair = useMutation({
     mutationFn: () =>
       unwrap(api.api.pc.pair.$post({
-        json: { name: name.trim(), tailscaleIp: tailscaleIp.trim(), port: Number(port) || 47821, allowShell },
+        json: {
+          name: name.trim(),
+          platform,
+          tailscaleIp: tailscaleIp.trim(),
+          port: Number(port) || (platform === 'android' ? 47822 : 47821),
+          allowShell,
+        },
       })) as Promise<PcStatus>,
     onSuccess: (next) => {
-      toast.success(`Paired ${next.device?.name} — download and run the Windows installer`)
-      onPaired(next)
+      toast.success(`Paired ${name.trim()} — download and run the ${platform === 'android' ? 'Termux' : 'Windows'} installer`)
+      onPaired(next, tailscaleIp.trim())
     },
   })
 
@@ -359,51 +495,80 @@ function PairSection({ s, onPaired }: { s: PcStatus; onPaired: (next: PcStatus) 
     <div className="grid max-w-4xl gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <form onSubmit={(e: FormEvent) => { e.preventDefault(); pair.mutate() }} className="flex flex-col gap-5 rounded-2xl bg-surface p-5">
         <div>
-          <h2 className="text-lg font-semibold tracking-[-0.02em]">Pair your Windows PC over Tailscale</h2>
+          <h2 className="text-lg font-semibold tracking-[-0.02em]">Pair a Windows PC or Android Phone</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Pick a device from your Tailscale tailnet. DevDash generates a private token and a Tailscale-locked Windows installer that only works while Tailscale is connected.
+            Pick any device from your Tailscale tailnet. You can pair both your Windows PC and your Android phone and switch between them anytime.
           </p>
         </div>
 
-        {s.tailnet.devices.length > 0 && (
+        {candidates.length > 0 && (
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-muted-foreground">Devices on your tailnet</span>
             <div className="flex flex-col gap-1">
-              {s.tailnet.devices.filter((d) => d.ip).map((d) => (
-                <button
-                  key={d.dnsName || d.name}
-                  type="button"
-                  onClick={() => { setName(d.name); setTailscaleIp(d.ip ?? '') }}
-                  className={cn(
-                    'flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors',
-                    tailscaleIp === d.ip ? 'bg-primary/15 ring-1 ring-primary/40' : 'bg-background hover:bg-surface-2',
-                  )}
-                >
-                  <span className="flex min-w-0 items-center gap-2.5">
-                    <Laptop className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{d.name}</span>
-                      <span className="block text-xs text-muted-foreground tabular-nums">{d.os || 'device'} · {d.ip}</span>
+              {candidates.map((d) => {
+                const plat = detectPlatform(d.os)
+                const already = pairedIps.has(d.ip!)
+                return (
+                  <button
+                    key={d.dnsName || d.name}
+                    type="button"
+                    onClick={() => {
+                      setName(d.name)
+                      setPlatform(plat)
+                      setTailscaleIp(d.ip ?? '')
+                      setPort(plat === 'android' ? '47822' : '47821')
+                    }}
+                    className={cn(
+                      'flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors',
+                      tailscaleIp === d.ip ? 'bg-primary/15 ring-1 ring-primary/40' : 'bg-background hover:bg-surface-2',
+                    )}
+                  >
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      {plat === 'android' ? <Smartphone className="size-4 shrink-0 text-muted-foreground" /> : <Laptop className="size-4 shrink-0 text-muted-foreground" />}
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-2 font-medium">
+                          <span className="truncate">{d.name}</span>
+                          {already && <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] text-muted-foreground">Paired</span>}
+                        </span>
+                        <span className="block text-xs text-muted-foreground tabular-nums">{d.os || plat} · {d.ip}</span>
+                      </span>
                     </span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    <StatusLight state={d.online ? 'live' : 'idle'} />{d.online ? 'Online' : 'Offline'}
-                  </span>
-                </button>
-              ))}
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                      <StatusLight state={d.online ? 'live' : 'idle'} />{d.online ? 'Online' : 'Offline'}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           </div>
         )}
 
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => { setPlatform('windows'); if (port === '47822') setPort('47821') }}
+            className={cn('flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium transition-colors', platform === 'windows' ? 'bg-primary/15 text-foreground ring-1 ring-primary/40' : 'bg-background text-muted-foreground')}
+          >
+            <Monitor className="size-4" />Windows PC
+          </button>
+          <button
+            type="button"
+            onClick={() => { setPlatform('android'); if (port === '47821') setPort('47822') }}
+            className={cn('flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium transition-colors', platform === 'android' ? 'bg-primary/15 text-foreground ring-1 ring-primary/40' : 'bg-background text-muted-foreground')}
+          >
+            <Smartphone className="size-4" />Android Phone
+          </button>
+        </div>
+
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="pc-name">PC name</FieldLabel>
+            <FieldLabel htmlFor="pc-name">Device name</FieldLabel>
             <Input id="pc-name" value={name} onChange={(e) => setName(e.target.value)} required />
           </Field>
           <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
             <Field>
               <FieldLabel htmlFor="pc-ip">Tailscale IPv4</FieldLabel>
-              <Input id="pc-ip" value={tailscaleIp} onChange={(e) => setTailscaleIp(e.target.value)} placeholder="100.67.118.37" className="font-mono" required />
+              <Input id="pc-ip" value={tailscaleIp} onChange={(e) => setTailscaleIp(e.target.value)} placeholder="100.93.73.0" className="font-mono" required />
             </Field>
             <Field>
               <FieldLabel htmlFor="pc-port">Port</FieldLabel>
@@ -414,8 +579,8 @@ function PairSection({ s, onPaired }: { s: PcStatus; onPaired: (next: PcStatus) 
 
         <div className="flex items-center justify-between gap-3 rounded-xl bg-background px-3 py-2.5">
           <div>
-            <div className="text-sm font-medium">Allow full PowerShell access</div>
-            <p className="text-xs text-muted-foreground">Gives AI full shell + filesystem control in addition to screen/mouse/keyboard.</p>
+            <div className="text-sm font-medium">{platform === 'android' ? 'Allow Termux & ADB shell access' : 'Allow full PowerShell access'}</div>
+            <p className="text-xs text-muted-foreground">Gives AI full shell + filesystem control in addition to screen & input.</p>
           </div>
           <Switch checked={allowShell} onCheckedChange={setAllowShell} />
         </div>
@@ -423,22 +588,22 @@ function PairSection({ s, onPaired }: { s: PcStatus; onPaired: (next: PcStatus) 
         <ErrorAlert error={pair.error} />
         <div>
           <Button type="submit" disabled={pair.isPending || !name.trim() || !tailscaleIp.trim()}>
-            {pair.isPending ? <Spinner /> : 'Pair PC & generate installer'}
+            {pair.isPending ? <Spinner /> : `Pair ${platform === 'android' ? 'Android phone' : 'Windows PC'} & generate installer`}
           </Button>
         </div>
       </form>
 
       <aside className="flex flex-col gap-3 rounded-2xl bg-surface p-5 text-xs text-muted-foreground">
-        <h3 className="text-sm font-semibold text-foreground">How Tailscale-only security works</h3>
-        <p>1. Your PC agent binds strictly to its Tailscale IP (<code className="text-foreground">100.x.y.z</code>) — never public internet or LAN.</p>
-        <p>2. Windows Firewall + app-level peer check accept traffic <strong>only</strong> from your DevDash VPS (<code className="text-foreground">{s.tailnet.vpsIp ?? '100.x.y.z'}</code>) with a 256-bit sealed bearer token.</p>
-        <p>3. DevDash checks live Tailscale peer status before every action. Turn off Tailscale on your PC and access drops instantly.</p>
+        <h3 className="text-sm font-semibold text-foreground">Tailscale-only security (PC & Android)</h3>
+        <p>1. Both agents bind strictly to their Tailscale IP (<code className="text-foreground">100.x.y.z</code>) — never public internet or LAN.</p>
+        <p>2. Every request requires a sealed 256-bit Bearer token AND must originate from your DevDash VPS (<code className="text-foreground">{s.tailnet.vpsIp ?? '100.x.y.z'}</code>).</p>
+        <p>3. DevDash checks live Tailscale peer status before every action. Turn off Tailscale on your PC or phone and access stops immediately.</p>
       </aside>
     </div>
   )
 }
 
-function LiveControl({ allowShell }: { allowShell: boolean }) {
+function LiveControl({ deviceId, platform, allowShell }: { deviceId: number; platform: DevicePlatform; allowShell: boolean }) {
   const qc = useQueryClient()
   const imgRef = useRef<HTMLImageElement>(null)
   const [shot, setShot] = useState<ScreenshotState | null>(null)
@@ -447,10 +612,11 @@ function LiveControl({ allowShell }: { allowShell: boolean }) {
   const [typeText, setTypeText] = useState('')
   const [psCmd, setPsCmd] = useState('')
   const [psOut, setPsOut] = useState<{ stdout?: string; stderr?: string; exitCode?: number } | null>(null)
+  const isAndroid = platform === 'android'
 
   const runAction = useMutation({
     mutationFn: ({ tool, args }: { tool: string; args?: Record<string, unknown> }) =>
-      unwrap(api.api.pc.action.$post({ json: { tool, args: args ?? {} } })) as Promise<Record<string, unknown>>,
+      unwrap(api.api.pc.action.$post({ json: { deviceId, tool, args: args ?? {} } })) as Promise<Record<string, unknown>>,
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['pc', 'status'] }) },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -469,7 +635,7 @@ function LiveControl({ allowShell }: { allowShell: boolean }) {
     if (!autoRefresh) return
     const id = setInterval(() => { void capture() }, 3000)
     return () => clearInterval(id)
-  }, [autoRefresh])
+  }, [autoRefresh, deviceId])
 
   const onScreenClick = async (e: MouseEvent<HTMLImageElement>) => {
     if (!shot || !imgRef.current) return
@@ -481,6 +647,10 @@ function LiveControl({ allowShell }: { allowShell: boolean }) {
     await runAction.mutateAsync({ tool: 'pc_click', args: { x, y, button: 'left', clicks: 1 } })
     setTimeout(() => { void capture() }, 350)
   }
+
+  const quickKeys = isAndroid
+    ? ['Back', 'Home', 'Recents', 'Notifications', 'QuickSettings', 'Wake', 'Enter', 'Backspace']
+    : ['Win', 'Alt+Tab', 'Enter', 'Escape', 'Backspace', 'Ctrl+C', 'Ctrl+V', 'Ctrl+Shift+Esc']
 
   return (
     <section className="flex flex-col gap-4 rounded-2xl bg-surface p-5">
@@ -496,44 +666,46 @@ function LiveControl({ allowShell }: { allowShell: boolean }) {
           <Button size="sm" variant={autoRefresh ? 'default' : 'secondary'} onClick={() => setAutoRefresh((v) => !v)}>
             {autoRefresh ? 'Auto 3s: ON' : 'Auto 3s: OFF'}
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => void refreshWindows()} disabled={runAction.isPending}>
-            <AppWindow className="size-4" />Windows
-          </Button>
+          {!isAndroid && (
+            <Button size="sm" variant="secondary" onClick={() => void refreshWindows()} disabled={runAction.isPending}>
+              <AppWindow className="size-4" />Windows
+            </Button>
+          )}
         </div>
       </div>
 
       {shot && (
-        <div className="overflow-hidden rounded-xl border border-border/60 bg-black">
+        <div className={cn('overflow-hidden rounded-xl border border-border/60 bg-black', isAndroid && 'mx-auto max-w-sm')}>
           <img
             ref={imgRef}
             src={`data:${shot.mimeType || 'image/jpeg'};base64,${shot.screenshotBase64}`}
-            alt="Live Windows PC screen"
+            alt={isAndroid ? 'Live Android phone screen' : 'Live Windows PC screen'}
             onClick={(e) => void onScreenClick(e)}
             className="w-full cursor-crosshair select-none object-contain"
           />
           <div className="flex flex-wrap items-center justify-between gap-2 bg-background/80 px-3 py-1.5 text-[11px] text-muted-foreground tabular-nums">
-            <span>Tap anywhere on screen to click · {shot.screenWidth}×{shot.screenHeight}</span>
-            <span>Cursor ({shot.cursorX}, {shot.cursorY})</span>
+            <span>Tap anywhere on screen to {isAndroid ? 'tap' : 'click'} · {shot.screenWidth}×{shot.screenHeight}</span>
+            {!isAndroid && <span>Cursor ({shot.cursorX}, {shot.cursorY})</span>}
           </div>
         </div>
       )}
 
-      {/* Quick hotkeys & typing */}
+      {/* Quick keys & scroll/swipe */}
       <div className="flex flex-wrap gap-1.5">
-        {['Win', 'Alt+Tab', 'Enter', 'Escape', 'Backspace', 'Ctrl+C', 'Ctrl+V', 'Ctrl+Shift+Esc'].map((k) => (
+        {quickKeys.map((k) => (
           <Button key={k} size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={async () => {
             await runAction.mutateAsync({ tool: 'pc_press_key', args: { key: k } })
-            if (shot) setTimeout(() => { void capture() }, 300)
+            if (shot) setTimeout(() => { void capture() }, 350)
           }}>{k}</Button>
         ))}
         <Button size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={async () => {
           await runAction.mutateAsync({ tool: 'pc_scroll', args: { deltaY: 4 } })
-          if (shot) setTimeout(() => { void capture() }, 300)
-        }}>Scroll Up</Button>
+          if (shot) setTimeout(() => { void capture() }, 350)
+        }}>{isAndroid ? 'Swipe Down' : 'Scroll Up'}</Button>
         <Button size="sm" variant="secondary" className="h-7 px-2.5 text-xs" onClick={async () => {
           await runAction.mutateAsync({ tool: 'pc_scroll', args: { deltaY: -4 } })
-          if (shot) setTimeout(() => { void capture() }, 300)
-        }}>Scroll Down</Button>
+          if (shot) setTimeout(() => { void capture() }, 350)
+        }}>{isAndroid ? 'Swipe Up' : 'Scroll Down'}</Button>
       </div>
 
       <form
@@ -546,11 +718,11 @@ function LiveControl({ allowShell }: { allowShell: boolean }) {
           if (shot) setTimeout(() => { void capture() }, 350)
         }}
       >
-        <Input value={typeText} onChange={(e) => setTypeText(e.target.value)} placeholder="Type text to send to PC (+ Enter)…" className="flex-1" />
+        <Input value={typeText} onChange={(e) => setTypeText(e.target.value)} placeholder={`Type text to send to ${isAndroid ? 'phone' : 'PC'} (+ Enter)…`} className="flex-1" />
         <Button type="submit" size="sm" disabled={!typeText || runAction.isPending}><Keyboard className="size-4" />Send</Button>
       </form>
 
-      {windows.length > 0 && (
+      {windows.length > 0 && !isAndroid && (
         <div className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-muted-foreground">Open windows (tap to focus)</span>
           <div className="flex flex-wrap gap-1.5">
@@ -587,7 +759,12 @@ function LiveControl({ allowShell }: { allowShell: boolean }) {
               })
             }}
           >
-            <Input value={psCmd} onChange={(e) => setPsCmd(e.target.value)} placeholder="Run PowerShell on PC (e.g. Get-Process | Select -First 5)" className="flex-1 font-mono text-xs" />
+            <Input
+              value={psCmd}
+              onChange={(e) => setPsCmd(e.target.value)}
+              placeholder={isAndroid ? 'Run Termux shell (or prefix with "adb:" e.g. adb:dumpsys battery)' : 'Run PowerShell on PC (e.g. Get-Process | Select -First 5)'}
+              className="flex-1 font-mono text-xs"
+            />
             <Button type="submit" size="sm" variant="secondary" disabled={!psCmd.trim() || runAction.isPending}><Terminal className="size-4" />Run</Button>
           </form>
           {psOut && (

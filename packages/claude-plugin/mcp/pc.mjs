@@ -1,65 +1,79 @@
 #!/usr/bin/env node
-// DevDash PC Computer Use MCP server (stdio JSON-RPC 2.0).
+// DevDash Multi-Device Computer Use MCP server (Windows PC + Android Phone, stdio JSON-RPC 2.0).
 // Zero external dependencies, zero secrets in provider configs: every call routes through this member's
-// DevDash agent Unix socket → DevDash server → Tailscale online gate → Tailscale SOCKS5 proxy → Windows PC agent.
+// DevDash agent Unix socket → DevDash server → Tailscale online gate → Tailscale SOCKS5 proxy → device agent.
 import { connect } from 'node:net'
 import { userInfo } from 'node:os'
 import { createInterface } from 'node:readline'
 
 const SOCKET = process.env.DEVDASH_AGENT_SOCKET || `/run/devdash/agent-${process.env.USER || userInfo().username}.sock`
-const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false })
+const deviceProp = {
+  type: 'string',
+  description: 'Optional target device selector: device name (e.g. "DESKTOP-LGSA21G" or "Kensei\'s A36"), platform ("windows" or "android"), or Tailscale IP. Omit to use the default device.',
+}
+const obj = (properties, required = [], withDevice = true) => ({
+  type: 'object',
+  properties: withDevice ? { device: deviceProp, ...properties } : properties,
+  required,
+  additionalProperties: false,
+})
 
 const TOOLS = [
   {
+    name: 'pc_list_devices',
+    description: 'List all paired Tailscale devices (Windows PC and/or Android phone) with their platform, Tailscale IP, enabled state, default flag, and live Tailscale online status. Call this first when choosing between PC and phone.',
+    inputSchema: obj({}, [], false),
+  },
+  {
     name: 'pc_status',
-    description: 'Check the paired Windows PC health over Tailscale: hostname, OS, Tailscale IP, monitors, cursor position, paused/kill-switch state, and whether PowerShell access is enabled.',
+    description: 'Check the target Windows PC or Android phone health over Tailscale: hostname/model, OS, Tailscale IP, battery (Android), displays, ADB status (Android), paused/kill-switch state, and shell access.',
     inputSchema: obj({}),
   },
   {
     name: 'pc_list_monitors',
-    description: 'List all connected monitors on the Windows PC with their indices, primary flag, and desktop coordinate bounds (x, y, width, height).',
+    description: 'List connected displays on the Windows PC or Android phone with coordinate bounds (x, y, width, height).',
     inputSchema: obj({}),
   },
   {
     name: 'pc_list_apps',
-    description: 'List running Windows applications/processes with PID, process name, window title, executable path, and memory usage.',
+    description: 'List running apps on Windows (with PID/memory) or installed user app packages on Android.',
     inputSchema: obj({}),
   },
   {
     name: 'pc_list_windows',
-    description: 'Enumerate all visible top-level Windows desktop windows (hwnd, pid, process, title, bounds, focused, minimized, maximized). Call this first to find windows before focusing or inspecting them.',
+    description: 'List visible desktop windows on Windows (hwnd, pid, process, title, bounds) or current focused app/window on Android.',
     inputSchema: obj({}),
   },
   {
     name: 'pc_get_window_state',
-    description: 'Codex-style hybrid inspection: captures BOTH the structured Windows UI Automation (UIA) interactive element tree (with clickable elementIds e1, e2, ..., roles, names, values, and screen bounds) AND a visual screenshot of the active or target window.',
+    description: 'Codex-style hybrid inspection: captures BOTH the live accessibility/UI tree (Windows UI Automation or Android uiautomator XML with clickable elementIds e1, e2, ..., roles, names, bounds) AND a visual screenshot.',
     inputSchema: obj({
-      hwnd: { type: 'string', description: 'Window handle from pc_list_windows. Omit to inspect the active foreground window.' },
+      hwnd: { type: 'string', description: 'Windows hwnd from pc_list_windows (optional; ignored on Android).' },
       includeScreenshot: { type: 'boolean', description: 'Include screenshot image (default true).' },
-      fullScreen: { type: 'boolean', description: 'Capture full screen instead of cropping to the window (default false).' },
-      maxWidth: { type: 'integer', description: 'Max screenshot width in px (default 1280).' },
-      quality: { type: 'integer', description: 'JPEG quality 30-95 (default 72).' },
-      maxElements: { type: 'integer', description: 'Max UIA elements to extract (default 140).' },
+      fullScreen: { type: 'boolean', description: 'Capture full screen instead of window crop on Windows (default false).' },
+      maxWidth: { type: 'integer', description: 'Max screenshot width in px on Windows (default 1280).' },
+      quality: { type: 'integer', description: 'JPEG quality 30-95 on Windows (default 72).' },
+      maxElements: { type: 'integer', description: 'Max UI elements to extract (default 140).' },
     }),
   },
   {
     name: 'pc_screenshot',
-    description: 'Take a visual screenshot of the Windows desktop (full virtual screen, a specific monitor index, or a specific window hwnd) with cursor indicator and exact screen coordinate mapping.',
+    description: 'Take a visual screenshot of the Windows desktop or Android phone screen with exact coordinate mapping.',
     inputSchema: obj({
-      monitor: { type: 'integer', description: 'Monitor index from pc_list_monitors (omit for full virtual screen).' },
-      hwnd: { type: 'string', description: 'Optional window hwnd to capture only that window.' },
-      maxWidth: { type: 'integer', description: 'Max image width in px (default 1280).' },
-      quality: { type: 'integer', description: 'JPEG quality 30-95 (default 72).' },
-      drawCursor: { type: 'boolean', description: 'Overlay current cursor marker (default true).' },
+      monitor: { type: 'integer', description: 'Monitor index on Windows (omit for full screen).' },
+      hwnd: { type: 'string', description: 'Optional Windows hwnd.' },
+      maxWidth: { type: 'integer', description: 'Max image width in px on Windows (default 1280).' },
+      quality: { type: 'integer', description: 'JPEG quality 30-95 on Windows (default 72).' },
+      drawCursor: { type: 'boolean', description: 'Overlay cursor marker on Windows (default true).' },
     }),
   },
   {
     name: 'pc_window_action',
-    description: 'Focus, minimize, maximize, restore, close, or move/resize a Windows window by hwnd or partial title/process match.',
+    description: 'Focus, minimize, maximize, restore, close, or move/resize a window (on Android: focus launches a package, minimize presses Home, close presses Back).',
     inputSchema: obj({
       action: { type: 'string', enum: ['focus', 'minimize', 'maximize', 'restore', 'close', 'move_resize'] },
-      hwnd: { type: 'string', description: 'Window handle from pc_list_windows.' },
-      title: { type: 'string', description: 'Partial window title or process name if hwnd is omitted.' },
+      hwnd: { type: 'string', description: 'Windows hwnd from pc_list_windows.' },
+      title: { type: 'string', description: 'Partial window title/process on Windows, or Android package name.' },
       x: { type: 'integer' },
       y: { type: 'integer' },
       width: { type: 'integer' },
@@ -68,36 +82,36 @@ const TOOLS = [
   },
   {
     name: 'pc_launch_app',
-    description: 'Launch any Windows app, executable, URL, ms-settings URI, folder, or file (e.g. "chrome", "notepad.exe", "code", "https://...", "ms-settings:network").',
+    description: 'Launch an app or URL: executable/file/URL on Windows (e.g. "chrome", "code", "https://...") or package name/URL on Android (e.g. "com.android.chrome", "https://...").',
     inputSchema: obj({
-      target: { type: 'string', description: 'Executable, command, file path, or URL to open.' },
-      args: { type: 'string', description: 'Optional command-line arguments.' },
-      cwd: { type: 'string', description: 'Optional working directory.' },
+      target: { type: 'string', description: 'App executable/package name, file path, or URL.' },
+      args: { type: 'string', description: 'Optional arguments (Windows).' },
+      cwd: { type: 'string', description: 'Optional working directory (Windows).' },
     }, ['target']),
   },
   {
     name: 'pc_kill_app',
-    description: 'Terminate a Windows process by PID or process name.',
+    description: 'Stop a running app: by pid or process name on Windows, or force-stop package name on Android.',
     inputSchema: obj({
-      pid: { type: 'integer', description: 'Process ID to kill.' },
-      name: { type: 'string', description: 'Process name without .exe (e.g. "notepad").' },
+      pid: { type: 'integer', description: 'Windows process ID.' },
+      name: { type: 'string', description: 'Windows process name without .exe, or Android package name.' },
     }),
   },
   {
     name: 'pc_click',
-    description: 'Click on the Windows screen either by screen pixel coordinates (x, y) or by UIA elementId (e.g. "e12") from the latest pc_get_window_state.',
+    description: 'Click (Windows) or tap (Android) by screen coordinates (x, y) or UI elementId (e.g. "e12") from pc_get_window_state. Use button:"right" for right-click on Windows or long-press on Android.',
     inputSchema: obj({
-      elementId: { type: 'string', description: 'UIA element ID from pc_get_window_state (preferred when available).' },
+      elementId: { type: 'string', description: 'UI element ID from pc_get_window_state (preferred when available).' },
       x: { type: 'integer', description: 'Native screen X pixel coordinate.' },
       y: { type: 'integer', description: 'Native screen Y pixel coordinate.' },
-      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button (default "left").' },
-      clicks: { type: 'integer', minimum: 1, maximum: 3, description: 'Number of clicks: 1=single, 2=double, 3=triple.' },
-      modifiers: { type: 'array', items: { type: 'string' }, description: 'Optional modifier keys held during click (e.g. ["ctrl"], ["shift"]).' },
+      button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button (right = long-press on Android).' },
+      clicks: { type: 'integer', minimum: 1, maximum: 3, description: '1=single, 2=double, 3=triple.' },
+      modifiers: { type: 'array', items: { type: 'string' }, description: 'Optional Windows modifier keys (e.g. ["ctrl"]).' },
     }),
   },
   {
     name: 'pc_move_mouse',
-    description: 'Move the mouse cursor to (x, y) or to a UIA elementId without clicking (useful for hover menus/tooltips).',
+    description: 'Move mouse cursor to (x, y) or elementId on Windows without clicking.',
     inputSchema: obj({
       elementId: { type: 'string' },
       x: { type: 'integer' },
@@ -106,7 +120,7 @@ const TOOLS = [
   },
   {
     name: 'pc_drag',
-    description: 'Drag the mouse smoothly from (x1, y1) to (x2, y2) for drag-and-drop, sliders, text selection, or window resizing.',
+    description: 'Drag (Windows) or touch-swipe (Android) smoothly from (x1, y1) to (x2, y2).',
     inputSchema: obj({
       x1: { type: 'integer' },
       y1: { type: 'integer' },
@@ -118,7 +132,7 @@ const TOOLS = [
   },
   {
     name: 'pc_scroll',
-    description: 'Scroll the mouse wheel vertically (deltaY: negative scrolls down, positive scrolls up) or horizontally (deltaX), optionally moving to (x, y) first.',
+    description: 'Scroll vertically (deltaY: negative = scroll down, positive = scroll up) or horizontally (deltaX). Uses mouse wheel on Windows and touch swipe on Android.',
     inputSchema: obj({
       deltaY: { type: 'integer', description: 'Vertical scroll notches (negative = down, positive = up; default -3).' },
       deltaX: { type: 'integer', description: 'Horizontal scroll notches.' },
@@ -128,16 +142,16 @@ const TOOLS = [
   },
   {
     name: 'pc_type_text',
-    description: 'Type Unicode text into the active input (or click elementId first), optionally pressing Enter afterward.',
+    description: 'Type text into the active input (or click/tap elementId first), optionally pressing Enter afterward.',
     inputSchema: obj({
-      text: { type: 'string', description: 'Text to type (supports Unicode, symbols, newlines).' },
-      elementId: { type: 'string', description: 'Optional UIA elementId to click/focus before typing.' },
+      text: { type: 'string', description: 'Text to type (supports Unicode).' },
+      elementId: { type: 'string', description: 'Optional UI elementId to focus before typing.' },
       enter: { type: 'boolean', description: 'Press Enter after typing (default false).' },
     }, ['text']),
   },
   {
     name: 'pc_set_value',
-    description: 'Replace the value of an input field (clicks elementId or x/y, selects all with Ctrl+A, and types value).',
+    description: 'Replace the value of an input field (taps/clicks target, selects all, types new value).',
     inputSchema: obj({
       elementId: { type: 'string' },
       x: { type: 'integer' },
@@ -148,41 +162,41 @@ const TOOLS = [
   },
   {
     name: 'pc_press_key',
-    description: 'Press a keyboard key or hotkey chord (e.g. "Enter", "Escape", "Tab", "Ctrl+C", "Ctrl+V", "Ctrl+Shift+Esc", "Win+R", "Alt+Tab", "Alt+F4", "F5").',
+    description: 'Press a key or shortcut. Windows: "Enter", "Escape", "Ctrl+C", "Win+R", "Alt+Tab", "Ctrl+Shift+Esc". Android: "Home", "Back", "Recents", "Notifications", "QuickSettings", "Wake", "Power", "VolumeUp", "VolumeDown", "Enter", "Backspace".',
     inputSchema: obj({
-      key: { type: 'string', description: 'Key name or "+"-joined chord.' },
+      key: { type: 'string', description: 'Key name or hotkey chord.' },
     }, ['key']),
   },
   {
     name: 'pc_clipboard',
-    description: 'Read or write plain text on the Windows PC clipboard.',
+    description: 'Read or write plain text on the Windows or Android clipboard.',
     inputSchema: obj({
       mode: { type: 'string', enum: ['get', 'set'] },
-      text: { type: 'string', description: 'Text to copy to clipboard when mode is "set".' },
+      text: { type: 'string', description: 'Text to copy when mode is "set".' },
     }, ['mode']),
   },
   {
     name: 'pc_run_powershell',
-    description: 'Run a PowerShell command directly on the Windows PC (returns stdout, stderr, exitCode). Requires PowerShell access to be enabled in My PC.',
+    description: 'Run a shell command on the device: PowerShell on Windows, or Termux sh (or prefix with "adb:" for adb shell) on Android. Requires shell access enabled.',
     inputSchema: obj({
-      command: { type: 'string', description: 'PowerShell command or script to run.' },
-      cwd: { type: 'string', description: 'Optional working directory on the Windows PC.' },
+      command: { type: 'string', description: 'PowerShell command (Windows) or sh / "adb:..." command (Android).' },
+      cwd: { type: 'string', description: 'Optional working directory.' },
       timeoutSec: { type: 'integer', minimum: 2, maximum: 90, description: 'Timeout in seconds (default 30).' },
     }, ['command']),
   },
   {
     name: 'pc_fs',
-    description: 'Direct Windows filesystem access: list a directory, read a text file, or write a UTF-8 file on the paired PC.',
+    description: 'Direct filesystem access on Windows (e.g. C:\\Users\\...) or Android (e.g. /sdcard/Download): list directory, read UTF-8 file, or write file.',
     inputSchema: obj({
       mode: { type: 'string', enum: ['list', 'read', 'write'] },
-      path: { type: 'string', description: 'Absolute Windows path (e.g. "C:\\Users\\ken\\Desktop").' },
+      path: { type: 'string', description: 'Absolute path on the target device.' },
       content: { type: 'string', description: 'File contents when mode is "write".' },
       maxBytes: { type: 'integer', description: 'Max bytes to read when mode is "read" (default 131072).' },
     }, ['mode', 'path']),
   },
   {
     name: 'pc_wait',
-    description: 'Wait for a short delay (e.g. for an app or page to load) and optionally take a fresh screenshot afterward.',
+    description: 'Wait for a short delay and optionally take a fresh screenshot afterward.',
     inputSchema: obj({
       ms: { type: 'integer', minimum: 100, maximum: 15000, description: 'Delay in milliseconds (default 1000).' },
       screenshot: { type: 'boolean', description: 'Capture a fresh screenshot after waiting.' },
@@ -204,7 +218,7 @@ function call(method, params) {
       if (err) reject(err)
       else resolve(val)
     }
-    const timer = setTimeout(() => done(new Error('DevDash PC bridge timed out.')), 115_000)
+    const timer = setTimeout(() => done(new Error('DevDash device bridge timed out.')), 115_000)
     sock.setEncoding('utf8')
     sock.on('connect', () => sock.write(JSON.stringify({ op: 'rpc', method, params }) + '\n'))
     sock.on('data', (d) => {
@@ -234,7 +248,7 @@ async function handle(m) {
       return {
         protocolVersion: m.params?.protocolVersion ?? '2025-06-18',
         capabilities: { tools: {} },
-        serverInfo: { name: 'devdash-pc', version: '1.0.0' },
+        serverInfo: { name: 'devdash-pc', version: '1.1.0' },
       }
     case 'ping':
       return {}

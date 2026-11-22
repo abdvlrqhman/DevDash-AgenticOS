@@ -32,7 +32,7 @@ const GROUPS: { title: string; links: Destination[] }[] = [
     { to: '/browser', label: 'Browser', description: 'A shared browser on the server that stays signed in', icon: Globe },
     { to: '/server', label: 'Server', description: 'Health, versions and backups', icon: Activity },
     { to: '/network', label: 'Network', description: 'Reach your own devices over your private tailnet', icon: Network },
-    { to: '/pc', label: 'My PC', description: 'Codex-grade computer use on your Windows PC over Tailscale', icon: Monitor },
+    { to: '/pc', label: 'My Devices', description: 'Codex-grade computer use on your Windows PC & Android phone over Tailscale', icon: Monitor },
     { to: '/storage', label: 'Storage', description: 'Your Google Drive, for big files like videos', icon: Cloud },
   ] },
   { title: 'Team and settings', links: [

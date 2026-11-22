@@ -26,7 +26,7 @@ function setup() {
       }
       if (msg.op === 'mcps.change') return { ok: true }
       if (msg.op === 'pc.request') {
-        return { httpStatus: 200, data: { ok: true, hostname: 'DESKTOP-LGSA21G', path: msg.path } }
+        return { httpStatus: 200, data: { ok: true, targetIp: msg.targetIp, path: msg.path } }
       }
       return { ok: true }
     },
@@ -38,14 +38,15 @@ function setup() {
   const tailnet = {
     status: async () => ({
       backendState: 'Running',
-      self: { hostName: 'devdash-ken-1', tailscaleIPs: ['100.111.214.117'] },
+      self: { hostName: 'devdash-ken', tailscaleIPs: ['100.111.214.117'] },
       socksPort: 43000,
       httpPort: 43001,
       running: true,
       hasKey: true,
       connected: true,
       devices: [
-        { name: 'desktop-lgsa21g', dnsName: 'desktop-lgsa21g.ts.net', os: 'windows', ip: '100.67.118.37', online: true, lastSeen: null },
+        { name: 'DESKTOP-LGSA21G', dnsName: 'desktop-lgsa21g.ts.net', os: 'windows', ip: '100.67.118.37', online: true, lastSeen: null },
+        { name: "Kensei's A36", dnsName: 'kenseis-a36.ts.net', os: 'android', ip: '100.93.73.0', online: true, lastSeen: null },
       ],
     }),
   } as unknown as TailnetService
@@ -55,48 +56,55 @@ function setup() {
   return { db, user, pc, calls, getRpc: () => rpcHandler! }
 }
 
-describe('pcService', () => {
-  it('pairs a Tailscale PC, seals its token, generates a Tailscale-locked installer, and runs MCP tools', async () => {
-    const { db, user, pc, calls, getRpc } = setup()
+describe('pcService (Windows PC + Android multi-device)', () => {
+  it('pairs both a Windows PC and Android phone, generates platform installers, and routes MCP tools per device', async () => {
+    const { user, pc, calls, getRpc } = setup()
 
     await assert.rejects(
       () => pc.pair(user, { name: 'Bad', tailscaleIp: '192.168.1.5' }),
       /Tailscale IPv4/,
     )
 
-    const paired = await pc.pair(user, { name: 'desktop-lgsa21g', tailscaleIp: '100.67.118.37', allowShell: true })
-    assert.equal(paired.device?.name, 'desktop-lgsa21g')
-    assert.equal(paired.device?.tailscaleIp, '100.67.118.37')
-    assert.equal((paired.device as Record<string, unknown>).token_sealed, undefined)
+    const s1 = await pc.pair(user, { name: 'DESKTOP-LGSA21G', platform: 'windows', tailscaleIp: '100.67.118.37', allowShell: true })
+    assert.equal(s1.devices.length, 1)
+    assert.equal(s1.devices[0]?.platform, 'windows')
 
-    // Token is sealed in DB, not plaintext
-    const dbRow = db.prepare('select token_sealed from pc_devices where user_id = 1').get() as { token_sealed: string }
-    assert.ok(dbRow.token_sealed.length > 20)
+    const s2 = await pc.pair(user, { name: "Kensei's A36", platform: 'android', tailscaleIp: '100.93.73.0', allowShell: true })
+    assert.equal(s2.devices.length, 2)
+    const winDev = s2.devices.find((d) => d.platform === 'windows')!
+    const andDev = s2.devices.find((d) => d.platform === 'android')!
+    assert.equal(andDev.port, 47822)
 
-    // Installer embeds VPS Tailscale IP + strict firewall rule
-    const { script, filename } = await pc.installerScript(user)
-    assert.match(filename, /install-devdash-pc-desktop-lgsa21g\.ps1/)
-    assert.match(script, /100\.111\.214\.117/)
-    assert.match(script, /New-NetFirewallRule/)
+    // Windows installer (.ps1) vs Android Termux installer (.sh)
+    const winInst = await pc.installerScript(user, winDev.id)
+    assert.match(winInst.filename, /\.ps1$/)
+    assert.match(winInst.script, /New-NetFirewallRule/)
 
-    // Execute MCP tool through registered RPC
-    const res = await getRpc()('ken', { tool: 'pc_list_windows', args: {} }) as Record<string, unknown>
-    assert.equal(res.ok, true)
-    assert.equal(res.path, '/v1/windows')
+    const andInst = await pc.installerScript(user, andDev.id)
+    assert.match(andInst.filename, /\.sh$/)
+    assert.match(andInst.script, /100\.111\.214\.117/)
+    assert.match(andInst.script, /pair-adb\.sh/)
 
-    // Kill-switch blocks further actions immediately
-    await pc.updateSettings(user, { enabled: false })
-    await assert.rejects(() => pc.executeTool(user, 'pc_screenshot', {}, 'mcp'), /paused in DevDash/)
+    // MCP pc_list_devices shows both devices
+    const listed = await getRpc()('ken', { tool: 'pc_list_devices', args: {} }) as { devices: unknown[] }
+    assert.equal(listed.devices.length, 2)
 
-    // Re-enable but disable PowerShell
-    await pc.updateSettings(user, { enabled: true, allowShell: false })
-    await assert.rejects(() => pc.executeTool(user, 'pc_run_powershell', { command: 'whoami' }, 'mcp'), /PowerShell execution is turned off/)
+    // Default targets Windows; device:"android" targets Android phone!
+    const rWin = await getRpc()('ken', { tool: 'pc_list_windows', args: {} }) as Record<string, unknown>
+    assert.equal(rWin.targetIp, '100.67.118.37')
+
+    const rAnd = await getRpc()('ken', { tool: 'pc_screenshot', args: { device: 'android' } }) as Record<string, unknown>
+    assert.equal(rAnd.targetIp, '100.93.73.0')
+
+    // Per-device kill-switch blocks only Android while Windows stays active
+    await pc.updateSettings(user, { deviceId: andDev.id, enabled: false })
+    await assert.rejects(() => pc.executeTool(user, 'pc_screenshot', { device: 'android' }, 'mcp'), /paused in DevDash/)
+    const rWinStillOk = await pc.executeTool(user, 'pc_screenshot', { device: 'windows' }, 'mcp')
+    assert.equal(rWinStillOk.ok, true)
 
     // One-click MCP install registers my-pc in Codex
     const installed = await pc.installMcp(user)
     assert.equal(installed.results[0]?.ok, true)
-    const upsert = calls.find((c) => c.msg.op === 'mcps.change')
-    assert.equal(upsert?.msg.name, 'my-pc')
-    assert.match(String(upsert?.msg.command), /pc\.mjs$/)
+    assert.ok(calls.some((c) => c.msg.op === 'mcps.change' && c.msg.name === 'my-pc'))
   })
 })

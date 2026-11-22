@@ -57,7 +57,7 @@ const NAV: { label?: string; items: NavItem[] }[] = [
     { to: '/browser', label: 'Browser', icon: Globe },
     { to: '/vault', label: 'Vault', icon: KeyRound },
     { to: '/network', label: 'Network', icon: Network },
-    { to: '/pc', label: 'My PC', icon: Monitor },
+    { to: '/pc', label: 'My Devices', icon: Monitor },
     { to: '/storage', label: 'Storage', icon: Cloud },
   ] },
   { label: 'Team', items: [
