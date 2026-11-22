@@ -3,8 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import {
   Activity, AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clock,
-  ExternalLink, History, Loader2, Pencil, Play, Plus, Send, Sparkles,
-  Square, Trash2, Bot, Zap, SlidersHorizontal,
+  ExternalLink, History, Loader2, Pencil, Play, Plus, Sparkles,
+  Square, Trash2, Bot, Zap, SlidersHorizontal, X,
 } from 'lucide-react'
 import { confirmAction } from '@/components/app/confirm'
 import { NativeSelect } from '@/components/app/native-select'
@@ -29,6 +29,7 @@ import { agentCapabilities, HARNESS, HARNESSES, type Harness } from '../claude/h
 import { ModelField, ThinkingLevelField } from '../claude/ModelChoices'
 import { effortLevels, type ModelInfo } from '../claude/models'
 import { Prose } from '../claude/Prose'
+import { SessionView } from '../claude/SessionPage'
 import { projectsQuery } from '../work/data'
 import {
   CALLER_LABELS, COLOR_LIST, COLOR_STYLES, ICON_LIST, SCOPE_LABELS,
@@ -1036,21 +1037,7 @@ function RunDetailSheet({ runId, onClose }: { runId: number | null; onClose: () 
     enabled: !!runId,
   })
   const stop = useStopSubagentRun()
-  const [followUp, setFollowUp] = useState('')
-  const [stepsExpanded, setStepsExpanded] = useState(true)
-
-  const send = useMutation({
-    mutationFn: () => unwrap(api.api.subagents.runs[':runId'].send.$post({
-      param: { runId: String(runId!) },
-      json: { message: followUp.trim() },
-    })),
-    onSuccess: () => {
-      setFollowUp('')
-      void qc.invalidateQueries({ queryKey: ['subagents'] })
-      void qc.invalidateQueries({ queryKey: ['subagents', 'run', runId] })
-    },
-    onError: (e) => toast.error(e.message),
-  })
+  const [stepsExpanded, setStepsExpanded] = useState(false)
 
   const remove = useMutation({
     mutationFn: () => unwrap(api.api.subagents.runs[':runId'].$delete({ param: { runId: String(runId!) } })),
@@ -1065,159 +1052,169 @@ function RunDetailSheet({ runId, onClose }: { runId: number | null; onClose: () 
   const isActive = run?.status === 'running' || run?.status === 'waiting'
   const color = COLOR_STYLES[(run?.subagentColor as SubagentColor) ?? 'blue'] ?? COLOR_STYLES.blue
   const meta = run ? statusMeta(run.status) : null
+  const modelText = shortModelLabel(run?.model, run?.effort)
+
+  const headerBar = (
+    <SheetHeader className="shrink-0 gap-0 border-b bg-background/95 px-3 pt-[calc(env(safe-area-inset-top)+0.625rem)] pb-2.5 backdrop-blur-sm">
+      <div className="flex items-center gap-2.5">
+        {run && meta ? (
+          <>
+            <span className={cn('flex size-8 shrink-0 items-center justify-center rounded-xl border', color.badge)}>
+              <SubagentIconGlyph icon={run.subagentIcon} className="size-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <SheetTitle className="flex items-center gap-1.5 text-sm font-semibold">
+                <span className="truncate">{run.subagentName}</span>
+                <Badge variant="outline" className={cn('h-5 shrink-0 px-1.5 text-[10px]', meta.badge)}>
+                  <meta.icon className={cn('size-2.5', meta.spin && 'animate-spin')} />
+                  {meta.label}
+                </Badge>
+              </SheetTitle>
+              <SheetDescription className="mt-0.5 flex items-center gap-1 truncate text-[11px]">
+                <span className="shrink-0">{CALLER_LABELS[run.callerKind] ?? run.callerKind}</span>
+                {modelText && (
+                  <><span>·</span><span className="truncate font-mono text-[10px]">{modelText}</span></>
+                )}
+                <span>·</span>
+                <span className="shrink-0 tabular-nums">{formatDuration(run.startedAt, run.finishedAt)}</span>
+                {run.costUsd !== null && run.costUsd > 0 && (
+                  <><span>·</span><span className="shrink-0 tabular-nums">${run.costUsd.toFixed(4)}</span></>
+                )}
+              </SheetDescription>
+            </div>
+          </>
+        ) : (
+          <SheetTitle className="flex-1 text-sm font-semibold">Subagent chat</SheetTitle>
+        )}
+
+        <div className="flex shrink-0 items-center gap-0.5">
+          {run?.sessionId && (
+            <Button variant="ghost" size="icon-sm" asChild title="Open full session" aria-label="Open full session">
+              <Link to="/sessions/$id" params={{ id: run.sessionId }} onClick={onClose}>
+                <ExternalLink className="size-4" />
+              </Link>
+            </Button>
+          )}
+          {run && isActive && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-destructive hover:text-destructive"
+              title="Stop run"
+              aria-label="Stop run"
+              disabled={stop.isPending}
+              onClick={() => stop.mutate(run.id)}
+            >
+              <Square className="size-3.5" />
+            </Button>
+          )}
+          {run && !isActive && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-destructive"
+              title="Remove from history"
+              aria-label="Remove from history"
+              disabled={remove.isPending}
+              onClick={async () => {
+                if (await confirmAction({
+                  title: 'Remove this run from history?',
+                  description: 'This removes the run entry from your Subagents history.',
+                  action: 'Remove',
+                  destructive: true,
+                })) {
+                  remove.mutate()
+                }
+              }}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          )}
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close">
+            <X className="size-4" />
+          </Button>
+        </div>
+      </div>
+    </SheetHeader>
+  )
 
   return (
     <Sheet open={!!runId} onOpenChange={(open) => { if (!open) onClose() }}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-xl">
-        <SheetHeader className="border-b px-4 py-3.5 pr-12">
-          {run && meta ? (
-            <div className="flex items-start gap-3">
-              <span className={cn('mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl border', color.badge)}>
-                <SubagentIconGlyph icon={run.subagentIcon} className="size-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <SheetTitle className="flex flex-wrap items-center gap-2 text-base">
-                  <span className="truncate">{run.subagentName}</span>
-                  <Badge variant="outline" className={cn('h-5 px-1.5 text-[10px]', meta.badge)}>
-                    <meta.icon className={cn('size-2.5', meta.spin && 'animate-spin')} />
-                    {meta.label}
-                  </Badge>
-                </SheetTitle>
-                <SheetDescription className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
-                  <span>{CALLER_LABELS[run.callerKind] ?? run.callerKind}</span>
-                  {shortModelLabel(run.model, run.effort) && (
-                    <><span>·</span><span className="font-mono text-[11px]">{shortModelLabel(run.model, run.effort)}</span></>
-                  )}
-                  {run.projectSlug && <><span>·</span><span>{run.projectSlug}</span></>}
-                  <span>·</span>
-                  <span>{formatDuration(run.startedAt, run.finishedAt)}</span>
-                  <span>·</span>
-                  <span>{relativeTime(run.startedAt)}</span>
-                  {run.costUsd !== null && run.costUsd > 0 && (
-                    <><span>·</span><span>${run.costUsd.toFixed(4)}</span></>
-                  )}
-                </SheetDescription>
-              </div>
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="flex h-dvh w-full flex-col gap-0 p-0 data-[side=right]:w-full data-[side=right]:border-l-0 data-[side=right]:sm:max-w-2xl data-[side=right]:sm:border-l"
+      >
+        {q.isLoading ? (
+          <>
+            {headerBar}
+            <div className="flex flex-col gap-3 p-4">
+              <Skeleton className="h-16 rounded-xl" />
+              <Skeleton className="h-28 rounded-xl" />
             </div>
-          ) : (
-            <SheetTitle>Subagent run</SheetTitle>
-          )}
-        </SheetHeader>
-
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-          {q.isLoading && <Skeleton className="h-32 rounded-xl" />}
-          {q.error && <ErrorAlert error={q.error} />}
-          {run && (
-            <>
-              {/* Action bar */}
-              <div className="flex flex-wrap items-center gap-2">
-                {run.sessionId && (
-                  <Button variant="outline" size="xs" asChild>
-                    <Link to="/sessions/$id" params={{ id: run.sessionId }}>
-                      <ExternalLink className="size-3" />Open full session
-                    </Link>
-                  </Button>
-                )}
-                {isActive && (
-                  <Button
-                    variant="destructive"
-                    size="xs"
-                    disabled={stop.isPending}
-                    onClick={() => stop.mutate(run.id)}
-                  >
-                    <Square className="size-3" />Stop run
-                  </Button>
-                )}
-                {!isActive && (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="ml-auto text-muted-foreground hover:text-destructive"
-                    disabled={remove.isPending}
-                    onClick={() => remove.mutate()}
-                  >
-                    <Trash2 className="size-3" />Remove from history
-                  </Button>
-                )}
-              </div>
-
-              {/* Task */}
+          </>
+        ) : q.error ? (
+          <>
+            {headerBar}
+            <div className="p-4"><ErrorAlert error={q.error} /></div>
+          </>
+        ) : run?.sessionId ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <SessionView
+              key={run.sessionId}
+              id={run.sessionId}
+              embedded={{ header: headerBar, name: run.subagentName }}
+            />
+          </div>
+        ) : run ? (
+          <>
+            {headerBar}
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
               <section className="rounded-xl border bg-surface/60 p-3">
                 <div className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Task</div>
                 <p className="text-sm whitespace-pre-wrap">{run.task}</p>
               </section>
-
-              {/* Current live activity */}
-              {isActive && (
-                <section className={cn(
-                  'flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-sm',
-                  run.status === 'waiting'
-                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-                )}>
-                  {run.status === 'waiting'
-                    ? <AlertCircle className="size-4 shrink-0" />
-                    : <Loader2 className="size-4 shrink-0 animate-spin" />}
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium">{run.activity || 'Working…'}</div>
-                    {run.status === 'waiting' && run.sessionId && (
-                      <div className="text-xs opacity-90">Open the full session to answer its prompt or approve permissions.</div>
-                    )}
-                  </div>
-                </section>
-              )}
-
-              {/* Activity steps timeline */}
-              <section className="rounded-xl border">
-                <button
-                  type="button"
-                  onClick={() => setStepsExpanded((v) => !v)}
-                  className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground"
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Activity className="size-3.5" />
-                    Activity progress ({run.steps.length})
-                  </span>
-                  {stepsExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                </button>
-                {stepsExpanded && (
-                  <div className="max-h-56 overflow-y-auto border-t px-3 py-2">
-                    {run.steps.length === 0 ? (
-                      <div className="py-2 text-xs text-muted-foreground">No recorded steps yet.</div>
-                    ) : (
+              {run.steps.length > 0 && (
+                <section className="rounded-xl border">
+                  <button
+                    type="button"
+                    onClick={() => setStepsExpanded((v) => !v)}
+                    className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Activity className="size-3.5" />
+                      Activity ({run.steps.length})
+                    </span>
+                    {stepsExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                  </button>
+                  {stepsExpanded && (
+                    <div className="max-h-56 overflow-y-auto border-t px-3 py-2">
                       <ol className="flex flex-col gap-1.5">
                         {run.steps.map((step, i) => (
                           <li key={i} className="flex items-start gap-2 text-xs">
-                            <span className={cn(
-                              'mt-1 size-1.5 shrink-0 rounded-full',
-                              i === run.steps.length - 1 && isActive ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground/50',
-                            )} />
+                            <span className="mt-1 size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
                             <div className="min-w-0 flex-1">
                               <span className="font-medium text-foreground">{step.label}</span>
-                              {step.detail && (
+                              {step.detail && !step.label.includes(step.detail) && (
                                 <span className="ml-1.5 text-muted-foreground">{step.detail}</span>
                               )}
                             </div>
                             <span className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
-                              {new Date(step.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              {new Date(step.at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                             </span>
                           </li>
                         ))}
                       </ol>
-                    )}
-                  </div>
-                )}
-              </section>
-
-              {/* Error */}
+                    </div>
+                  )}
+                </section>
+              )}
               {run.error && (
                 <section className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                   <div className="font-semibold">Error</div>
                   <p className="mt-0.5 text-xs whitespace-pre-wrap">{run.error}</p>
                 </section>
               )}
-
-              {/* Result output */}
               {run.result && (
                 <section className="rounded-xl border bg-background p-3.5">
                   <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
@@ -1227,38 +1224,9 @@ function RunDetailSheet({ runId, onClose }: { runId: number | null; onClose: () 
                   <Prose text={run.result} />
                 </section>
               )}
-            </>
-          )}
-        </div>
-
-        {/* Follow-up message composer */}
-        {run?.sessionId && (
-          <form
-            className="flex items-end gap-2 border-t bg-background p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (!followUp.trim() || send.isPending) return
-              send.mutate()
-            }}
-          >
-            <Textarea
-              rows={1}
-              placeholder="Send a follow-up to this subagent…"
-              value={followUp}
-              onChange={(e) => setFollowUp(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  if (followUp.trim() && !send.isPending) send.mutate()
-                }
-              }}
-              className="max-h-28 min-h-9 resize-none"
-            />
-            <Button type="submit" size="icon" disabled={send.isPending || !followUp.trim()} aria-label="Send follow-up">
-              {send.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-            </Button>
-          </form>
-        )}
+            </div>
+          </>
+        ) : null}
       </SheetContent>
     </Sheet>
   )

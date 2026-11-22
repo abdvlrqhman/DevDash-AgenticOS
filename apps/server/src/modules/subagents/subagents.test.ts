@@ -391,3 +391,49 @@ test('subagent defaults decouple subagents from the main frontier model and reco
   assert.equal(cleared.model, null)
   assert.equal(service.claudeSubagentModel(ann.id), null)
 })
+
+test('deduplicates repeated activity steps and reopens a finished run on native chat follow-up', async () => {
+  const { service, emitMsg, emitAgentEvent, emitTurnEnd, transcripts } = setup()
+  const ann = user(1, 'ann', 'Ann Lee')
+  const sa = await service.create(ann, { name: 'Code Search', slug: 'code-search', instructions: 'Search' })
+  const run = await service.runManual(ann, sa.id, { task: 'Survey files' })
+
+  // Duplicate tool_use events with short arg hint should collapse and not repeat detail
+  emitMsg(run.sessionId!, {
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', name: 'T3 Code', input: { title: 'Ran command' } }] },
+  })
+  emitMsg(run.sessionId!, {
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', name: 'T3 Code', input: { title: 'Ran command' } }] },
+  })
+
+  const mid = service.getRun(ann, run.id)
+  const toolSteps = mid.steps.filter((s) => s.kind === 'tool')
+  assert.equal(toolSteps.length, 1)
+  assert.equal(toolSteps[0]!.label, 'T3 Code: Ran command')
+  assert.equal(toolSteps[0]!.detail, undefined)
+
+  // Finish the first turn
+  transcripts.set(run.sessionId!, [
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'First answer.' }] } },
+  ])
+  emitTurnEnd(run.sessionId!, { costUsd: 0.001 })
+  await new Promise((r) => setTimeout(r, 15))
+  assert.equal(service.getRun(ann, run.id).status, 'completed')
+
+  // User sends a follow-up directly in SessionView (fires claude.status working)
+  emitAgentEvent('ann', { ev: 'claude.status', id: run.sessionId!, status: 'working' })
+  const reopened = service.getRun(ann, run.id)
+  assert.equal(reopened.status, 'running')
+
+  // Follow-up turn completes and updates stored result
+  transcripts.set(run.sessionId!, [
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Follow-up answer.' }] } },
+  ])
+  emitTurnEnd(run.sessionId!, { costUsd: 0.002 })
+  await new Promise((r) => setTimeout(r, 15))
+  const finished = service.getRun(ann, run.id)
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.result, 'Follow-up answer.')
+})

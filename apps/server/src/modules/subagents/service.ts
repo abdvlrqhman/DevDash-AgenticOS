@@ -337,10 +337,11 @@ export function describeStreamEvent(msg: unknown): { kind: string; label: string
     }
     const cleanName = name.replace(/^mcp__[^_]+__/, '')
     const argHint = str('query') ?? str('url') ?? str('title') ?? str('path') ?? str('description')
+    const clippedHint = argHint ? clip(argHint, 70) : undefined
     return {
       kind: 'tool',
-      label: argHint ? `${cleanName}: ${clip(argHint, 70)}` : `Using ${cleanName}…`,
-      detail: argHint,
+      label: clippedHint ? `${cleanName}: ${clippedHint}` : `Using ${cleanName}…`,
+      ...(argHint && clippedHint && argHint !== clippedHint ? { detail: argHint } : {}),
     }
   }
 
@@ -552,9 +553,15 @@ export function subagentsService({
     const steps = safeSteps(row.steps_json)
     const last = steps.at(-1)
     const now = Math.floor(Date.now() / 1000)
-    // Collapse consecutive identical "Thinking…" entries so the timeline stays clean.
-    if (!(last && last.kind === 'thinking' && kind === 'thinking')) {
-      steps.push({ kind, label: clip(label, 140), ...(detail ? { detail: clip(detail, 240) } : {}), at: now })
+    const clippedLabel = clip(label, 140)
+    const clippedDetail = detail && !clippedLabel.includes(detail) ? clip(detail, 240) : undefined
+    // Collapse consecutive identical entries so the timeline stays clean.
+    const sameAsLast = !!last && (
+      (last.kind === 'thinking' && kind === 'thinking') ||
+      (last.kind === kind && last.label === clippedLabel && (last.detail ?? undefined) === clippedDetail)
+    )
+    if (!sameAsLast) {
+      steps.push({ kind, label: clippedLabel, ...(clippedDetail ? { detail: clippedDetail } : {}), at: now })
     }
     const trimmed = steps.slice(-MAX_STEPS_LOG)
     q.updateRunActivity.run(status, clip(label, 140), JSON.stringify(trimmed), row.id)
@@ -623,7 +630,17 @@ export function subagentsService({
   agents.onEvent((_username, ev) => {
     if (ev.ev !== 'claude.status' || typeof ev.id !== 'string') return
     const row = q.runBySession.get(ev.id) as RunRow | undefined
-    if (!row || (row.status !== 'running' && row.status !== 'waiting')) return
+    if (!row) return
+    if (ev.status === 'working' && row.status !== 'running') {
+      if (row.status === 'waiting') {
+        appendStep(row, 'running', 'Resumed…', 'running')
+      } else {
+        q.reopenRun.run(row.id)
+        appendStep(q.runByIdAny.get(row.id) as RunRow, 'running', 'Continuing…', 'running')
+      }
+      return
+    }
+    if (row.status !== 'running' && row.status !== 'waiting') return
     if (ev.status === 'error') {
       const detail = typeof ev.detail === 'string' && ev.detail.trim() ? ev.detail.trim().slice(0, 1000) : 'Subagent stopped with an error.'
       q.finishRun.run('failed', 'Failed', null, detail, null, row.id)
@@ -632,8 +649,6 @@ export function subagentsService({
         publish(row.user_id, row.id)
         notifyWaiters(runDto(updated))
       }
-    } else if (ev.status === 'working' && row.status === 'waiting') {
-      appendStep(row, 'running', 'Resumed…', 'running')
     }
   })
 
