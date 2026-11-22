@@ -70,6 +70,8 @@ const autopilot = createRoute({ getParentRoute: () => app, path: '/autopilot', c
 const subagents = createRoute({ getParentRoute: () => app, path: '/subagents', validateSearch: validateSubagentsSearch, component: lazy(() => import('./features/subagents/SubagentsPage'), 'SubagentsPage') })
 const more = createRoute({ getParentRoute: () => app, path: '/more', component: lazy(() => import('./features/more/MorePage'), 'MorePage') })
 const mcps = createRoute({ getParentRoute: () => app, path: '/mcps', component: lazy(() => import('./features/skills/McpsPage'), 'McpsPage') })
+const mcpCreate = createRoute({ getParentRoute: () => app, path: '/mcps/add/$source', component: lazy(() => import('./features/skills/McpsPage'), 'McpCreatePage') })
+const mcpDetail = createRoute({ getParentRoute: () => app, path: '/mcps/$source/$name', component: lazy(() => import('./features/skills/McpsPage'), 'McpDetailPage') })
 const skills = createRoute({ getParentRoute: () => app, path: '/skills', component: lazy(() => import('./features/skills/SkillsPage'), 'SkillsPage') })
 const skillReview = createRoute({
   getParentRoute: () => app, path: '/skills/review/$id', component: lazy(() => import('./features/skills/ReviewPage'), 'ReviewPage'),
@@ -136,7 +138,7 @@ const legacyClaude = createRoute({
 })
 
 const router = createRouter({
-  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, mcps, skillReview, providerSkill, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity, subagents])]),
+  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, mcps, mcpCreate, mcpDetail, skillReview, providerSkill, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity, subagents])]),
   context: { queryClient },
   defaultPreload: 'intent',
 })
