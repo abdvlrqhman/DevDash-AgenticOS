@@ -60,6 +60,18 @@ export function provisioningService({ db, runDir, onReady }: { db: Db; runDir: s
       const r = await requestLine<{ ok: boolean; error?: string }>(join(runDir, 'helper.sock'), { cmd, args: { id, slug } }, 10 * 60_000)
       if (!r.ok) throw new Error(r.error?.replace(/^refused: /, '') ?? 'Could not move the project folder.')
     },
+    /** Ensures this member's own isolated devdash-t3@<user> service is enabled and listening on a private loopback port. */
+    async ensureT3(username: string): Promise<{ port: number; baseDir: string; url: string } | null> {
+      if (!runDir) return null
+      const r = await requestLine<{ ok: boolean; error?: string; port?: number; baseDir?: string; url?: string }>(
+        join(runDir, 'helper.sock'),
+        { cmd: 't3-ensure', args: { username } },
+        30_000,
+      )
+      if (!r.ok) throw new Error(r.error?.replace(/^refused: /, '') ?? 'Could not start your T3 Code service.')
+      if (!r.port || !r.baseDir || !r.url) throw new Error('T3 Code service helper returned incomplete details.')
+      return { port: r.port, baseDir: r.baseDir, url: r.url }
+    },
     usernames: () => (s.pending.all() as User[]).map((u) => u.username),
     /** Idempotent: re-applies every active member (role changes, missed sign-ups, a fresh host). */
     async reconcileAll() {

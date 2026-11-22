@@ -841,6 +841,19 @@ export function refreshT3() {
   t3code.invalidateInfo()
   for (const key of modelCache.keys()) if (key.startsWith('t3code:')) modelCache.delete(key)
 }
+export function t3SetupCommand(kind: t3code.T3SetupKind) {
+  return t3code.setupCommand(kind)
+}
+export async function connectT3(opts?: { url?: string; baseDir?: string; t3Bin?: string }) {
+  const res = await t3code.connectMember(opts)
+  for (const key of modelCache.keys()) if (key.startsWith('t3code:')) modelCache.delete(key)
+  return res
+}
+export async function disconnectT3() {
+  const res = await t3code.disconnectMember()
+  for (const key of modelCache.keys()) if (key.startsWith('t3code:')) modelCache.delete(key)
+  return res
+}
 /** Commands and models for a profile of an agent: its models from every provider the profile has connected. */
 export async function commandsAndModels(harness: string, profile: string, selected?: string, supervisor = false) {
   if (!PROFILE_RE.test(profile)) throw new Error('invalid profile')

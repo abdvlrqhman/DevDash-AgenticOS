@@ -105,6 +105,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const claude = claudeService({
     db, agents, hub, notify: notifications.notify, projects, tailnetConnected: (userId) => !!tailnet?.isConnected(userId),
     storageFor: (userId) => storage.forLaunch(userId),
+    ensureT3: (username) => provisioning.ensureT3(username),
   })
 
   // Each member's personal agent: a conversation beside every page, with tools across everything they can see.

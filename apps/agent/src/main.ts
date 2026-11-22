@@ -50,6 +50,12 @@ async function ensureTerminal(name: string, cols: number, rows: number) {
       + ' || { echo; echo "GitHub sign-in did not finish."; read -r -p "Press Enter to close this tab. " _; }'
     return void (await tmux(...base, '-e', 'BROWSER=echo', 'bash', '-lc', script))
   }
+  // T3 Code's interactive member setup tabs (t3-connect, t3-pair, t3-status).
+  const t3Setup = /^t3-(connect|pair|status)$/.exec(name)
+  if (t3Setup) {
+    const { env, args } = harness.t3SetupCommand(t3Setup[1]! as 'connect' | 'pair' | 'status')
+    return void (await tmux(...base, ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), ...args))
+  }
   // OpenCode's sign-ins (oc-<kind>-<profile>: any provider, its own account, its Go key), else a Claude profile's.
   const other = /^oc-(login|acct|go)-(.+)$/.exec(name)
   if (other) {
@@ -135,6 +141,11 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile'), typeof r.model === 'string' ? r.model : undefined, r.supervisor === true) : claude.commandsAndModels(str(r.profile, 'profile'))),
   'claude.title': (r) => (acp(r) ? harness : claude).title(launchOf(r)),
   'claude.rename': async (r) => (await (acp(r) ? harness : claude).rename(launchOf(r), str(r.title, 'title')), { ok: true }),
+  't3.connect': async (r) => harness.connectT3({
+    ...(typeof r.url === 'string' && r.url ? { url: r.url } : {}),
+    ...(typeof r.baseDir === 'string' && r.baseDir ? { baseDir: r.baseDir } : {}),
+  }),
+  't3.disconnect': async () => harness.disconnectT3(),
   'claude.profiles': async (r) => {
     if (r.refresh === true) harness.refreshT3()
     return {

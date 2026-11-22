@@ -216,3 +216,26 @@ test('embedded browser CDP proxy compiles cleanly and Chromium policies preserve
   assert.match(src, /DownloadRestrictions:\s*3/, 'policy keeps download restrictions')
   assert.match(src, /AllowFileSelectionDialogs:\s*false/, 'policy keeps file dialog restriction')
 })
+
+test('t3-ensure: validates member account, installs unit/dirs/env with 0700/0600, and starts devdash-t3@user', () => {
+  const r = call({ cmd: 't3-ensure', args: { username: 'alice' } }, { DEVDASH_HELPER_FAKE_UID: '1000' }) as unknown as {
+    ok: boolean
+    port: number
+    baseDir: string
+    url: string
+    planned: string[]
+  }
+  assert.equal(r.ok, true)
+  assert.equal(r.port, 3781)
+  assert.equal(r.baseDir, '/home/alice/.local/share/devdash-t3')
+  assert.equal(r.url, 'http://127.0.0.1:3781/mcp')
+  assert.ok(r.planned.includes('install -m 644 /opt/devdash/current/deploy/systemd/devdash-t3@.service /etc/systemd/system/devdash-t3@.service'))
+  assert.ok(r.planned.includes('install -d -m 700 -o alice -g alice /home/alice/.local/share/devdash-t3'))
+  assert.ok(r.planned.includes('install -d -m 700 -o alice -g alice /home/alice/.config/devdash'))
+  assert.ok(r.planned.includes('install -m 600 -o alice -g alice /dev/stdin /home/alice/.config/devdash/t3-service.env <stdin>'))
+  assert.equal(r.planned.at(-1), 'systemctl enable --now devdash-t3@alice')
+
+  assert.match(call({ cmd: 't3-ensure', args: { username: 'root' } }).error!, /refused: invalid username/)
+  assert.match(call({ cmd: 't3-ensure', args: { username: 'alice' } }).error!, /refused: not a member account/)
+  assert.match(call({ cmd: 't3-ensure', args: { username: 'alice' } }, { DEVDASH_HELPER_FAKE_UID: '33' }).error!, /refused: not a member account/)
+})

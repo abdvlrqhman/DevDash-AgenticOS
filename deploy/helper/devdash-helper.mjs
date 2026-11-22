@@ -8,7 +8,8 @@
 // DEVDASH_HELPER_DRYRUN=1 prints the commands instead of running them (used by tests).
 import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { connect as netConnect } from 'node:net'
 
 const DRY = process.env.DEVDASH_HELPER_DRYRUN === '1'
 
@@ -575,6 +576,84 @@ const commands = {
   },
 
   /** Removes the owner-match rules for a member's tailnet proxy ports. Runs on disconnect. Idempotent. */
+  /**
+   * Provisions and starts a member's own isolated T3 Code instance (devdash-t3@<user>).
+   * Root only creates the member's 0700 directories, assigns an unused loopback port, and enables their systemd unit;
+   * OAuth pairing and ~/.config/devdash/t3code.json stay strictly inside the member's own agent/account.
+   */
+  async 't3-ensure'(a) {
+    const u = username(a.username)
+    const entry = lookup(u)
+    if (!entry || !(entry.uid >= 1000 && entry.uid < 60000)) throw new Refused('not a member account')
+    if (!DRY && !groupsOf(u).includes(MEMBERS_GROUP)) throw new Refused('not a DevDash member')
+
+    const t3Bin = '/opt/devdash/t3code/current/t3'
+    if (!DRY && !existsSync(t3Bin)) {
+      throw new Error('T3 Code is not installed on this server (/opt/devdash/t3code/current/t3).')
+    }
+
+    const unitDest = '/etc/systemd/system/devdash-t3@.service'
+    const unitSrc = '/opt/devdash/current/deploy/systemd/devdash-t3@.service'
+    if (DRY || (!existsSync(unitDest) && existsSync(unitSrc))) {
+      run('install', ['-m', '644', unitSrc, unitDest])
+      run('systemctl', ['daemon-reload'])
+    }
+
+    const home = entry.home || `/home/${u}`
+    if (!DRY) {
+      const hst = lstatSync(home)
+      if (!hst.isDirectory() || hst.isSymbolicLink() || hst.uid !== entry.uid) {
+        throw new Refused(`unsafe home directory: ${home}`)
+      }
+    }
+    const baseDir = `${home}/.local/share/devdash-t3`
+    const cfgDir = `${home}/.config/devdash`
+    const envFile = `${cfgDir}/t3-service.env`
+
+    for (const [dir, mode] of [
+      [`${home}/.local`, '700'],
+      [`${home}/.local/share`, '700'],
+      [baseDir, '700'],
+      [`${home}/.config`, '700'],
+      [cfgDir, '700'],
+    ]) {
+      if (!DRY && existsSync(dir)) {
+        const st = lstatSync(dir)
+        if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== entry.uid) {
+          throw new Refused(`unsafe directory: ${dir}`)
+        }
+      } else {
+        run('install', ['-d', '-m', mode, '-o', u, '-g', u, dir])
+      }
+    }
+    run('chmod', ['700', baseDir, cfgDir])
+
+    let port = null
+    if (!DRY && existsSync(envFile)) {
+      const st = lstatSync(envFile)
+      if (!st.isFile() || st.isSymbolicLink() || st.uid !== entry.uid) {
+        throw new Refused('unsafe t3-service.env')
+      }
+      const m = readFileSync(envFile, 'utf8').match(/^\s*DEVDASH_T3_PORT\s*=\s*(\d{4,5})\s*$/m)
+      if (m) {
+        const n = Number(m[1])
+        if (Number.isInteger(n) && n >= 1024 && n <= 65535) port = n
+      }
+    }
+
+    if (!port) {
+      port = DRY ? 3781 : await pickT3Port()
+      runInput('install', ['-m', '600', '-o', u, '-g', u, '/dev/stdin', envFile], `DEVDASH_T3_PORT=${port}\n`)
+    }
+
+    run('systemctl', ['enable', '--now', `devdash-t3@${u}`])
+    if (!DRY) {
+      const ready = await waitPort(port, 8000)
+      if (!ready) throw new Error(`devdash-t3@${u} started, but 127.0.0.1:${port} did not become ready in time.`)
+    }
+    return { port, baseDir, url: `http://127.0.0.1:${port}/mcp` }
+  },
+
   'tailnet-unisolate'(a) {
     const u = username(a.username)
     const entry = lookup(u)
@@ -628,6 +707,44 @@ function tailnetRule(action, uid, port) {
   if (action === 'remove' && exists) run('iptables', ['-D', ...rule])
 }
 
+
+function portOpen(port) {
+  return new Promise((resolve) => {
+    const sock = netConnect({ host: '127.0.0.1', port })
+    const done = (ok) => { sock.destroy(); resolve(ok) }
+    sock.setTimeout(300, () => done(false))
+    sock.once('connect', () => done(true))
+    sock.once('error', () => done(false))
+  })
+}
+
+async function waitPort(port, timeoutMs) {
+  const until = Date.now() + timeoutMs
+  while (Date.now() < until) {
+    if (await portOpen(port)) return true
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  return false
+}
+
+async function pickT3Port() {
+  const claimed = new Set()
+  try {
+    for (const name of readdirSync('/home')) {
+      try {
+        const raw = readFileSync(`/home/${name}/.config/devdash/t3-service.env`, 'utf8')
+        const m = raw.match(/^\s*DEVDASH_T3_PORT\s*=\s*(\d{4,5})\s*$/m)
+        if (m) claimed.add(Number(m[1]))
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  for (let p = 3781; p <= 3899; p++) {
+    if (claimed.has(p)) continue
+    if (!(await portOpen(p))) return p
+  }
+  throw new Error('No free local port available for devdash-t3 (3781-3899).')
+}
+
 async function main() {
   let input = ''
   for await (const chunk of process.stdin) {
@@ -639,7 +756,7 @@ async function main() {
     const req = JSON.parse(input.split('\n')[0])
     const fn = Object.hasOwn(commands, req?.cmd) ? commands[req.cmd] : null
     if (!fn) throw new Refused('unknown command')
-    res = { ok: true, ...fn(req.args ?? {}) }
+    res = { ok: true, ...(await fn(req.args ?? {})) }
   } catch (err) {
     res = { ok: false, error: err instanceof Refused || err instanceof SyntaxError ? `refused: ${err.message}` : err.message }
   }
