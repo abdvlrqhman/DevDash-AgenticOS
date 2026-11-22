@@ -43,6 +43,8 @@ export type Launch = {
   fast?: boolean
   /** The model Claude Code's advisor tool consults (opus, sonnet, fable); none: no advisor. */
   advisor?: string | null
+  /** Optional smaller/faster model for Claude Code's built-in subagents (CLAUDE_CODE_SUBAGENT_MODEL). */
+  subagentModel?: string | null
   /** Remote Control: the session also shows in claude.ai/code and the Claude app, under this title. */
   remote?: boolean
   title?: string
@@ -204,6 +206,8 @@ export const flagSettings = (l: Pick<Launch, 'fast' | 'advisor'>, s?: SessionSki
 
 export const profileDir = (p: string) => (p === 'default' ? join(homedir(), '.claude') : join(homedir(), '.claude-profiles', p))
 export const profileEnv = (p: string): Record<string, string> => (p === 'default' ? {} : { CLAUDE_CONFIG_DIR: profileDir(p) })
+const SUBAGENT_MODEL_RE = /^[a-zA-Z0-9._:/-]{1,120}$/
+const subagentEnv = (l: Launch): Record<string, string> => (l.subagentModel && SUBAGENT_MODEL_RE.test(l.subagentModel) ? { CLAUDE_CODE_SUBAGENT_MODEL: l.subagentModel } : {})
 
 export function validate(l: Launch) {
   if (!ID_RE.test(l.id)) throw new Error('invalid session id')
@@ -310,7 +314,7 @@ async function startChat(l: Launch): Promise<Chat> {
     prompt: inbox,
     options: {
       cwd: l.cwd,
-      env: { ...process.env, ...profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}) },
+      env: { ...process.env, ...profileEnv(l.profile), ...subagentEnv(l), DEVDASH_SESSION_ID: l.id, ...(tn?.env ?? {}) },
       ...(tn?.mcpServers ? { mcpServers: tn.mcpServers } : {}),
       pathToClaudeCodeExecutable: CLAUDE_BIN,
       ...(l.started ? { resume: l.id } : { sessionId: l.id }),
@@ -584,7 +588,7 @@ async function openCliNow(l: Launch, cols: number, rows: number) {
   args.push(...(l.permissionMode === 'bypassPermissions' ? ['--dangerously-skip-permissions'] : ['--permission-mode', l.permissionMode]))
   // The classic renderer, not the full-screen one: the conversation flows into the terminal's history, so it scrolls
   // all the way back (phones included) and can be selected and copied in the browser.
-  const env = Object.entries({ ...profileEnv(l.profile), DEVDASH_SESSION_ID: l.id, CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: '1', ...(tn?.env ?? {}) }).flatMap(([k, v]) => ['-e', `${k}=${v}`])
+  const env = Object.entries({ ...profileEnv(l.profile), ...subagentEnv(l), DEVDASH_SESSION_ID: l.id, CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: '1', ...(tn?.env ?? {}) }).flatMap(([k, v]) => ['-e', `${k}=${v}`])
   try {
     await tmux('new-session', '-d', '-s', cliName(l.id), '-c', l.cwd, '-x', String(cols), '-y', String(rows), ...env, ...args)
   } catch (err) {

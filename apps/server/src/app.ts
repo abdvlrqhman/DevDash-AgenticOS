@@ -98,6 +98,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   // Per-user tailnets: claude asks whether the owner has a connected node before letting a session route through it.
   // The tailnet service is built further down (it needs Team's isRole), so this reads it late, like Team's own wiring.
   let tailnet: TailnetService | undefined
+  let subagentsRef: ReturnType<typeof subagentsService> | undefined
   // Members' own Google Drive: rclone in their account trades a handle for tokens on loopback.
   const storage = storageService({
     db, agents, masterKey: config.masterKey, origin: config.origin, tokenUrl: `http://127.0.0.1:${config.port}/internal/storage/token`,
@@ -106,6 +107,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     db, agents, hub, notify: notifications.notify, projects, tailnetConnected: (userId) => !!tailnet?.isConnected(userId),
     storageFor: (userId) => storage.forLaunch(userId),
     ensureT3: (username) => provisioning.ensureT3(username),
+    subagentModelFor: (userId) => subagentsRef?.claudeSubagentModel(userId) ?? null,
   })
 
   // Each member's personal agent: a conversation beside every page, with tools across everything they can see.
@@ -122,6 +124,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const follow = followService({ db, hub, agents, claude, assistant, autopilot, notify: notifications.notify })
   // Custom member-owned subagents usable from Hamasa, normal sessions, and the Subagents tab.
   const subagents = subagentsService({ db, hub, agents, claude, notify: notifications.notify, isRole: (u, s) => !!team?.service?.roleOf(u, s) })
+  subagentsRef = subagents
 
   // "Give to an agent": a Chat session in the task's project (its own worktree by default), linked to the task, with the
   // member's default agent.

@@ -50,7 +50,19 @@ function setup(existingDb?: Db) {
     onPrompt(fn: (session: { id: string }, req: { toolName: string; input?: Record<string, unknown> }) => void) { promptListeners.push(fn) },
     onTurnEnd(fn: (t: { session: { id: string }; ok: boolean; aborted?: boolean; result?: string | null; costUsd?: number }) => void) { turnEndListeners.push(fn) },
     defaults() {
-      return { harness: 'claude', profile: 'default', model: null, effort: null, permission_mode: 'default' }
+      return { harness: 't3code', profile: 'default', model: 'codex/gpt-6.2-sol', effort: 'high', permission_mode: 'bypassPermissions' }
+    },
+    async commands(_u: User, _profile: string, harness: string) {
+      if (harness === 't3code') {
+        return {
+          commands: [],
+          models: [
+            { value: 'antigravity/gemini-4-neon', displayName: 'Gemini 4 Neon', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] },
+            { value: 'codex/gpt-6.2-sol', displayName: 'gpt-6.2-sol', supportedEffortLevels: ['low', 'medium', 'high'] },
+          ],
+        }
+      }
+      return { commands: [], models: [] }
     },
     async create(u: User, opts: Record<string, unknown>, meta?: Record<string, unknown>) {
       const id = `ses-sub-${nextSes++}`
@@ -317,4 +329,65 @@ test('reconciles orphaned active runs after server restart', async () => {
   const after = second.service.getRun(ann, run.id)
   assert.equal(after.status, 'stopped')
   assert.match(after.activity, /restart/i)
+})
+
+test('subagent defaults decouple subagents from the main frontier model and record resolved model on runs', async () => {
+  const { service, createdSessions } = setup()
+  const ann = user(1, 'ann', 'Ann Lee')
+
+  const searcher = await service.create(ann, {
+    name: 'Code Search',
+    slug: 'code-search',
+    instructions: 'Search codebase fast',
+  })
+  const reviewer = await service.create(ann, {
+    name: 'Deep Reviewer',
+    slug: 'deep-reviewer',
+    instructions: 'Audit carefully',
+    harness: 'claude',
+    model: 'sonnet',
+  })
+
+  // Before setting subagent defaults, inherits main frontier default
+  const runFrontier = await service.runManual(ann, searcher.id, { task: 'Find auth routes' })
+  assert.equal(runFrontier.harness, 't3code')
+  assert.equal(runFrontier.model, 'codex/gpt-6.2-sol')
+  assert.equal(runFrontier.effort, 'high')
+  assert.equal(createdSessions.at(-1)!.opts.model, 'codex/gpt-6.2-sol')
+
+  // Save a fast & smart default subagent model (Gemini 4 Neon · low)
+  const saved = await service.saveDefaults(ann, {
+    harness: 't3code',
+    model: 'antigravity/gemini-4-neon',
+    effort: 'low',
+  })
+  assert.equal(saved.harness, 't3code')
+  assert.equal(saved.model, 'antigravity/gemini-4-neon')
+  assert.equal(saved.effort, 'low')
+  assert.equal(service.overview(ann).defaults.model, 'antigravity/gemini-4-neon')
+  assert.equal(service.claudeSubagentModel(ann.id), null)
+
+  // Searcher now runs on the fast subagent default instead of the frontier model
+  const runFast = await service.runManual(ann, searcher.id, { task: 'Find all routes' })
+  assert.equal(runFast.harness, 't3code')
+  assert.equal(runFast.model, 'antigravity/gemini-4-neon')
+  assert.equal(runFast.effort, 'low')
+  assert.equal(createdSessions.at(-1)!.opts.model, 'antigravity/gemini-4-neon')
+  assert.equal(createdSessions.at(-1)!.opts.effort, 'low')
+
+  // Per-subagent override still wins over subagent defaults
+  const runOverride = await service.runManual(ann, reviewer.id, { task: 'Review PR' })
+  assert.equal(runOverride.harness, 'claude')
+  assert.equal(runOverride.model, 'sonnet')
+  assert.equal(runOverride.effort, null)
+
+  // Claude subagent default exposes CLAUDE_CODE_SUBAGENT_MODEL
+  await service.saveDefaults(ann, { harness: 'claude', model: 'haiku' })
+  assert.equal(service.claudeSubagentModel(ann.id), 'haiku')
+
+  // Resetting clears subagent defaults
+  const cleared = await service.saveDefaults(ann, { harness: null })
+  assert.equal(cleared.harness, null)
+  assert.equal(cleared.model, null)
+  assert.equal(service.claudeSubagentModel(ann.id), null)
 })

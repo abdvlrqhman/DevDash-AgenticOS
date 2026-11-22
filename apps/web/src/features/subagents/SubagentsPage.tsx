@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import {
   Activity, AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clock,
   ExternalLink, History, Loader2, Pencil, Play, Plus, Send, Sparkles,
-  Square, Trash2, Bot,
+  Square, Trash2, Bot, Zap, SlidersHorizontal,
 } from 'lucide-react'
 import { confirmAction } from '@/components/app/confirm'
 import { NativeSelect } from '@/components/app/native-select'
@@ -24,15 +24,17 @@ import { api, unwrap } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
-import { modeLabel, profilesQuery, relativeTime, useOfferedModels, type PermissionMode } from '../claude/data'
+import { FALLBACK_MODELS, modeLabel, profilesQuery, relativeTime, useOfferedModels, type PermissionMode } from '../claude/data'
 import { agentCapabilities, HARNESS, HARNESSES, type Harness } from '../claude/harness'
+import { ModelField, ThinkingLevelField } from '../claude/ModelChoices'
+import { effortLevels, type ModelInfo } from '../claude/models'
 import { Prose } from '../claude/Prose'
 import { projectsQuery } from '../work/data'
 import {
   CALLER_LABELS, COLOR_LIST, COLOR_STYLES, ICON_LIST, SCOPE_LABELS,
-  SubagentIconGlyph, formatDuration, statusMeta, subagentRunQuery,
+  SubagentIconGlyph, formatDuration, pickFastSmartModel, shortModelLabel, statusMeta, subagentRunQuery,
   subagentRunsQuery, subagentsOverviewQuery, useLiveSubagents, useStopSubagentRun,
-  type CustomSubagent, type SubagentColor, type SubagentIcon, type SubagentRun,
+  type CustomSubagent, type SubagentColor, type SubagentDefaults, type SubagentIcon, type SubagentRun,
   type SubagentRunStatus, type SubagentScope, type SubagentTemplate,
 } from './data'
 
@@ -117,6 +119,7 @@ export function SubagentsPage() {
   const subagents = data?.subagents ?? []
   const activeRuns = data?.activeRuns ?? []
   const templates = data?.templates ?? []
+  const subagentDefaults: SubagentDefaults | undefined = data?.defaults
   const historyRuns = tab === 'history' ? (runsQuery.data?.runs ?? data?.recentRuns ?? []) : (data?.recentRuns ?? [])
 
   // Tick elapsed timers once per second while any subagent is running.
@@ -236,6 +239,7 @@ export function SubagentsPage() {
           </div>
 
           <TabsContent value="agents" className="flex flex-col gap-6">
+            <SubagentDefaultModelCard defaults={subagentDefaults} />
             {overview.isLoading ? (
               <div className="grid gap-3 md:grid-cols-2">
                 {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-44 rounded-2xl" />)}
@@ -288,16 +292,22 @@ export function SubagentsPage() {
                                 <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
                                   {SCOPE_LABELS[sa.scope]}
                                 </Badge>
-                                {sa.harness && (
+                                {(sa.harness || subagentDefaults?.harness) && (
                                   <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                                    {HARNESS[sa.harness as Harness]?.label ?? sa.harness}
+                                    {HARNESS[(sa.harness ?? subagentDefaults?.harness) as Harness]?.label ?? (sa.harness ?? subagentDefaults?.harness)}
                                   </Badge>
                                 )}
-                                {sa.model && (
-                                  <Badge variant="outline" className="h-5 max-w-40 truncate px-1.5 text-[10px]">
-                                    {sa.model.replace(/^.*\//, '')}
-                                  </Badge>
-                                )}
+                                {(() => {
+                                  const effModel = sa.model ?? (!sa.harness ? subagentDefaults?.model : null)
+                                  const effEffort = sa.model ? sa.effort : (!sa.harness ? subagentDefaults?.effort : null)
+                                  const label = shortModelLabel(effModel, effEffort)
+                                  if (!label) return null
+                                  return (
+                                    <Badge variant="outline" className="h-5 max-w-48 truncate px-1.5 text-[10px]" title={sa.model ? 'Custom model override' : 'Default subagent model'}>
+                                      {label}
+                                    </Badge>
+                                  )
+                                })()}
                               </div>
                             </div>
                             <Switch
@@ -517,6 +527,11 @@ export function SubagentsPage() {
                           {run.projectSlug && (
                             <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{run.projectSlug}</Badge>
                           )}
+                          {shortModelLabel(run.model, run.effort) && (
+                            <Badge variant="outline" className="h-5 max-w-44 truncate px-1.5 text-[10px] text-muted-foreground">
+                              {shortModelLabel(run.model, run.effort)}
+                            </Badge>
+                          )}
                           <span className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
                             <Clock className="size-3" />
                             {formatDuration(run.startedAt, run.finishedAt)}
@@ -546,6 +561,7 @@ export function SubagentsPage() {
         open={editorState.open}
         editing={editorState.editing}
         template={editorState.template}
+        subagentDefaults={subagentDefaults}
         onOpenChange={(open) => setEditorState((s) => ({ ...s, open }))}
       />
 
@@ -572,11 +588,13 @@ function SubagentEditorDialog({
   open,
   editing,
   template,
+  subagentDefaults,
   onOpenChange,
 }: {
   open: boolean
   editing: CustomSubagent | null
   template: SubagentTemplate | null
+  subagentDefaults: SubagentDefaults | undefined
   onOpenChange: (open: boolean) => void
 }) {
   const qc = useQueryClient()
@@ -652,10 +670,19 @@ function SubagentEditorDialog({
     }
   }, [open, editing, template])
 
+  const [customModel, setCustomModel] = useState(false)
   const effectiveHarness: Harness = harness || 'claude'
   const offeredModels = useOfferedModels(profile, effectiveHarness, model || null, open && showAdvanced && !!harness)
+  const modelsList: ModelInfo[] = offeredModels?.length
+    ? offeredModels
+    : effectiveHarness === 'claude'
+      ? FALLBACK_MODELS
+      : [{ value: '', displayName: 'Default', description: HARNESS[effectiveHarness].defaultModel }]
   const caps = harness ? agentCapabilities(harness) : null
   const agentEntry = profiles?.agents.find((a) => a.harness === harness)
+  const inheritedLabel = subagentDefaults?.harness
+    ? `${HARNESS[subagentDefaults.harness as Harness]?.label ?? subagentDefaults.harness}${shortModelLabel(subagentDefaults.model, subagentDefaults.effort) ? ` · ${shortModelLabel(subagentDefaults.model, subagentDefaults.effort)}` : ''}`
+    : 'your main session default'
 
   const save = useMutation({
     mutationFn: async () => {
@@ -812,26 +839,27 @@ function SubagentEditorDialog({
             onClick={() => setShowAdvanced((v) => !v)}
             className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
-            <span>Runtime overrides (optional — inherits your defaults)</span>
+            <span>Model &amp; runtime override (default: {inheritedLabel})</span>
             {showAdvanced ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
           </button>
           {showAdvanced && (
             <div className="flex flex-col gap-3 border-t p-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field>
-                  <FieldLabel htmlFor="sa-harness">Agent harness</FieldLabel>
+                  <FieldLabel htmlFor="sa-harness">Agent engine</FieldLabel>
                   <NativeSelect
                     id="sa-harness"
                     value={harness}
                     onChange={(e) => {
                       const next = e.target.value as Harness | ''
                       setHarness(next)
+                      setCustomModel(false)
                       setModel('')
                       setEffort('')
                       setPermissionMode('')
                     }}
                   >
-                    <option value="">Use my default</option>
+                    <option value="">Use subagent default ({inheritedLabel})</option>
                     {HARNESSES.map((h) => (
                       <option key={h} value={h}>{HARNESS[h].label}</option>
                     ))}
@@ -850,36 +878,49 @@ function SubagentEditorDialog({
               </div>
 
               {harness && (
-                <div className="grid gap-3 sm:grid-cols-2">
+                <>
                   <Field>
                     <FieldLabel htmlFor="sa-model">Model</FieldLabel>
-                    {offeredModels && offeredModels.length > 0 ? (
-                      <NativeSelect id="sa-model" value={model} onChange={(e) => setModel(e.target.value)}>
-                        <option value="">Default model</option>
-                        {offeredModels.map((m) => (
-                          <option key={m.value} value={m.value}>{m.displayName || m.value}</option>
-                        ))}
-                      </NativeSelect>
-                    ) : (
-                      <Input id="sa-model" placeholder="Default model" value={model} onChange={(e) => setModel(e.target.value)} />
-                    )}
+                    <ModelField
+                      id="sa-model"
+                      harness={harness}
+                      models={modelsList}
+                      value={model}
+                      custom={customModel}
+                      onCustom={setCustomModel}
+                      onChange={(v) => {
+                        setModel(v)
+                        if (v !== model) setEffort('')
+                      }}
+                      note="Pick a lightweight, fast model for file/web searching."
+                    />
                   </Field>
-                  {caps && caps.sessionModes.length > 0 && (
-                    <Field>
-                      <FieldLabel htmlFor="sa-perm">Permissions</FieldLabel>
-                      <NativeSelect
-                        id="sa-perm"
-                        value={permissionMode}
-                        onChange={(e) => setPermissionMode(e.target.value as PermissionMode | '')}
-                      >
-                        <option value="">Inherit default</option>
-                        {caps.sessionModes.map((m) => (
-                          <option key={m} value={m}>{modeLabel(m)}</option>
-                        ))}
-                      </NativeSelect>
-                    </Field>
-                  )}
-                </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {harness === 't3code' && (
+                      <ThinkingLevelField
+                        id="sa-effort"
+                        levels={effortLevels(modelsList, model || null)}
+                        value={effort || null}
+                        onChange={(v) => setEffort(v ?? '')}
+                      />
+                    )}
+                    {caps && caps.sessionModes.length > 1 && (
+                      <Field>
+                        <FieldLabel htmlFor="sa-perm">Permissions</FieldLabel>
+                        <NativeSelect
+                          id="sa-perm"
+                          value={permissionMode}
+                          onChange={(e) => setPermissionMode(e.target.value as PermissionMode | '')}
+                        >
+                          <option value="">Inherit default</option>
+                          {caps.sessionModes.map((m) => (
+                            <option key={m} value={m}>{modeLabel(m)}</option>
+                          ))}
+                        </NativeSelect>
+                      </Field>
+                    )}
+                  </div>
+                </>
               )}
 
               <Field>
@@ -1044,6 +1085,9 @@ function RunDetailSheet({ runId, onClose }: { runId: number | null; onClose: () 
                 </SheetTitle>
                 <SheetDescription className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
                   <span>{CALLER_LABELS[run.callerKind] ?? run.callerKind}</span>
+                  {shortModelLabel(run.model, run.effort) && (
+                    <><span>·</span><span className="font-mono text-[11px]">{shortModelLabel(run.model, run.effort)}</span></>
+                  )}
                   {run.projectSlug && <><span>·</span><span>{run.projectSlug}</span></>}
                   <span>·</span>
                   <span>{formatDuration(run.startedAt, run.finishedAt)}</span>
@@ -1217,5 +1261,223 @@ function RunDetailSheet({ runId, onClose }: { runId: number | null; onClose: () 
         )}
       </SheetContent>
     </Sheet>
+  )
+}
+
+function SubagentDefaultModelCard({ defaults }: { defaults: SubagentDefaults | undefined }) {
+  const qc = useQueryClient()
+  const profilesQ = useQuery(profilesQuery)
+  const [editing, setEditing] = useState(false)
+  const [harness, setHarness] = useState<Harness | ''>('')
+  const [profile, setProfile] = useState('default')
+  const [model, setModel] = useState('')
+  const [effort, setEffort] = useState('')
+  const [customModel, setCustomModel] = useState(false)
+
+  useEffect(() => {
+    setHarness((defaults?.harness as Harness | null) ?? '')
+    setProfile(defaults?.profile || 'default')
+    setModel(defaults?.model ?? '')
+    setEffort(defaults?.effort ?? '')
+    setCustomModel(false)
+  }, [defaults?.harness, defaults?.profile, defaults?.model, defaults?.effort, editing])
+
+  const agents = (profilesQ.data?.agents ?? []) as Array<{ harness: string; installed: boolean; error?: string; profiles: { name: string; providers: string[] }[] }>
+  const claudeProfiles = (profilesQ.data?.profiles ?? []) as Array<{ name: string; loggedIn: boolean }>
+  const mainDefaults = profilesQ.data?.defaults
+  const t3Agent = agents.find((a) => a.harness === 't3code')
+  const t3Connected = !!t3Agent?.installed && !t3Agent.error
+  const ocAgent = agents.find((a) => a.harness === 'opencode')
+  const ocInstalled = !!ocAgent?.installed
+  const claudeLoggedIn = claudeProfiles.some((p) => p.loggedIn)
+
+  const t3Models = useOfferedModels('default', 't3code', defaults?.harness === 't3code' ? defaults.model : null, t3Connected)
+  const ocModels = useOfferedModels('default', 'opencode', defaults?.harness === 'opencode' ? defaults.model : null, ocInstalled && !t3Connected)
+
+  const recommended = useMemo(
+    () => pickFastSmartModel({ t3Connected, t3Models, claudeLoggedIn, opencodeInstalled: ocInstalled, opencodeModels: ocModels }),
+    [t3Connected, t3Models, claudeLoggedIn, ocInstalled, ocModels],
+  )
+
+  const activeHarness: Harness = harness || 't3code'
+  const offeredForForm = useOfferedModels(profile, activeHarness, model || null, editing && !!harness)
+  const formModels: ModelInfo[] = offeredForForm?.length
+    ? offeredForForm
+    : activeHarness === 'claude'
+      ? FALLBACK_MODELS
+      : [{ value: '', displayName: 'Default', description: HARNESS[activeHarness].defaultModel }]
+  const formAgent = agents.find((a) => a.harness === harness)
+
+  const save = useMutation({
+    mutationFn: (payload: { harness: Harness | null; profile?: string; model: string | null; effort: string | null }) =>
+      unwrap(api.api.subagents.defaults.$put({ json: payload })),
+    onSuccess: (res) => {
+      const label = res.defaults.harness
+        ? `${HARNESS[res.defaults.harness as Harness]?.label ?? res.defaults.harness}${shortModelLabel(res.defaults.model, res.defaults.effort) ? ` · ${shortModelLabel(res.defaults.model, res.defaults.effort)}` : ''}`
+        : 'main session default'
+      toast.success(`Subagents default set to ${label}`)
+      setEditing(false)
+      void qc.invalidateQueries({ queryKey: ['subagents'] })
+    },
+    onError: (e) => toast.error(e.message),
+  })
+
+  const configured = !!defaults?.harness
+  const configuredLabel = configured
+    ? `${HARNESS[defaults.harness as Harness]?.label ?? defaults.harness}${shortModelLabel(defaults.model, defaults.effort) ? ` · ${shortModelLabel(defaults.model, defaults.effort)}` : ' · Default'}`
+    : null
+  const mainLabel = mainDefaults?.model
+    ? `${HARNESS[(mainDefaults.harness as Harness) || 'claude']?.label ?? mainDefaults.harness} · ${shortModelLabel(mainDefaults.model, mainDefaults.effort)}`
+    : (mainDefaults?.harness ? HARNESS[mainDefaults.harness as Harness]?.label : 'your main session default')
+  const alreadyRecommended = !!recommended && defaults?.harness === recommended.harness && defaults?.model === recommended.model
+
+  return (
+    <Card className={cn(
+      'flex flex-col gap-3 rounded-2xl p-4',
+      configured ? 'border-border bg-card' : 'border-amber-500/30 bg-amber-500/[0.03]',
+    )}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span className={cn(
+            'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl border',
+            configured
+              ? 'border-cyan-500/25 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400'
+              : 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+          )}>
+            <Zap className="size-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold">Default subagent model</span>
+              {configured ? (
+                <Badge variant="outline" className="h-5 border-cyan-500/30 bg-cyan-500/10 px-2 text-[11px] font-medium text-cyan-700 dark:text-cyan-300">
+                  {configuredLabel}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="h-5 border-amber-500/30 bg-amber-500/10 px-2 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                  Inheriting main model ({mainLabel})
+                </Badge>
+              )}
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {configured
+                ? 'All subagents without a custom override run on this model so heavy file and web searches stay fast and cheap.'
+                : 'Subagents search lots of files — set a fast, smart model here so they don’t burn your frontier model’s usage.'}
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 pl-12 sm:pl-0">
+          {recommended && !alreadyRecommended && (
+            <Button
+              size="xs"
+              variant={configured ? 'outline' : 'default'}
+              disabled={save.isPending}
+              onClick={() => save.mutate({ harness: recommended.harness, profile: 'default', model: recommended.model, effort: recommended.effort })}
+            >
+              {save.isPending ? <Loader2 className="size-3 animate-spin" /> : <Zap className="size-3" />}
+              Use {recommended.label}{recommended.effort ? ` (${recommended.effort})` : ''}
+            </Button>
+          )}
+          <Button size="xs" variant="outline" onClick={() => setEditing((v) => !v)}>
+            <SlidersHorizontal className="size-3" />
+            {editing ? 'Close' : configured ? 'Change' : 'Choose model'}
+          </Button>
+        </div>
+      </div>
+
+      {editing && (
+        <div className="flex flex-col gap-3 border-t pt-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="sd-harness">Agent engine</FieldLabel>
+              <NativeSelect
+                id="sd-harness"
+                value={harness}
+                onChange={(e) => {
+                  const next = e.target.value as Harness | ''
+                  setHarness(next)
+                  setProfile('default')
+                  setCustomModel(false)
+                  setModel('')
+                  setEffort('')
+                }}
+              >
+                <option value="">Inherit main session default ({mainLabel})</option>
+                {HARNESSES.map((h) => (
+                  <option key={h} value={h}>{HARNESS[h].label}</option>
+                ))}
+              </NativeSelect>
+            </Field>
+            {harness && formAgent && formAgent.profiles.length > 1 && (
+              <Field>
+                <FieldLabel htmlFor="sd-profile">Profile</FieldLabel>
+                <NativeSelect id="sd-profile" value={profile} onChange={(e) => setProfile(e.target.value)}>
+                  {formAgent.profiles.map((p) => (
+                    <option key={p.name} value={p.name}>{p.name}</option>
+                  ))}
+                </NativeSelect>
+              </Field>
+            )}
+          </div>
+
+          {harness && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="sd-model">Model</FieldLabel>
+                <ModelField
+                  id="sd-model"
+                  harness={harness}
+                  models={formModels}
+                  value={model}
+                  custom={customModel}
+                  onCustom={setCustomModel}
+                  onChange={(v) => {
+                    setModel(v)
+                    if (v !== model) setEffort('')
+                  }}
+                  note="Used by all custom subagents (and Claude Code built-in subagents when set to a Claude model)."
+                />
+              </Field>
+              {harness === 't3code' && (
+                <ThinkingLevelField
+                  id="sd-effort"
+                  levels={effortLevels(formModels, model || null)}
+                  value={effort || null}
+                  onChange={(v) => setEffort(v ?? '')}
+                />
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {configured && (
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                disabled={save.isPending}
+                onClick={() => save.mutate({ harness: null, model: null, effort: null })}
+              >
+                Reset to session default
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="xs"
+              disabled={save.isPending}
+              onClick={() => save.mutate({
+                harness: harness || null,
+                profile: profile || 'default',
+                model: harness ? (model.trim() || null) : null,
+                effort: harness ? (effort.trim() || null) : null,
+              })}
+            >
+              {save.isPending && <Loader2 className="size-3 animate-spin" />}
+              Save default
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
   )
 }

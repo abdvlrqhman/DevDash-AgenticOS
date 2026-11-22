@@ -280,7 +280,7 @@ export function requestNotification(toolName: string, input: Record<string, unkn
   return { title: `${agent} needs permission: ${sessionTitle}`, body: clip(`Allow ${toolName}${what ? `: ${what}` : ''}`) }
 }
 
-export function claudeService({ db, agents, hub, notify, projects, tailnetConnected, storageFor, ensureT3 }: {
+export function claudeService({ db, agents, hub, notify, projects, tailnetConnected, storageFor, ensureT3, subagentModelFor }: {
   db: Db; agents: AgentsService; hub: Hub; notify: Notify; projects: ProjectsService
   /** Whether the member has a connected tailnet node (so "Reach my tailnet" can only go on when they do). Optional:
    *  wired late in app.ts like Team's isRole, since the tailnet service is built after this one. */
@@ -289,6 +289,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   storageFor?: (userId: number) => LaunchStorage | null
   /** Ensures the member's own devdash-t3@<user> service is running before their agent pairs with it. */
   ensureT3?: (username: string) => Promise<{ port: number; baseDir: string; url: string } | null>
+  /** Optional smaller/faster Claude model for Claude Code's native subagents (CLAUDE_CODE_SUBAGENT_MODEL). */
+  subagentModelFor?: (userId: number) => string | null
 }) {
   const repo = claudeRepo(db)
   const commands = (username: string, profile: string, harness: Harness, model?: string, supervisor = false) =>
@@ -322,7 +324,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     }
   }
   // Every launch also says whether the owner's Drive is connected: the agent sets up the remote and tells Claude about it.
-  const launch = (s: SessionRow) => ({ ...baseLaunch(s), storage: s.drive === 0 ? null : storageFor?.(s.owner_id) ?? null, ownerName: s.owner_name })
+  const launch = (s: SessionRow) => ({ ...baseLaunch(s), storage: s.drive === 0 ? null : storageFor?.(s.owner_id) ?? null, ownerName: s.owner_name, subagentModel: s.harness === 'claude' ? (subagentModelFor?.(s.owner_id) ?? null) : null })
   // The owner, everyone while it's shared with the team, or the members it's shared with by name.
   const privateHamasa = (s: SessionRow) => s.harness === 't3code' && s.origin_kind === 'assistant'
   const canView = (u: Pick<User, 'id'>, s: SessionRow) => s.owner_id === u.id || (!privateHamasa(s) && (s.shared === 1 || repo.isViewer(s.id, u.id)))

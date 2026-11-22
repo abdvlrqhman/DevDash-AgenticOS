@@ -69,10 +69,11 @@ export const SUBAGENT_TEMPLATES: SubagentTemplate[] = [
     icon: 'file-search',
     color: 'violet',
     scope: 'both',
-    instructions: `You are a fast read-only Code Search subagent.
-- Focus on locating relevant files, symbols, call paths, configs, and tests without editing code unless explicitly asked.
+    instructions: `You are a fast, token-efficient read-only Code Search subagent.
+- Start with targeted search tools (ripgrep/grep, glob, symbol search) and read only the relevant line ranges instead of whole files.
+- Never edit files unless explicitly asked.
 - Cite exact file paths, symbol names, and line numbers for every finding.
-- Summarize the architecture or answer the caller's question concisely so they can act immediately.`,
+- Return a compact, high-signal summary so the main agent can act immediately without re-reading dozens of files.`,
   },
   {
     slug: 'deep-research',
@@ -143,9 +144,38 @@ type RunRow = {
   result: string | null
   error: string | null
   cost_usd: number | null
+  harness: string | null
+  model: string | null
+  effort: string | null
   started_at: number
   updated_at: number
   finished_at: number | null
+}
+
+type SubagentDefaultsRow = {
+  user_id: number
+  harness: string | null
+  profile: string
+  model: string | null
+  effort: string | null
+  permission_mode: string | null
+  updated_at: number
+}
+
+export type SubagentDefaultsDto = {
+  harness: Harness | null
+  profile: string
+  model: string | null
+  effort: string | null
+  permissionMode: string | null
+}
+
+export type SubagentDefaultsInput = {
+  harness?: string | null
+  profile?: string
+  model?: string | null
+  effort?: string | null
+  permissionMode?: string | null
 }
 
 export type SubagentDto = {
@@ -194,6 +224,9 @@ export type SubagentRunDto = {
   result: string | null
   error: string | null
   costUsd: number | null
+  harness: Harness | null
+  model: string | null
+  effort: string | null
   startedAt: number
   updatedAt: number
   finishedAt: number | null
@@ -368,10 +401,24 @@ export function subagentsService({
       where id = ? and user_id = ? returning *`),
     remove: db.prepare("delete from custom_subagents where id = ? and user_id = ?"),
 
+    getDefaults: db.prepare("select * from subagent_defaults where user_id = ?"),
+    upsertDefaults: db.prepare(`insert into subagent_defaults(
+      user_id, harness, profile, model, effort, permission_mode, updated_at
+    ) values (?, ?, ?, ?, ?, ?, unixepoch())
+    on conflict(user_id) do update set
+      harness = excluded.harness,
+      profile = excluded.profile,
+      model = excluded.model,
+      effort = excluded.effort,
+      permission_mode = excluded.permission_mode,
+      updated_at = unixepoch()`),
+    clearDefaults: db.prepare("delete from subagent_defaults where user_id = ?"),
+
     insertRun: db.prepare(`insert into subagent_runs(
       user_id, subagent_id, subagent_slug, subagent_name, subagent_icon, subagent_color,
-      session_id, caller_kind, caller_session_id, caller_label, task, project_slug, cwd, status, activity
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'Starting…') returning *`),
+      session_id, caller_kind, caller_session_id, caller_label, task, project_slug, cwd,
+      harness, model, effort, status, activity
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'Starting…') returning *`),
     setRunSession: db.prepare("update subagent_runs set session_id = ?, updated_at = unixepoch() where id = ?"),
     runById: db.prepare("select * from subagent_runs where id = ? and user_id = ?"),
     runByIdAny: db.prepare("select * from subagent_runs where id = ?"),
@@ -437,10 +484,25 @@ export function subagentsService({
     result: r.result,
     error: r.error,
     costUsd: r.cost_usd,
+    harness: r.harness ? harnessOf(r.harness) : null,
+    model: r.model ?? null,
+    effort: r.effort ?? null,
     startedAt: r.started_at,
     updatedAt: r.updated_at,
     finishedAt: r.finished_at,
   })
+
+  function getDefaults(userId: number): SubagentDefaultsDto {
+    const r = q.getDefaults.get(userId) as SubagentDefaultsRow | undefined
+    if (!r) return { harness: null, profile: 'default', model: null, effort: null, permissionMode: null }
+    return {
+      harness: r.harness ? harnessOf(r.harness) : null,
+      profile: r.profile || 'default',
+      model: r.model ?? null,
+      effort: r.effort ?? null,
+      permissionMode: r.permission_mode ?? null,
+    }
+  }
 
   function subagentDtos(userId: number): SubagentDto[] {
     const rows = q.list.all(userId) as SubagentRow[]
@@ -584,10 +646,15 @@ export function subagentsService({
       (r) => r.enabled === 1 && (r.scope === 'both' || (isHamasa ? r.scope === 'hamasa' : r.scope === 'sessions')),
     )
     if (!rows.length) return []
-    const lines = rows.map((r) => `- ${r.slug} (${r.name}): ${r.description || clip(r.instructions.replace(/\s+/g, ' '), 120)}`).join('\n')
+    const subDef = getDefaults(session.owner_id)
+    const lines = rows.map((r) => {
+      const m = r.model ?? (!r.harness ? subDef.model : null)
+      const tag = m ? ` [${m.replace(/^.*\//, '')}]` : ''
+      return `- ${r.slug} (${r.name})${tag}: ${r.description || clip(r.instructions.replace(/\s+/g, ' '), 120)}`
+    }).join('\n')
     return [{
       type: 'text',
-      text: `<system-reminder>Custom DevDash subagents available to you (use subagent_run / subagent_status / subagent_stop / subagents_list; run independent subagents in parallel with wait:false when helpful):\n${lines}</system-reminder>`,
+      text: `<system-reminder>Custom DevDash subagents available to you (use subagent_run / subagent_status / subagent_stop / subagents_list; run independent subagents in parallel with wait:false when helpful). To save frontier-model usage and speed up exploration, delegate broad multi-file codebase searches, log/doc scanning, and web research to these lightweight subagents instead of reading many files directly:\n${lines}</system-reminder>`,
     }]
   })
 
@@ -671,13 +738,30 @@ export function subagentsService({
     const task = opts.task.trim().slice(0, 12_000)
     if (!task) throw new AppError(400, 'bad_task', 'Give the subagent a task to perform.')
 
-    const defaults = claude.defaults(user)
-    const harness: Harness = subagent.harness ? harnessOf(subagent.harness) : harnessOf(defaults.harness)
-    const sameHarness = harness === harnessOf(defaults.harness)
-    const profile = harness === 't3code' ? 'default' : (subagent.harness ? subagent.profile : defaults.profile)
-    const model = subagent.model ?? (sameHarness ? defaults.model : null)
-    const effort = subagent.effort ?? (sameHarness && model === defaults.model ? defaults.effort : null)
-    const rawPerm = subagent.permission_mode ?? defaults.permission_mode
+    const mainDefaults = claude.defaults(user)
+    const subDefaults = getDefaults(user.id)
+    const baseHarness: Harness = subDefaults.harness ?? harnessOf(mainDefaults.harness)
+    const harness: Harness = subagent.harness ? harnessOf(subagent.harness) : baseHarness
+    const usesSubDefault = !subagent.harness && !!subDefaults.harness
+    const sameAsMain = harness === harnessOf(mainDefaults.harness)
+    const profile = harness === 't3code'
+      ? 'default'
+      : subagent.harness
+        ? subagent.profile
+        : usesSubDefault
+          ? subDefaults.profile
+          : mainDefaults.profile
+    const model = subagent.model
+      ?? (subagent.harness
+        ? (subagent.harness === subDefaults.harness ? subDefaults.model : null)
+        : (usesSubDefault ? subDefaults.model : (sameAsMain ? mainDefaults.model : null)))
+    const effort = subagent.effort
+      ?? (subagent.harness
+        ? (subagent.harness === subDefaults.harness && model === subDefaults.model ? subDefaults.effort : null)
+        : (usesSubDefault && model === subDefaults.model
+          ? subDefaults.effort
+          : (sameAsMain && model === mainDefaults.model ? mainDefaults.effort : null)))
+    const rawPerm = subagent.permission_mode ?? subDefaults.permissionMode ?? mainDefaults.permission_mode
     const permissionMode = supportsPermissionMode(harness, rawPerm) ? rawPerm : 'bypassPermissions'
     const project = opts.project?.trim() || subagent.default_project || undefined
     const cwd = opts.cwd?.trim() || subagent.default_cwd || '~'
@@ -696,6 +780,9 @@ export function subagentsService({
       task,
       project ?? null,
       cwd,
+      harness,
+      model,
+      effort,
     ) as RunRow
     publish(user.id, runRow.id)
 
@@ -777,7 +864,37 @@ export function subagentsService({
         activeRuns: (q.activeRuns.all(user.id) as RunRow[]).map(runDto),
         recentRuns: (q.recentRuns.all(user.id, 50) as RunRow[]).map(runDto),
         templates: SUBAGENT_TEMPLATES,
+        defaults: getDefaults(user.id),
       }
+    },
+
+    defaults(user: User): SubagentDefaultsDto {
+      return getDefaults(user.id)
+    },
+
+    /** Model to pass to Claude Code's native CLAUDE_CODE_SUBAGENT_MODEL when the user sets a Claude subagent default. */
+    claudeSubagentModel(userId: number): string | null {
+      const d = getDefaults(userId)
+      return d.harness === 'claude' && d.model ? d.model : null
+    },
+
+    async saveDefaults(user: User, input: SubagentDefaultsInput): Promise<SubagentDefaultsDto> {
+      const harness: Harness | null = input.harness
+        ? ((HARNESSES as readonly string[]).includes(input.harness) ? (input.harness as Harness) : (() => { throw new AppError(400, 'bad_harness', 'Unknown agent engine.') })())
+        : null
+      if (!harness) {
+        q.clearDefaults.run(user.id)
+        publish(user.id)
+        return getDefaults(user.id)
+      }
+      const profile = harness === 't3code' ? 'default' : (input.profile?.trim() || 'default')
+      const model = input.model?.trim() ? input.model.trim().slice(0, 200) : null
+      const effort = input.effort?.trim() ? input.effort.trim().slice(0, 40) : null
+      const permissionMode = input.permissionMode?.trim() ? input.permissionMode.trim() : null
+      await validateConfig(user, { harness, profile, model, effort, permissionMode })
+      q.upsertDefaults.run(user.id, harness, profile, model, effort, permissionMode)
+      publish(user.id)
+      return getDefaults(user.id)
     },
 
     async create(user: User, input: SubagentInput) {

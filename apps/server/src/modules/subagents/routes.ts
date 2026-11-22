@@ -36,6 +36,14 @@ const CreateBody = z.object({
 
 const UpdateBody = CreateBody.partial()
 
+const DefaultsBody = z.object({
+  harness: HarnessOrNull,
+  profile: z.string().max(64).optional(),
+  model: z.string().max(200).nullable().optional(),
+  effort: z.string().max(40).nullable().optional(),
+  permissionMode: PermOrNull,
+})
+
 const RunBody = z.object({
   task: z.string().min(1).max(8_000),
   project: z.string().max(64).optional(),
@@ -63,6 +71,11 @@ export function subagentsRoutes(subagents: SubagentsService, mw: ReturnType<type
   return new Hono<AuthEnv>()
     .use(mw.requireUser)
     .get('/', (c) => c.json(subagents.overview(c.get('user'))))
+    .get('/defaults', (c) => c.json({ defaults: subagents.defaults(c.get('user')) }))
+    .put('/defaults', json(DefaultsBody), async (c) => {
+      const defaults = await subagents.saveDefaults(c.get('user'), c.req.valid('json'))
+      return c.json({ defaults })
+    })
     .post('/', json(CreateBody), async (c) => {
       const subagent = await subagents.create(c.get('user'), c.req.valid('json'))
       return c.json({ subagent }, 201)

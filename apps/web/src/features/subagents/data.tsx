@@ -13,10 +13,14 @@ import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { panelCoversPage, setAssistantOpen } from '../assistant/store'
 
+import type { Harness } from '../claude/harness'
+import type { ModelInfo } from '../claude/models'
+
 export type SubagentsOverview = InferResponseType<typeof api.api.subagents.$get>
 export type CustomSubagent = SubagentsOverview['subagents'][number]
 export type SubagentRun = SubagentsOverview['recentRuns'][number]
 export type SubagentTemplate = SubagentsOverview['templates'][number]
+export type SubagentDefaults = SubagentsOverview['defaults']
 export type SubagentRunStatus = SubagentRun['status']
 export type SubagentIcon = CustomSubagent['icon']
 export type SubagentColor = CustomSubagent['color']
@@ -349,4 +353,77 @@ export function validateSubagentsSearch(s: Record<string, unknown>): SubagentsSe
   const subagent = Number(s.subagent)
   if (Number.isInteger(subagent) && subagent > 0) out.subagent = subagent
   return out
+}
+
+export function shortModelLabel(model: string | null | undefined, effort?: string | null) {
+  if (!model) return null
+  const name = model.replace(/^.*\//, '')
+  return effort ? `${name} · ${effort}` : name
+}
+
+export type FastSmartRecommendation = {
+  harness: Harness
+  model: string
+  effort: string | null
+  label: string
+  reason: string
+}
+
+const T3_FAST_SMART_ORDER: Array<{ match: RegExp; reason: string; preferredEffort?: string }> = [
+  { match: /^antigravity\/gemini-4-neon$/i, reason: 'Fast, low-usage, high intelligence', preferredEffort: 'low' },
+  { match: /^antigravity\/gemini-3\.8-flash$/i, reason: 'Fast & lightweight for file search', preferredEffort: 'low' },
+  { match: /^antigravity\/gemini-4-argon$/i, reason: 'Fast & balanced', preferredEffort: 'low' },
+  { match: /^codex\/gpt-6-luna$/i, reason: 'Compact & fast Codex model', preferredEffort: 'low' },
+  { match: /^codex\/gpt-5\.6-luna$/i, reason: 'Compact & fast Codex model', preferredEffort: 'low' },
+  { match: /^opencode\/.*(deepseek.*flash|glm.*flash).*free/i, reason: 'Free fast flash model', preferredEffort: 'low' },
+  { match: /(neon|flash|haiku|mini|luna|small|lite)/i, reason: 'Lightweight fast model', preferredEffort: 'low' },
+]
+
+/** Picks the best fast, low-usage, high-intelligence model available for subagents. */
+export function pickFastSmartModel(opts: {
+  t3Connected: boolean
+  t3Models: ModelInfo[] | undefined
+  claudeLoggedIn: boolean
+  opencodeInstalled: boolean
+  opencodeModels: ModelInfo[] | undefined
+}): FastSmartRecommendation | null {
+  if (opts.t3Connected && opts.t3Models?.length) {
+    for (const rule of T3_FAST_SMART_ORDER) {
+      const hit = opts.t3Models.find((m) => m.value && rule.match.test(m.value))
+      if (hit) {
+        const effort = rule.preferredEffort && hit.supportedEffortLevels?.includes(rule.preferredEffort)
+          ? rule.preferredEffort
+          : (hit.supportedEffortLevels?.includes('low') ? 'low' : null)
+        return {
+          harness: 't3code',
+          model: hit.value,
+          effort,
+          label: hit.displayName || hit.value.replace(/^.*\//, ''),
+          reason: rule.reason,
+        }
+      }
+    }
+  }
+  if (opts.claudeLoggedIn) {
+    return {
+      harness: 'claude',
+      model: 'haiku',
+      effort: null,
+      label: 'Claude Haiku',
+      reason: 'Fast & cheap for Claude Code subagents',
+    }
+  }
+  if (opts.opencodeInstalled && opts.opencodeModels?.length) {
+    const hit = opts.opencodeModels.find((m) => m.value && /(flash|mini|haiku|neon|small|lite|free)/i.test(m.value))
+    if (hit) {
+      return {
+        harness: 'opencode',
+        model: hit.value,
+        effort: null,
+        label: hit.displayName || hit.value.replace(/^.*\//, ''),
+        reason: 'Fast & lightweight OpenCode model',
+      }
+    }
+  }
+  return null
 }
