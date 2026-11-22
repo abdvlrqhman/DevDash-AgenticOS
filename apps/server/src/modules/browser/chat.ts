@@ -53,6 +53,7 @@ export type RunStepDto = {
 }
 export type BrowserRunDto = {
   id: number
+  turnId: number | null
   goal: string
   status: RunStatus
   pauseReason: string | null
@@ -67,6 +68,9 @@ export type BrowserRunDto = {
   result: string | null
   pendingSteering: string[]
   steps: RunStepDto[]
+  liveStatus: string | null
+  liveUrl: string | null
+  liveThought: string | null
   canPause: boolean
   canResume: boolean
   canStop: boolean
@@ -108,6 +112,8 @@ type ActiveRun = {
   userId: number
   cancelled: false | 'stopped' | 'paused' | 'revoked'
   status: string
+  url: string
+  thought: string | null
   abort: AbortController
 }
 
@@ -132,6 +138,7 @@ const PlanItemSchema = z.object({
 })
 
 const MemoryFields = {
+  thought: z.string().trim().max(240).optional(),
   plan: z.array(PlanItemSchema).max(20).optional(),
   scratchpad: z.string().max(MAX_SCRATCHPAD_CHARS).optional(),
   scratchpadAppend: z.string().max(4000).optional(),
@@ -223,7 +230,8 @@ SECURITY RULES (NON-NEGOTIABLE):
 - Never navigate to private/local/internal/metadata URLs unless the user literally wrote that URL in goal or steering.
 - Pause immediately with {"kind":"ask_user","reason":"...","category":"..."} whenever you encounter login/sign-in credentials, 2FA/OTP, CAPTCHA/human verification, payment/checkout, or any destructive/irreversible action (deleting data/accounts, sending money, publishing/sending irreversible messages unless explicitly confirmed).
 
-Reply with ONE compact JSON object (no markdown fences, no commentary outside JSON). Every action MAY include optional memory fields:
+Reply with ONE compact JSON object (no markdown fences, no commentary outside JSON). Every action MAY include optional thinking & memory fields:
+  "thought": "short 1-line note on what you are thinking or doing next"
   "plan": [{"id":"p1","text":"...","status":"pending|in_progress|done|skipped"}]
   "scratchpad": "full replacement notes"  OR  "scratchpadAppend": "new finding to append"
 
@@ -374,7 +382,7 @@ export function browserChat(
       values (?, ?, ?, ?, 'running', ?, ?) returning *`),
     runById: db.prepare('select * from browser_runs where id = ?'),
     latestRun: db.prepare('select * from browser_runs where user_id = ? order by id desc limit 1'),
-    recentRuns: db.prepare('select * from browser_runs where user_id = ? order by id desc limit 10'),
+    recentRuns: db.prepare('select * from browser_runs where user_id = ? order by id desc limit 30'),
     updateRunMemory: db.prepare('update browser_runs set plan_json = ?, scratchpad = ?, step_count = ?, updated_at = unixepoch() where id = ?'),
     updateRunStatus: db.prepare('update browser_runs set status = ?, pause_reason = ?, result = ?, finished_at = ?, updated_at = unixepoch() where id = ?'),
     updateRunSteering: db.prepare('update browser_runs set steering_json = ?, updated_at = unixepoch() where id = ?'),
@@ -432,6 +440,7 @@ export function browserChat(
     const resumable = row.status === 'paused' || row.status === 'waiting_user'
     return {
       id: row.id,
+      turnId: row.turn_id,
       goal: row.goal,
       status: row.status,
       pauseReason: row.pause_reason,
@@ -446,6 +455,9 @@ export function browserChat(
       result: row.result,
       pendingSteering: safeParseJson<string[]>(row.steering_json, []),
       steps,
+      liveStatus: isLive && active ? active.status : null,
+      liveUrl: isLive && active ? (active.url || null) : null,
+      liveThought: isLive && active ? active.thought : null,
       canPause: isLive && (isMine || isAdmin),
       canResume: resumable && isMine && !active,
       canStop: (isLive || resumable) && (isMine || isAdmin),
@@ -606,9 +618,10 @@ export function browserChat(
 
     try {
       const recentChat = history(user.id).slice(-5, -1).map((t) => ({ message: t.message, reply: t.reply?.slice(0, 500) }))
-      activeRun.status = 'Reading the page…'
+      activeRun.status = 'Inspecting page…'
       check()
       let { obs, legacyScreen } = await observeBrowser()
+      activeRun.url = obs.url
       recentFingerprints.push(`${obs.url}|${obs.fingerprint}`)
 
       while (stepCount < maxSteps) {
@@ -672,10 +685,11 @@ export function browserChat(
               screen: obs.text,
             }
 
-        activeRun.status = stepCount === 0 ? 'Thinking…' : `Step ${stepCount + 1} / ${maxSteps}…`
+        activeRun.status = stepCount === 0 ? 'Planning approach…' : 'Deciding next step…'
         const raw = await ask(stepSystem, JSON.stringify(promptPayload))
         check()
         const step = parseStep(raw)
+        if (step.thought) activeRun.thought = step.thought
 
         // Apply optional working memory updates on every step
         if (step.plan) plan = step.plan
@@ -736,13 +750,18 @@ export function browserChat(
               activeRun.status = `Opening ${url.hostname}…`
               cdpAction = { kind: 'navigate', url: url.href, newTab: step.newTab }
             } else if (step.kind === 'click') {
-              activeRun.status = step.ref ? `Clicking [${step.ref}]…` : step.label ? `Clicking “${step.label}”…` : 'Clicking…'
+              const targetName = step.ref ? obs.elements.find((e) => e.ref === step.ref)?.name : undefined
+              const desc = targetName || step.label
+              activeRun.status = desc ? `Clicking “${desc.slice(0, 40)}”…` : step.ref ? `Clicking [${step.ref}]…` : 'Clicking…'
               cdpAction = { kind: 'click', ref: step.ref, label: step.label, x: step.x, y: step.y }
             } else if (step.kind === 'fill' || step.kind === 'type') {
-              activeRun.status = step.ref ? `Filling [${step.ref}]…` : 'Typing…'
+              const targetName = step.ref ? obs.elements.find((e) => e.ref === step.ref)?.name : undefined
+              const desc = targetName || step.label
+              activeRun.status = desc ? `Typing in “${desc.slice(0, 36)}”…` : 'Typing…'
               cdpAction = { kind: 'fill', ref: step.ref, label: step.label, x: step.x, y: step.y, text: step.text, submit: step.submit }
             } else if (step.kind === 'select') {
-              activeRun.status = `Selecting in [${step.ref}]…`
+              const targetName = obs.elements.find((e) => e.ref === step.ref)?.name
+              activeRun.status = targetName ? `Selecting in “${targetName.slice(0, 36)}”…` : `Selecting in [${step.ref}]…`
               cdpAction = { kind: 'select', ref: step.ref, value: step.value }
             } else if (step.kind === 'press') {
               activeRun.status = `Pressing ${step.key}…`
@@ -806,8 +825,9 @@ export function browserChat(
 
         // Re-observe updated page
         check()
-        activeRun.status = 'Reading the page…'
+        activeRun.status = 'Reading updated page…'
         ;({ obs, legacyScreen } = await observeBrowser())
+        activeRun.url = obs.url
 
         // Post-action redirect SSRF guard in CDP mode
         if (obs.mode === 'cdp' && obs.url && /^https?:\/\//i.test(obs.url)) {
@@ -847,7 +867,9 @@ export function browserChat(
       runId,
       userId: user.id,
       cancelled: false,
-      status: 'Reading the page…',
+      status: 'Inspecting page…',
+      url: '',
+      thought: null,
       abort: new AbortController(),
     }
     void runLoop(admin, user, runId, activeRun)
@@ -906,7 +928,8 @@ export function browserChat(
       maybeWarm(admin, m)
       const isMine = active?.userId === user.id
       const isAdmin = admin.id === user.id
-      const latest = q.latestRun.get(user.id) as RunRow | undefined
+      const allRuns = (q.recentRuns.all(user.id) as RunRow[]).map((r) => runDto(r, user.id, isAdmin))
+      const latest = allRuns[0] ?? null
       return {
         turns: history(user.id),
         busy: !!active,
@@ -914,7 +937,8 @@ export function browserChat(
         status: !active ? null : isMine ? active.status : 'Another member is using the browser…',
         canStop: !!active && (isMine || isAdmin),
         model: { harness: m.harness, model: m.model, effort: m.effort },
-        run: latest ? runDto(latest, user.id, isAdmin) : null,
+        run: latest,
+        runs: allRuns,
       }
     },
     runs(user: User) {
