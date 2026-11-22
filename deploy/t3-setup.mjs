@@ -3,12 +3,12 @@
 // Runs strictly as the Linux member (never root). Credentials stay in ~/.config/devdash/t3code.json (0600).
 import { execFile, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { constants, existsSync, readFileSync } from 'node:fs'
+import { constants, existsSync, readFileSync, realpathSync } from 'node:fs'
 import { access, lstat, rename, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { assertMemberEndpoint, assertRegularMemberUid } from '../apps/agent/src/t3-local.ts'
 import { T3Client, readConfig } from '../apps/agent/src/t3-client.ts'
@@ -347,6 +347,14 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+const isEntrypoint = () => {
+  if (!process.argv[1]) return false
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))
+  } catch {
+    return false
+  }
+}
+if (isEntrypoint()) {
   await main()
 }
