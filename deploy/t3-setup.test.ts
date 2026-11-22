@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmod, chown, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, chown, copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { readServicePort } from './t3-setup.mjs'
@@ -141,6 +141,26 @@ test('T3 setup helper connects, atomically renews with old-session revocation, a
       child.once('error', reject)
       child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(output || `fixture exited ${code}`)))
     })
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('t3-setup.mjs CLI executes main() even when invoked through a symlinked release path', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dd-t3-symlink-'))
+  try {
+    const link = join(dir, 'current')
+    await symlink(new URL('..', import.meta.url).pathname, link)
+    const out = await new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, [join(link, 'deploy/t3-setup.mjs'), '--help'], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
+      child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+      child.once('error', reject)
+      child.once('exit', (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr || `exit ${code}`)))
+    })
+    assert.match(out, /DevDash T3 Code setup helper/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
