@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { Trash2 } from 'lucide-react'
+import { Check, Copy, Trash2 } from 'lucide-react'
 import { confirmAction } from '@/components/app/confirm'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { Button } from '@/components/ui/button'
@@ -9,7 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { toast } from '@/lib/toast'
 import { bytes } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
-import { removeSkill, runnable, setEnabled, setFolders, skillQuery } from './data'
+import { providerSkillQuery, removeSkill, runnable, setEnabled, setFolders, skillQuery } from './data'
 import { FileList, SkillMarkdown, SourceLine } from './parts'
 import { onlyIn, Where } from './Where'
 
@@ -20,6 +21,74 @@ export function MySkillPage() {
 export function ProjectSkillPage() {
   const { slug, name } = useParams({ strict: false }) as { slug: string; name: string }
   return <SkillView name={name} project={slug} />
+}
+
+/** A read-only skill discovered from a connected provider (~/.agents, ~/.codex, T3 Code, …). */
+export function ProviderSkillPage() {
+  const { id } = useParams({ strict: false }) as { id: string }
+  const q = useQuery(providerSkillQuery(id))
+  const [raw, setRaw] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const s = q.data?.skill
+  const markdown = s?.markdown ?? q.data?.markdown ?? ''
+  const runs = s ? runnable(s.files) : []
+  const copy = async () => {
+    if (!markdown) return
+    try {
+      await navigator.clipboard.writeText(markdown)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    } catch {
+      toast.error('Could not copy to clipboard.')
+    }
+  }
+  return (
+    <>
+      <PageHeader title={s?.name ?? 'Provider skill'} description="Provider skill" back="/skills"
+        actions={markdown ? (
+          <div className="flex items-center gap-1.5">
+            <Button variant="ghost" size="sm" onClick={() => setRaw((v) => !v)}>{raw ? 'Formatted' : 'Raw'}</Button>
+            <Button variant="ghost" size="sm" onClick={() => void copy()}>
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+        ) : undefined} />
+      <PageBody className="gap-8 py-6 md:py-8">
+        <ErrorAlert error={q.error} />
+        {q.isPending && <Skeleton className="h-48 rounded-2xl" />}
+        {q.isSuccess && (
+          <>
+            {s && (
+              <header className="flex flex-col gap-3">
+                {s.description && <p className="max-w-prose text-[15px] text-pretty">{s.description}</p>}
+                <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[8rem_minmax(0,1fr)]">
+                  <dt className="text-muted-foreground">From</dt><dd className="min-w-0">{s.sources.join(' · ')}</dd>
+                  <dt className="text-muted-foreground">Folder</dt><dd className="min-w-0 break-all font-mono text-[13px]" title={s.path}>{s.path}</dd>
+                  <dt className="text-muted-foreground">Files</dt>
+                  <dd>{s.files.length} · {bytes(s.files.reduce((n, f) => n + f.size, 0))}{runs.length ? <span className="text-attention-foreground"> · {runs.length} can run</span> : null}</dd>
+                </dl>
+              </header>
+            )}
+            <section className="flex flex-col gap-3">
+              <h2 className="text-base font-semibold tracking-[-0.01em]">SKILL.md</h2>
+              <div className="rounded-2xl bg-surface p-4 md:p-5">
+                {raw
+                  ? <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed">{markdown}</pre>
+                  : <SkillMarkdown markdown={markdown} />}
+              </div>
+            </section>
+            {s && s.files.length > 0 && (
+              <section className="flex flex-col gap-3">
+                <h2 className="text-base font-semibold tracking-[-0.01em]">Files</h2>
+                <FileList files={s.files} />
+              </section>
+            )}
+          </>
+        )}
+      </PageBody>
+    </>
+  )
 }
 
 /** One skill: what it says, every file, where it came from; on/off and remove. */

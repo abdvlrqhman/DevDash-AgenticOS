@@ -271,7 +271,7 @@ export const LIMITS = {
   skillFiles: 500,
   ratio: 100,
 }
-const SHOWN_MD = 256 * 1024
+const SHOWN_MD = 512 * 1024
 
 // ---------- Reading skill folders ----------
 
@@ -326,8 +326,13 @@ async function readMd(dir: string) {
     const fh = await open(join(dir, 'SKILL.md'), 'r')
     try {
       const b = Buffer.alloc(SHOWN_MD)
-      const { bytesRead } = await fh.read(b, 0, SHOWN_MD, 0)
-      return b.subarray(0, bytesRead).toString('utf8')
+      let total = 0
+      while (total < SHOWN_MD) {
+        const { bytesRead } = await fh.read(b, total, SHOWN_MD - total, total)
+        if (bytesRead <= 0) break
+        total += bytesRead
+      }
+      return b.subarray(0, total).toString('utf8')
     } finally {
       await fh.close()
     }
@@ -865,8 +870,12 @@ async function after(project: string | null, name: string, message: string) {
 }
 
 export type ProviderSkill = { id: string; name: string; description: string | null; sources: string[] }
+export type ProviderSkillDetail = {
+  id: string; name: string; title: string | null; description: string | null; sources: string[]
+  path: string; markdown: string; files: SkillFile[]
+}
 
-async function providerSkills() {
+async function providerSkills(withDescription = true) {
   const items = new Map<string, ProviderSkill>()
   const homeRoot = await realpath(home())
   const add = async (path: string, name: string, source: string, description?: string) => {
@@ -875,9 +884,10 @@ async function providerSkills() {
     const previous = items.get(file)
     if (previous) {
       if (!previous.sources.includes(source)) previous.sources.push(source)
+      if (!previous.description && description) previous.description = description
     } else {
       items.set(file, { id: createHash('sha256').update(file).digest('hex'), name, sources: [source],
-        description: description || parseSkillMd(await readMd(dirname(file)) ?? '').description })
+        description: description || (withDescription ? parseSkillMd(await readMd(dirname(file)) ?? '').description : null) })
     }
   }
   const roots = { 'Shared agents': '.agents/skills', Codex: '.codex/skills', OpenCode: '.config/opencode/skills',
@@ -916,8 +926,24 @@ export const ops = {
   },
 
   async providerRead(r: Req) {
-    for (const [file, skill] of await providerSkills()) {
-      if (skill.id === r.id) return { markdown: await readMd(dirname(file)) ?? '' }
+    for (const [file, skill] of await providerSkills(false)) {
+      if (skill.id === r.id) {
+        const dir = dirname(file)
+        const markdown = await readMd(dir) ?? ''
+        const md = parseSkillMd(markdown)
+        const files = await filesOf(dir).catch(() => [] as SkillFile[])
+        const detail: ProviderSkillDetail = {
+          id: skill.id,
+          name: skill.name,
+          title: md.name,
+          description: skill.description || md.description,
+          sources: skill.sources,
+          path: dir,
+          markdown,
+          files,
+        }
+        return { markdown, skill: detail }
+      }
     }
     throw new Error('That provider skill is no longer available.')
   },

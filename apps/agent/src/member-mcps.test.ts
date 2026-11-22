@@ -51,7 +51,12 @@ for await (const line of createInterface({input: process.stdin})) {
     await writeFile(join(skill, 'SKILL.md'), '---\nname: example\ndescription: Example skill\n---\nInstructions')
     const { discovered } = await ops.list({})
     assert.equal(discovered?.length, 1)
-    assert.match((await ops.providerRead({ id: discovered![0]!.id })).markdown, /Instructions/)
+    const readSkill = await ops.providerRead({ id: discovered![0]!.id })
+    assert.match(readSkill.markdown, /Instructions/)
+    assert.equal(readSkill.skill.name, 'example')
+    assert.equal(readSkill.skill.description, 'Example skill')
+    assert.deepEqual(readSkill.skill.sources, ['Shared agents'])
+    assert.equal(readSkill.skill.files.length, 1)
     await assert.rejects(ops.providerRead({ id: '../config.toml' }))
   } finally {
     if (old === undefined) delete process.env.HOME

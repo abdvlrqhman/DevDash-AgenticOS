@@ -2,7 +2,7 @@ import { queryOptions } from '@tanstack/react-query'
 import { api, ApiError, unwrap } from '@/lib/api'
 import type { Changed, Review, SkillFile, SkillSource } from '../../../../server/src/modules/skills/routes.ts'
 
-export type { BuiltInSkill, Review, ReviewSkill, SkillDetail, SkillFile, SkillSource, SkillSummary } from '../../../../server/src/modules/skills/routes.ts'
+export type { BuiltInSkill, ProviderSkill, ProviderSkillDetail, Review, ReviewSkill, SkillDetail, SkillFile, SkillSource, SkillSummary } from '../../../../server/src/modules/skills/routes.ts'
 
 export const skillsQuery = queryOptions({ queryKey: ['skills', 'mine'], queryFn: () => unwrap(api.api.skills.$get()) })
 export const projectSkillsQuery = (slug: string) =>
@@ -12,6 +12,10 @@ export const skillQuery = (name: string, project?: string) => queryOptions({
   queryFn: () => project
     ? unwrap(api.api.skills.projects[':slug'].skill[':name'].$get({ param: { slug: project, name } }))
     : unwrap(api.api.skills.mine[':name'].$get({ param: { name } })),
+})
+export const providerSkillQuery = (id: string) => queryOptions({
+  queryKey: ['skills', 'provider', id],
+  queryFn: () => unwrap(api.api.skills.provider[':id'].$get({ param: { id } })),
 })
 export const reviewQuery = (id: string, project?: string) => queryOptions({
   queryKey: ['skills', 'review', id, project ?? ''],

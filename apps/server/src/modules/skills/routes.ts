@@ -1,5 +1,6 @@
 import type { McpInventory } from '../../../../agent/src/member-mcps.ts'
-import type { ProviderSkill } from '../../../../agent/src/skills.ts'
+import type { ProviderSkill, ProviderSkillDetail } from '../../../../agent/src/skills.ts'
+export type { ProviderSkill, ProviderSkillDetail }
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
@@ -83,7 +84,7 @@ export function skillsRoutes(agents: AgentsService, projects: ProjectsService, m
     .post('/mcps/check', json(McpChange.pick({ source: true, name: true, revision: true })), async (c) =>
       c.json(await ask<{status: string}>(as(c), { ...c.req.valid('json'), op: 'mcps.check' })))
     .post('/mcps', json(McpChange), async (c) => c.json(await ask(as(c), { ...c.req.valid('json'), op: 'mcps.change' })))
-    .get('/provider/:id', async (c) => c.json(await ask<{markdown: string}>(as(c), { op: 'skills.providerRead', id: param(z.string().regex(/^[a-f0-9]{64}$/), c.req.param('id'), 'skill') })))
+    .get('/provider/:id', async (c) => c.json(await ask<{ markdown: string; skill: ProviderSkillDetail }>(as(c), { op: 'skills.providerRead', id: param(z.string().regex(/^[a-f0-9]{64}$/), c.req.param('id'), 'skill') })))
     // My skills
     .get('/', async (c) => c.json(await ask<{ discovered: ProviderSkill[]; skills: SkillSummary[]; builtIn: BuiltInSkill[]; profiles: string[]; shadowed: { profile: string; name: string }[] }>(as(c), { op: 'skills.list' })))
     .get('/mine/:name', async (c) => c.json(await ask<{ skill: SkillDetail }>(as(c), { op: 'skills.get', name: param(Folder, c.req.param('name'), 'skill name') })))
