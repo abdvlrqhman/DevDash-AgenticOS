@@ -11,6 +11,7 @@ import * as claude from './claude.ts'
 import * as harness from './harness.ts'
 import * as services from './services.ts'
 import * as tailscale from './tailscale.ts'
+import * as pcBridge from './pc-bridge.ts'
 import * as storage from './storage.ts'
 import { ops as git } from './git.ts'
 import { startJanitor } from './janitor.ts'
@@ -230,6 +231,8 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'tailscale.up': (r) => tailscale.up(r),
   'tailscale.status': () => tailscale.status(),
   'tailscale.down': () => tailscale.down(),
+  // Tailscale-only PC Computer Use bridge (strictly gated on Tailscale peer online + SOCKS5).
+  'pc.request': (r) => pcBridge.pcRequest(r as unknown as pcBridge.PcRequestInput),
   // From the member's own processes (the `devdash` command): relayed to the server, which knows who this agent is.
   rpc: async (r) => ({ result: await rpc(str(r.method, 'method'), r.params) }),
 }

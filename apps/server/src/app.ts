@@ -40,6 +40,8 @@ import { storageRoutes, storageTokenRoutes } from './modules/storage/routes.ts'
 import { storageService } from './modules/storage/service.ts'
 import { tailnetRoutes } from './modules/tailnet/routes.ts'
 import { tailnetService, type TailnetService } from './modules/tailnet/service.ts'
+import { pcRoutes } from './modules/pc/routes.ts'
+import { pcService } from './modules/pc/service.ts'
 import { buildsService } from './modules/builds/service.ts'
 import { notesRoutes } from './modules/notes/routes.ts'
 import { notesService } from './modules/notes/service.ts'
@@ -176,6 +178,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   team = teamPlugin({ db, hub, agents, claude, projects, activity, tasks, notify: notifications.notify, masterKey: config.masterKey, mw, onProposalIdle: (s) => void reviews!.record(s) }) // Team
   // Per-user tailnets: keep net_* tools out of team role sessions (Team may be off, so roleOf is optional).
   tailnet = tailnetService({ db, agents, masterKey: config.masterKey, runDir: config.runDir, isRole: (u, s) => !!team?.service?.roleOf(u, s) })
+  const pc = pcService({ db, agents, tailnet, masterKey: config.masterKey })
   const status = statusService({ db, agents, services, browser, runDir: config.runDir, dataDir: config.dataDir, version: config.version })
   const deploys = deployService({ db, agents, projects, notify: notifications.notify, runDir: config.runDir, repo: config.repo, token: config.githubToken, live: status.release })
   const avatars = avatarsService({ db, hub })
@@ -242,6 +245,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     .route('/api/builds', buildsRoutes(builds, mw))
     .route('/api/vault', vaultRoutes(vault, mw))
     .route('/api/tailnet', tailnetRoutes(tailnet, mw))
+    .route('/api/pc', pcRoutes(pc, mw))
     .route('/api/storage', storageRoutes(storage, mw))
     .route('/api/pins', pinsRoutes(pins, mw))
     .route('/api/browser', browserRoutes(browser, chat, mw))
@@ -263,6 +267,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   registerAssistantMcp({ agents, claude, assistant, projects, notify: notifications.notify, follow })
   registerAutopilotMcp({ agents, autopilot })
   subagents.registerMcp()
+  pc.registerMcp()
   reviews.registerMcp()
   deploys.registerMcp()
   deploys.resume()

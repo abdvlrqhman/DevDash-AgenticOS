@@ -57,6 +57,7 @@ const NAV: { label?: string; items: NavItem[] }[] = [
     { to: '/browser', label: 'Browser', icon: Globe },
     { to: '/vault', label: 'Vault', icon: KeyRound },
     { to: '/network', label: 'Network', icon: Network },
+    { to: '/pc', label: 'My PC', icon: Monitor },
     { to: '/storage', label: 'Storage', icon: Cloud },
   ] },
   { label: 'Team', items: [
@@ -319,7 +320,7 @@ function MobileTabs({ waiting }: { waiting: number }) {
   // Inside a Claude chat the tabs step aside, as in messaging apps: the back arrow leads out.
   const inChat = useRouterState({ select: (s) => /^\/sessions\/[0-9a-f-]{36}$/.test(s.location.pathname) })
   if (inChat) return null
-  const moreActive = ['/more', '/subagents', '/autopilot', '/members', '/account', '/notes', '/tools', '/terminal', '/services', '/files', '/vault', '/network', '/storage', '/browser', '/server'].some((p) => active(p)) || active('/sessions/setup')
+  const moreActive = ['/more', '/subagents', '/autopilot', '/members', '/account', '/notes', '/tools', '/terminal', '/services', '/files', '/vault', '/network', '/pc', '/storage', '/browser', '/server'].some((p) => active(p)) || active('/sessions/setup')
   return (
     <nav aria-label="Sections" className="grid shrink-0 grid-cols-5 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden [.keyboard-open_&]:hidden">
       {TABS.map((t) => {

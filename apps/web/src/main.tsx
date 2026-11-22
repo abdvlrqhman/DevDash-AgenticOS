@@ -115,6 +115,7 @@ const storage = createRoute({ getParentRoute: () => app, path: '/storage', compo
 // Google sends the browser back here; outside the sign-in guard because the native app finishes in the system browser.
 const storageCallback = createRoute({ getParentRoute: () => root, path: '/storage/callback', component: lazy(() => import('./features/storage/StoragePage'), 'StorageCallbackPage') })
 const network = createRoute({ getParentRoute: () => app, path: '/network', component: lazy(() => import('./features/network/NetworkPage'), 'NetworkPage') })
+const pc = createRoute({ getParentRoute: () => app, path: '/pc', component: lazy(() => import('./features/pc/PcPage'), 'PcPage') })
 const services = createRoute({ getParentRoute: () => app, path: '/services', component: lazyRouteComponent(() => import('./features/services/ServicesPage'), 'ServicesPage') })
 const service = createRoute({ getParentRoute: () => app, path: '/services/$name', component: lazyRouteComponent(() => import('./features/services/ServicePage'), 'ServicePage') })
 // A service inside the app, framed under the top bar (the Service page's "View", and pinned services).
@@ -138,7 +139,7 @@ const legacyClaude = createRoute({
 })
 
 const router = createRouter({
-  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, mcps, mcpCreate, mcpDetail, skillReview, providerSkill, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity, subagents])]),
+  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, pc, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, mcps, mcpCreate, mcpDetail, skillReview, providerSkill, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity, subagents])]),
   context: { queryClient },
   defaultPreload: 'intent',
 })

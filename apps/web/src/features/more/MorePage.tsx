@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { Link } from '@tanstack/react-router'
-import { Activity, ArrowLeftRight, Bot, Cable, BookOpenCheck, ChevronRight, Cloud, Download, Globe, HardDrive, Inbox, KeyRound, LogOut, Network, Plane, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Users } from 'lucide-react'
+import { Activity, ArrowLeftRight, Bot, Cable, BookOpenCheck, ChevronRight, Cloud, Download, Globe, HardDrive, Inbox, KeyRound, LogOut, Monitor, Network, Plane, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Users } from 'lucide-react'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { useSignOut } from '@/components/app/shell'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -32,6 +32,7 @@ const GROUPS: { title: string; links: Destination[] }[] = [
     { to: '/browser', label: 'Browser', description: 'A shared browser on the server that stays signed in', icon: Globe },
     { to: '/server', label: 'Server', description: 'Health, versions and backups', icon: Activity },
     { to: '/network', label: 'Network', description: 'Reach your own devices over your private tailnet', icon: Network },
+    { to: '/pc', label: 'My PC', description: 'Codex-grade computer use on your Windows PC over Tailscale', icon: Monitor },
     { to: '/storage', label: 'Storage', description: 'Your Google Drive, for big files like videos', icon: Cloud },
   ] },
   { title: 'Team and settings', links: [
