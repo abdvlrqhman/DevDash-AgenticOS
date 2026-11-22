@@ -200,6 +200,10 @@ class CdpSocket {
     })
   }
 
+  get isOpen() {
+    return !this.closed && this.ws.readyState === WebSocket.OPEN
+  }
+
   close() {
     this.closed = true
     try { this.ws.close() } catch { /* ignore */ }
@@ -211,13 +215,14 @@ const OBSERVE_SCRIPT = `(() => {
   const refs = new Map();
   globalThis[KEY] = refs;
   const clean = (s, max = 120) => String(s || '').replace(/\\s+/g, ' ').trim().slice(0, max);
-  const isVisible = (el) => {
-    if (!el || !el.isConnected) return false;
-    if (el.closest('[aria-hidden="true"]')) return false;
-    const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+  const visibleRect = (el) => {
+    if (!el || !el.isConnected) return null;
     const r = el.getBoundingClientRect();
-    return r.width >= 2 && r.height >= 2;
+    if (r.width < 2 || r.height < 2) return null;
+    if (el.closest('[aria-hidden="true"]')) return null;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return null;
+    return r;
   };
   const roleOf = (el) => {
     const r = (el.getAttribute('role') || '').trim().toLowerCase();
@@ -281,13 +286,20 @@ const OBSERVE_SCRIPT = `(() => {
   const seen = new Set();
   const inView = [];
   const offView = [];
-  const vh = window.innerHeight || 900;
+  const vh = window.innerHeight || 720;
+  let inspected = 0;
   for (const el of document.querySelectorAll(selector)) {
-    if (seen.has(el) || !isVisible(el)) continue;
+    if (seen.has(el)) continue;
     seen.add(el);
-    const r = el.getBoundingClientRect();
-    if (r.bottom >= -100 && r.top <= vh + 400) inView.push(el);
-    else offView.push(el);
+    if (++inspected > 1200) break;
+    const r = visibleRect(el);
+    if (!r) continue;
+    if (r.bottom >= -100 && r.top <= vh + 400) {
+      inView.push(el);
+      if (inView.length >= 120) break;
+    } else if (offView.length < 120) {
+      offView.push(el);
+    }
   }
   const ordered = [...inView, ...offView].slice(0, 120);
   const elements = [];
@@ -382,7 +394,8 @@ export function createCdpClient(opts: { baseUrl?: string; token: () => string })
     let picked = activeTargetId ? pages.find((p) => p.id === activeTargetId) : undefined
     if (!picked) {
       picked = pages.find((p) => !p.url.startsWith('chrome://') && !p.url.startsWith('devtools://')) ?? pages[0]!
-      activeTargetId = picked.id
+      if (activeTargetId !== picked.id) dropPool()
+        activeTargetId = picked.id
     }
     const tabs: BrowserTab[] = pages.map((p, index) => ({
       index,
@@ -394,13 +407,50 @@ export function createCdpClient(opts: { baseUrl?: string; token: () => string })
     return { target: picked, tabs }
   }
 
+  const SOCKET_IDLE_MS = 20_000
+  let pooled: { targetId: string; wsUrl: string; sock: CdpSocket; timer?: ReturnType<typeof setTimeout> } | null = null
+
+  function dropPool() {
+    if (!pooled) return
+    if (pooled.timer) clearTimeout(pooled.timer)
+    pooled.sock.close()
+    pooled = null
+  }
+
+  function touchPool() {
+    if (!pooled) return
+    if (pooled.timer) clearTimeout(pooled.timer)
+    pooled.timer = setTimeout(() => dropPool(), SOCKET_IDLE_MS)
+    pooled.timer.unref?.()
+  }
+
+  async function acquireSocket(target: CdpTarget): Promise<CdpSocket> {
+    const wsUrl = rewriteWsUrl(target.webSocketDebuggerUrl!)
+    if (pooled && pooled.targetId === target.id && pooled.wsUrl === wsUrl && pooled.sock.isOpen) {
+      if (pooled.timer) { clearTimeout(pooled.timer); pooled.timer = undefined }
+      return pooled.sock
+    }
+    dropPool()
+    const sock = await CdpSocket.connect(wsUrl, opts.token())
+    pooled = { targetId: target.id, wsUrl, sock }
+    return sock
+  }
+
   async function withTab<T>(fn: (sock: CdpSocket, target: CdpTarget, tabs: BrowserTab[]) => Promise<T>): Promise<T> {
     const { target, tabs } = await resolveActiveTarget()
-    const sock = await CdpSocket.connect(rewriteWsUrl(target.webSocketDebuggerUrl!), opts.token())
+    let sock = await acquireSocket(target)
     try {
-      return await fn(sock, target, tabs)
-    } finally {
-      sock.close()
+      const result = await fn(sock, target, tabs)
+      if (pooled?.sock === sock && sock.isOpen) touchPool()
+      else if (pooled?.sock === sock) dropPool()
+      return result
+    } catch (err) {
+      if (!sock.isOpen && pooled?.sock === sock) {
+        dropPool()
+      } else if (pooled?.sock === sock) {
+        touchPool()
+      }
+      throw err
     }
   }
 
@@ -461,6 +511,7 @@ export function createCdpClient(opts: { baseUrl?: string; token: () => string })
   }
 
   return {
+    close: dropPool,
     async available(): Promise<boolean> {
       try {
         await fetchJson('/json/version', 'GET', 1500)
@@ -528,6 +579,7 @@ export function createCdpClient(opts: { baseUrl?: string; token: () => string })
           redirect: 'error',
           signal: AbortSignal.timeout(4000),
         })
+        if (pooled?.targetId === victim.id) dropPool()
         if (activeTargetId === victim.id) {
           const remaining = pages.filter((p) => p.id !== victim.id)
           activeTargetId = remaining[Math.max(0, idx - 1)]?.id ?? remaining[0]?.id ?? null
@@ -537,7 +589,7 @@ export function createCdpClient(opts: { baseUrl?: string; token: () => string })
 
       if (action.kind === 'navigate' && action.newTab) {
         const created = await fetchJson<CdpTarget>(`/json/new?${encodeURIComponent(action.url)}`, 'PUT', 8000)
-        if (created?.id) activeTargetId = created.id
+        if (created?.id) { dropPool(); activeTargetId = created.id }
         return { summary: `Opened ${action.url} in a new tab`, url: action.url }
       }
 

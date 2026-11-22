@@ -15,7 +15,7 @@ import { readScreen, screenSnapshot } from './screen.ts'
 import type { User } from '../auth/repo.ts'
 
 const NEKO = 'http://127.0.0.1:8090/browser'
-const IDLE_MS = 30 * 60_000
+const IDLE_MS = 15 * 60_000
 const ENV_FILE = '/etc/devdash/browser.env'
 
 type Invite = { id: number; token_hash: string; token_sealed: string; label: string; can_control: number; expires_at: number; created_by: number; created_at: number; revoked_at: number | null; creator_name: string }
@@ -89,7 +89,19 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
     }
   }
 
-  // Every minute: an unwatched browser stops after 30 minutes, unless a browser agent run is actively executing.
+  // Check once on startup if a browser container survived a DevDash restart, so we never spawn the root helper every minute while stopped.
+  let startupChecked = false
+  if (runDir) {
+    setTimeout(() => {
+      if (startupChecked || lastSeen) return
+      startupChecked = true
+      void helper<{ running: boolean }>('browser-status')
+        .then((r) => { if (r.running && !lastSeen) lastSeen = Date.now() })
+        .catch(() => {})
+    }, 5_000).unref()
+  }
+
+  // Every minute (only while running): an unwatched browser stops after 15 minutes, unless a browser agent run is actively executing.
   setInterval(() => {
     void (async () => {
       if (!runDir) return
@@ -97,14 +109,13 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
         lastSeen = Date.now()
         return
       }
-      if (!lastSeen) {
-        const r = await helper<{ running: boolean }>('browser-status').catch(() => ({ running: false }))
-        if (r.running) lastSeen = Date.now() // found running (e.g. after a DevDash restart): start counting
-      } else if (Date.now() - lastSeen > IDLE_MS) {
+      if (!lastSeen) return
+      if (Date.now() - lastSeen > IDLE_MS) {
         if (await anyoneWatching()) lastSeen = Date.now()
         else {
           lastSeen = 0
-          console.log('browser stopped: nobody watched for 30 minutes')
+          cdp.close()
+          console.log('browser stopped: nobody watched for 15 minutes')
           await helper('browser-stop').catch((err) => console.error('browser stop:', (err as Error).message))
         }
       }
@@ -202,6 +213,7 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
     heartbeat: () => void (lastSeen = Date.now()),
     async stop() {
       lastSeen = 0
+      cdp.close()
       await helper('browser-stop')
     },
 

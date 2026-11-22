@@ -103,7 +103,7 @@ function flattenOptions(opt: AcpConfigOption | undefined): { value: string; name
 const findModelOption = (opts: AcpConfigOption[] | undefined) => opts?.find((c) => c.category === 'model' || c.id === 'model')
 const findThoughtOption = (opts: AcpConfigOption[] | undefined) => opts?.find((c) => c.category === 'thought_level' || c.id === 'thinking_level')
 
-const DEFAULT_IDLE_MS = 5 * 60_000
+const DEFAULT_IDLE_MS = 90_000
 
 type OpenCodeWorker = {
   key: string
@@ -602,7 +602,7 @@ async function withAntigravity<T>(
 
 export async function supervisorModels(provider: SupervisorProvider, timeouts?: SupervisorTimeouts): Promise<SupervisorModel[]> {
   if (provider.kind === 'opencode') {
-    const models = await withOpenCode(provider.bin, async (_request, list) => list, timeouts, { refreshCatalog: true })
+    const models = await withOpenCode(provider.bin, async (_request, list) => list, { ...timeouts, idleMs: timeouts?.idleMs ?? 20_000 }, { refreshCatalog: true })
     return models.map((m) => ({ id: `${m.providerID}/${m.id}`, variants: m.variants }))
   }
   return withAntigravity(provider, async ({ sessionId, configOptions, call, startupSignal }) => {
@@ -628,7 +628,7 @@ export async function supervisorModels(provider: SupervisorProvider, timeouts?: 
       models.push({ id: choice.value, displayName: choice.name || choice.value, variants })
     }
     return models
-  }, timeouts)
+  }, { ...timeouts, idleMs: timeouts?.idleMs ?? 30_000 })
 }
 
 export function supervisorText(target: SupervisorTarget, prompt: string, timeouts?: SupervisorTimeouts): Promise<string> {

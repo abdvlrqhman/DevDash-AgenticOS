@@ -6,6 +6,7 @@ Wants=devdash-helper.socket
 [Service]
 User=devdash
 Group=devdash
+Environment=NODE_OPTIONS=--max-old-space-size=384
 EnvironmentFile=/etc/devdash/devdash.env
 WorkingDirectory=/opt/devdash/current
 ExecStart=/usr/bin/node apps/server/src/main.ts

@@ -11,6 +11,7 @@ Slice=system-devdash-agent.slice
 User=%i
 WorkingDirectory=~
 Environment=LANG=C.UTF-8
+Environment=NODE_OPTIONS=--max-old-space-size=256
 ExecStart=/usr/bin/node /opt/devdash/current/apps/agent/src/main.ts
 KillMode=process
 Restart=always

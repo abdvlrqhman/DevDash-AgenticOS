@@ -16,7 +16,7 @@ import { ErrorAlert } from '../auth/LoginPage'
 
 /**
  * The team's shared browser on the server: one Chromium that stays signed in to things (logins and tabs persist),
- * streamed here. One person controls it at a time; the others watch. It stops after 30 minutes nobody is looking.
+ * streamed here. One person controls it at a time; the others watch. It stops after 15 minutes nobody is looking.
  */
 export function BrowserPage() {
   const me = useQuery(meQuery).data!
@@ -27,7 +27,7 @@ export function BrowserPage() {
   const [chatOpen, setChatOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const permission = useQuery({ queryKey: ['browser-chat-permission', me.id],
-    queryFn: () => unwrap(api.api.browser.chat.permission.$get()), refetchInterval: 10_000 })
+    queryFn: () => unwrap(api.api.browser.chat.permission.$get()), staleTime: 30_000, refetchInterval: 60_000, refetchIntervalInBackground: false })
   const canChat = permission.data?.allowed && !permission.error
   const open = useMutation({
     mutationFn: () => unwrap(api.api.browser.open.$post()),
@@ -83,7 +83,7 @@ export function BrowserPage() {
           <ul className="grid gap-x-10 gap-y-5 text-sm text-pretty md:grid-cols-3">
             <li className="flex flex-col gap-1"><span className="font-medium">Signed in once, for everyone</span><span className="text-muted-foreground">Sign in to a site once (an admin panel, a store console, a test account) and it stays signed in for the whole team, from any device.</span></li>
             <li className="flex flex-col gap-1"><span className="font-medium">One drives, the others watch</span><span className="text-muted-foreground">One person controls it at a time. People without an account can watch with an invite link.</span></li>
-            <li className="flex flex-col gap-1"><span className="font-medium">Stops by itself</span><span className="text-muted-foreground">After 30 minutes nobody is watching. Logins and open tabs are kept for next time.</span></li>
+            <li className="flex flex-col gap-1"><span className="font-medium">Stops by itself</span><span className="text-muted-foreground">After 15 minutes nobody is watching. Logins and open tabs are kept for next time.</span></li>
           </ul>
         </div>
       )}

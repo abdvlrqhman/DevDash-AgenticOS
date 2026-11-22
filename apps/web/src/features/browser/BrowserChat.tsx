@@ -508,10 +508,11 @@ export function BrowserChat({ userId, onClose, onOpenSettings }: { userId: numbe
     retry: false,
     refetchInterval: (q) => {
       const d = q.state.data
-      if (d?.busy || d?.run?.status === 'running') return 1000
-      if (d?.run?.status === 'waiting_user' || d?.run?.status === 'paused') return 4000
-      return 10_000
+      if (d?.busy || d?.run?.status === 'running') return 1500
+      if (d?.run?.status === 'waiting_user' || d?.run?.status === 'paused') return 5000
+      return 20_000
     },
+    refetchIntervalInBackground: false,
     staleTime: 0,
   })
   const [draft, setDraft] = useState('')

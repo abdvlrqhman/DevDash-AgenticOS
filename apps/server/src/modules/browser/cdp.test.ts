@@ -7,6 +7,7 @@ import { computeObservationFingerprint, createCdpClient, formatObservation } fro
 test('CDP client sends X-DevDash-CDP-Token on HTTP and WebSocket, observes DOM, and executes tab/DOM actions', async () => {
   const token = 'secret-cdp-token-123'
   const receivedCalls: { method: string; params?: Record<string, unknown> }[] = []
+  let wsUpgrades = 0
   let activeUrl = 'https://example.com/'
   let tabs = [
     { id: 'tab-1', type: 'page', title: 'Example Home', url: 'https://example.com/' },
@@ -56,6 +57,7 @@ test('CDP client sends X-DevDash-CDP-Token on HTTP and WebSocket, observes DOM, 
       socket.destroy()
       return
     }
+    wsUpgrades++
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(String(raw)) as { id: number; method: string; params?: Record<string, unknown> }
@@ -126,12 +128,11 @@ test('CDP client sends X-DevDash-CDP-Token on HTTP and WebSocket, observes DOM, 
   const port = (server.address() as { port: number }).port
   const baseUrl = `http://127.0.0.1:${port}`
 
+  const cdp = createCdpClient({ baseUrl, token: () => token })
   try {
     // Wrong token is rejected cleanly
     const badClient = createCdpClient({ baseUrl, token: () => 'wrong' })
     assert.equal(await badClient.available(), false)
-
-    const cdp = createCdpClient({ baseUrl, token: () => token })
     assert.equal(await cdp.available(), true)
 
     const obs = await cdp.observe()
@@ -159,6 +160,8 @@ test('CDP client sends X-DevDash-CDP-Token on HTTP and WebSocket, observes DOM, 
     assert.match(sel.summary, /Selected “Pro Plan”/)
 
     const ext = await cdp.act({ kind: 'extract_text', selector: 'main' })
+    // Observe + navigate + click + fill + select + extract_text on tab-1 all reused one pooled CDP WebSocket
+    assert.equal(wsUpgrades, 1)
     assert.equal(ext.extractedText, 'Pricing: $29/mo')
 
     const sw = await cdp.act({ kind: 'switch_tab', index: 1 })
@@ -175,6 +178,7 @@ test('CDP client sends X-DevDash-CDP-Token on HTTP and WebSocket, observes DOM, 
     assert.ok(receivedCalls.some((c) => c.method === 'Input.dispatchMouseEvent' && c.params?.type === 'mousePressed'))
     assert.ok(receivedCalls.some((c) => c.method === 'Input.dispatchKeyEvent' && c.params?.key === 'Enter'))
   } finally {
+    cdp.close()
     wss.close()
     server.close()
   }

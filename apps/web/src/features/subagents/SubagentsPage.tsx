@@ -45,6 +45,16 @@ function slugify(text: string) {
   return text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48)
 }
 
+function LiveDuration({ startedAt, finishedAt }: { startedAt: number; finishedAt: number | null }) {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (finishedAt !== null) return
+    const id = setInterval(() => setTick((t) => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [finishedAt])
+  return <>{formatDuration(startedAt, finishedAt)}</>
+}
+
 export function SubagentsPage() {
   useLiveSubagents()
   const qc = useQueryClient()
@@ -123,13 +133,7 @@ export function SubagentsPage() {
   const subagentDefaults: SubagentDefaults | undefined = data?.defaults
   const historyRuns = tab === 'history' ? (runsQuery.data?.runs ?? data?.recentRuns ?? []) : (data?.recentRuns ?? [])
 
-  // Tick elapsed timers once per second while any subagent is running.
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    if (!activeRuns.length) return
-    const id = setInterval(() => setTick((t) => t + 1), 1000)
-    return () => clearInterval(id)
-  }, [activeRuns.length])
+
 
   const existingSlugs = useMemo(() => new Set(subagents.map((s) => s.slug)), [subagents])
 
@@ -188,7 +192,7 @@ export function SubagentsPage() {
                       <Activity className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                       <span className="min-w-0 flex-1 truncate font-medium">{run.activity || 'Working…'}</span>
                       <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-                        {run.steps.length} {run.steps.length === 1 ? 'step' : 'steps'} · {formatDuration(run.startedAt, run.finishedAt)}
+                        {run.steps.length} {run.steps.length === 1 ? 'step' : 'steps'} · <LiveDuration startedAt={run.startedAt} finishedAt={run.finishedAt} />
                       </span>
                     </div>
                     <div className="flex items-center justify-end gap-1.5">
@@ -535,7 +539,7 @@ export function SubagentsPage() {
                           )}
                           <span className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
                             <Clock className="size-3" />
-                            {formatDuration(run.startedAt, run.finishedAt)}
+                            <LiveDuration startedAt={run.startedAt} finishedAt={run.finishedAt} />
                             <span>·</span>
                             {relativeTime(run.startedAt)}
                           </span>
@@ -1076,7 +1080,7 @@ function RunDetailSheet({ runId, onClose }: { runId: number | null; onClose: () 
                   <><span>·</span><span className="truncate font-mono text-[10px]">{modelText}</span></>
                 )}
                 <span>·</span>
-                <span className="shrink-0 tabular-nums">{formatDuration(run.startedAt, run.finishedAt)}</span>
+                <span className="shrink-0 tabular-nums"><LiveDuration startedAt={run.startedAt} finishedAt={run.finishedAt} /></span>
                 {run.costUsd !== null && run.costUsd > 0 && (
                   <><span>·</span><span className="shrink-0 tabular-nums">${run.costUsd.toFixed(4)}</span></>
                 )}

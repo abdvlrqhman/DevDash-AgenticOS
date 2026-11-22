@@ -104,13 +104,26 @@ command=/usr/bin/chromium
   --disable-gpu
   --disable-software-rasterizer
   --disable-dev-shm-usage
+  --renderer-process-limit=4
+  --js-flags=--max-old-space-size=512
+  --disk-cache-size=67108864
+  --media-cache-size=33554432
+  --disable-background-networking
+  --disable-component-update
+  --disable-default-apps
+  --disable-domain-reliability
+  --disable-breakpad
+  --disable-crash-reporter
+  --metrics-recording-only
+  --no-pings
+  --disable-features=Translate,OptimizationHints,MediaRouter,CalculateNativeWinOcclusion,InterestFeedContentSuggestions,AudioServiceOutOfProcess
 stopsignal=INT
 autorestart=true
 priority=800
 user=%(ENV_USER)s
 stdout_logfile=/var/log/neko/chromium.log
-stdout_logfile_maxbytes=100MB
-stdout_logfile_backups=10
+stdout_logfile_maxbytes=5MB
+stdout_logfile_backups=1
 redirect_stderr=true
 
 [program:openbox]
@@ -120,8 +133,8 @@ autorestart=true
 priority=300
 user=%(ENV_USER)s
 stdout_logfile=/var/log/neko/openbox.log
-stdout_logfile_maxbytes=100MB
-stdout_logfile_backups=10
+stdout_logfile_maxbytes=5MB
+stdout_logfile_backups=1
 redirect_stderr=true
 
 [program:cdp-proxy]
@@ -367,14 +380,16 @@ const commands = {
     writeFileSync(BROWSER_CHROMIUM_CONF, BROWSER_CHROMIUM_CONF_TEXT, { mode: 0o644 })
     writeFileSync(BROWSER_CDP_PROXY, BROWSER_CDP_PROXY_TEXT, { mode: 0o755 })
     writeFileSync(BROWSER_POLICIES, BROWSER_POLICIES_TEXT, { mode: 0o644 })
-    run('docker', ['run', '-d', '--name', BROWSER, '--hostname', 'devdash-browser', '--restart', 'no', '--shm-size=2g', '--memory=2500m',
+    run('docker', ['run', '-d', '--name', BROWSER, '--hostname', 'devdash-browser', '--restart', 'no',
+      '--cpus=2', '--shm-size=512m', '--memory=1800m', '--memory-swap=2300m',
       '-p', '127.0.0.1:8090:8080', '-p', '127.0.0.1:9222:9223', '-p', '59000:59000/udp', '-p', '59001:59001/tcp',
       '--health-cmd', 'wget -q -O /dev/null http://127.0.0.1:8080/browser/health',
       '--env-file', BROWSER_ENV,
       '-e', 'NEKO_SERVER_BIND=:8080', '-e', 'NEKO_SERVER_PATH_PREFIX=/browser/',
       '-e', 'NEKO_WEBRTC_UDPMUX=59000', '-e', 'NEKO_WEBRTC_TCPMUX=59001', '-e', `NEKO_WEBRTC_NAT1TO1=${ip}`,
       '-e', 'NEKO_MEMBER_PROVIDER=multiuser', '-e', `NEKO_MEMBER_MULTIUSER_USER_PROFILE=${GUEST_PROFILE}`,
-      '-e', 'NEKO_SESSION_IMPLICIT_HOSTING=true', '-e', 'NEKO_DESKTOP_SCREEN=1600x900@30',
+      '-e', 'NEKO_SESSION_IMPLICIT_HOSTING=true', '-e', 'NEKO_DESKTOP_SCREEN=1280x720@20',
+      '-e', 'NEKO_CAPTURE_MICROPHONE_ENABLED=false', '-e', 'NEKO_CAPTURE_SCREENCAST_RATE=5/1',
       '-v', `devdash-browser-profile:${BROWSER_PROFILE_DIR}`,
       '-v', `${BROWSER_CHROMIUM_CONF}:/etc/neko/supervisord/chromium.conf:ro`,
       '-v', `${BROWSER_CDP_PROXY}:/etc/neko/devdash-cdp-proxy.py:ro`,

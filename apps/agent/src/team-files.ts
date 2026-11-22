@@ -12,9 +12,9 @@ import { promisify } from 'node:util'
 const run = promisify(execFile)
 const ROOT = () => process.env.DEVDASH_PROJECTS_ROOT || '/srv/devdash'
 const FIRST_MS = 3 * 60_000
-const EVERY_MS = 15 * 60_000
+const EVERY_MS = 30 * 60_000
 /** Folders that hold tools and caches, not the project's own files: skipped, so a sweep stays cheap. */
-const SKIP = ['node_modules', '.git', '.venv', 'venv', '.tools', '__pycache__', '.gradle', '.next', '.cache']
+const SKIP = ['node_modules', '.git', '.venv', 'venv', '.tools', '__pycache__', '.gradle', '.next', '.cache', 'dist', 'build', 'target', '.turbo', '.parcel-cache', '.pnpm-store', 'coverage']
 /** Private keys and certificates, which must stay readable by their owner alone. */
 export const isKey = (name: string) => /\.(pem|key|p12|pfx|keystore|jks)$/i.test(name) || /^id_[a-z0-9]+$/i.test(name)
 
@@ -23,7 +23,7 @@ export const PRIVATE_MARK = '.devdash-private'
 
 // find exits non-zero when it meets a folder it can't read (someone else's): what it printed is still right.
 const find = (args: string[]) =>
-  run('find', args, { maxBuffer: 32 * 1024 * 1024, timeout: 120_000 }).catch((e: { stdout?: string }) => ({ stdout: e.stdout ?? '' }))
+  run('nice', ['-n', '19', 'find', ...args], { maxBuffer: 32 * 1024 * 1024, timeout: 120_000 }).catch((e: { stdout?: string }) => ({ stdout: e.stdout ?? '' }))
     .then((r) => r.stdout.split('\0').filter(Boolean))
 
 /** This member's files and folders in the shared folders that the team can't read and write. */
@@ -57,5 +57,6 @@ export async function openTeamFiles(roots = ['projects', 'worktrees', 'files', '
 /** Off the agent's critical path: once a few minutes after start, then every quarter of an hour. */
 export function startTeamFiles(): void {
   const once = () => void openTeamFiles().catch((err: Error) => console.log(`team files: ${err.message}`))
-  setTimeout(() => { once(); setInterval(once, EVERY_MS).unref() }, FIRST_MS).unref()
+  const firstDelay = FIRST_MS + Math.floor(Math.random() * 5 * 60_000)
+  setTimeout(() => { once(); setInterval(once, EVERY_MS).unref() }, firstDelay).unref()
 }
