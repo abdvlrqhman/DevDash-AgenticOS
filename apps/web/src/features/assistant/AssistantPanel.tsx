@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, CalendarClock, Ellipsis, Eraser, ExternalLink, Maximize2, Minimize2, Minus, Settings2, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { ArrowLeft, Bot, CalendarClock, Ellipsis, Eraser, ExternalLink, Maximize2, Minimize2, Minus, Settings2, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { confirmAction } from '@/components/app/confirm'
 import { NativeSelect } from '@/components/app/native-select'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,7 @@ import { AgentGlyph, assistantQuery } from './AssistantDock'
 import { AGENT_NAME, pageTag, panelCoversPage, setAssistantOpen, showingSession, toggleBig, useBig } from './store'
 import { openVoiceSettings, useVoice, VoiceBar, VoiceButton, voiceQuery } from '../voice/VoiceMode'
 import { FollowSetting, FollowStrip } from './Following'
+import { ActiveSubagentsStrip } from '../subagents/data'
 
 type State = Awaited<ReturnType<typeof assistantQuery.queryFn & {}>>
 type Schedule = State['schedules'][number]
@@ -109,13 +110,14 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
         <DropdownMenuContent align="end" className="min-w-52">
           {id && <DropdownMenuItem onSelect={() => { closeOnPhones(); void navigate({ to: '/sessions/$id', params: { id } }) }}><ExternalLink />Open as a full page</DropdownMenuItem>}
           <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => { closeOnPhones(); void navigate({ to: '/subagents' }) }}><Bot />Custom subagents…</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onView('settings')}><Settings2 />Settings and access…</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <WindowButtons />
     </header>
   )
-  const top = <>{header}<FollowStrip st={st} /></>
+  const top = <>{header}<ActiveSubagentsStrip variant="panel" /><FollowStrip st={st} /></>
   if (!id) {
     return <>{header}<div className="p-4"><Button onClick={() => fresh.mutate()} disabled={fresh.isPending}>Start a conversation</Button></div></>
   }

@@ -65,6 +65,8 @@ import { terminalsService } from './modules/terminals/service.ts'
 import { teamPlugin } from './modules/team/index.ts' // Team (optional)
 import { reviewsRoutes } from './modules/reviews/routes.ts'
 import { reviewsService } from './modules/reviews/service.ts'
+import { subagentsRoutes } from './modules/subagents/routes.ts'
+import { subagentsService } from './modules/subagents/service.ts'
 
 export function createApp({ db, config }: { db: Db; config: Config }) {
   const auth = authService({ db, masterKey: config.masterKey, spaceName: config.spaceName })
@@ -117,6 +119,8 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   const autopilot = autopilotService({ db, hub, claude, notify: notifications.notify, team: () => team?.service?.autopilotPort() })
   // Hamasa follows sessions the member asked it to, woken when they finish, ask or fail.
   const follow = followService({ db, hub, agents, claude, assistant, autopilot, notify: notifications.notify })
+  // Custom member-owned subagents usable from Hamasa, normal sessions, and the Subagents tab.
+  const subagents = subagentsService({ db, hub, agents, claude, notify: notifications.notify, isRole: (u, s) => !!team?.service?.roleOf(u, s) })
 
   // "Give to an agent": a Chat session in the task's project (its own worktree by default), linked to the task, with the
   // member's default agent.
@@ -221,6 +225,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     .route('/api/terminals', terminalsRoutes(terms, auth, mw, provisioning, ip))
     .route('/api/claude', claudeRoutes(claude, mw))
     .route('/api/assistant', assistantRoutes(assistant, mw, follow))
+    .route('/api/subagents', subagentsRoutes(subagents, mw))
     .route('/api/voice', voiceRoutes(voice, mw))
     .route('/api/autopilot', autopilotRoutes(autopilot, mw))
     .route('/api/notifications', notificationsRoutes(notifications, apns, ntfy, mw))
@@ -253,6 +258,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   agents.onRpc('mcp.notify', (username, params) => claude.notifyFrom(username, params))
   registerAssistantMcp({ agents, claude, assistant, projects, notify: notifications.notify, follow })
   registerAutopilotMcp({ agents, autopilot })
+  subagents.registerMcp()
   reviews.registerMcp()
   deploys.registerMcp()
   deploys.resume()
@@ -260,7 +266,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
   trash.start()
   autopilot.start()
   follow.start()
-  return { app, auth, provisioning, terms, agents, claude, services, projects, tasks, notes, hub, previews, voice }
+  return { app, auth, provisioning, terms, agents, claude, services, projects, tasks, notes, hub, previews, voice, subagents }
 }
 
 export type AppType = ReturnType<typeof createApp>['app']

@@ -87,17 +87,46 @@ const NET_TOOLS = [
 ]
 const netTools = () => call('mcp.net_here', { ...context, args: {} }).then((r) => (r?.available ? NET_TOOLS : []), () => [])
 
+// Custom subagents created by the member on the Subagents page: usable from both Hamasa and normal sessions
+// (never inside a subagent session itself to avoid recursive delegation).
+const SUBAGENT_TOOLS = [
+  { name: 'subagents_list', description: 'List your enabled custom subagents (name, slug, description, instructions preview) and any currently running subagent tasks.', inputSchema: obj({}) },
+  {
+    name: 'subagent_run',
+    description: 'Run one of your custom subagents on a focused task (e.g. web search, codebase search, deep research, code review). Returns the run result (or runId if wait=false or if it continues running in the background).',
+    inputSchema: obj({
+      subagent: { type: 'string', description: 'The subagent slug or name from subagents_list.' },
+      task: { type: 'string', description: 'Clear, self-contained task prompt for the subagent.' },
+      project,
+      cwd: { type: 'string', description: 'Optional working folder override.' },
+      wait: { type: 'boolean', description: 'Default true (waits up to timeout_sec for the answer). Set false to launch in background and check later with subagent_status.' },
+      timeout_sec: { type: 'integer', description: 'Seconds to wait when wait=true (default 45, max 50).' },
+    }, ['subagent', 'task']),
+  },
+  {
+    name: 'subagent_status',
+    description: 'Check live status, current activity, recent steps, and result of a subagent run (or list recent runs when run_id is omitted).',
+    inputSchema: obj({
+      run_id: { type: 'integer', description: 'Run id returned by subagent_run. Omit to list recent runs.' },
+      wait_sec: { type: 'integer', description: 'Optional seconds (1-50) to wait for a running subagent before returning its status.' },
+    }),
+  },
+  { name: 'subagent_stop', description: 'Stop a currently running custom subagent run.', inputSchema: obj({ run_id: { type: 'integer', description: 'Run id to stop.' } }, ['run_id']) },
+]
+const subagentTools = () => call('mcp.subagents_here', { ...context, args: {} }).then((r) => (r?.available ? SUBAGENT_TOOLS : []), () => [])
+
 const workflow = process.argv[2] === '--workflow' ? process.argv[3] : undefined
 async function listTools() {
   if (workflow === undefined) {
-    const [team, deploy, net, assistant, autopilot] = await Promise.all([teamTools(call, context), deployTools(), netTools(), assistantTools(call, context), autopilotTools(call, context)])
-    return [...TOOLS, ...deploy, ...net, ...team, ...assistant, ...autopilot]
+    const [team, deploy, net, assistant, autopilot, subagents] = await Promise.all([teamTools(call, context), deployTools(), netTools(), assistantTools(call, context), autopilotTools(call, context), subagentTools()])
+    return [...TOOLS, ...deploy, ...net, ...team, ...assistant, ...autopilot, ...subagents]
   }
   if (workflow === 'autopilot') return autopilotTools(call, context)
   if (workflow !== 'hamasa') throw new Error('Unknown DevDash workflow.')
   const assistant = await assistantTools(call, context)
   if (!assistant.length) throw new Error('Hamasa tools require an active personal agent session.')
-  return [...TOOLS, ...assistant, ...await teamTools(call, context)]
+  const [team, subagents] = await Promise.all([teamTools(call, context), subagentTools()])
+  return [...TOOLS, ...assistant, ...team, ...subagents]
 }
 let listed
 const tools = () => (listed ??= listTools())

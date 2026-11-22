@@ -3,7 +3,7 @@ import { useLiveMembers, UserAvatar } from '@/components/app/user-avatar'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
-  Cable, BookOpenCheck,
+  Bot, Cable, BookOpenCheck,
   Activity, ArrowLeftRight, ChevronsUpDown, Cloud, Download, Ellipsis, FolderGit2, Globe, HardDrive, House, Inbox, KeyRound, ListTodo, LogOut, Monitor, Moon, Network, Plane, PocketKnife, Search, Server, Settings, Sparkles, SquareTerminal, StickyNote, Sun, Users,
 } from 'lucide-react'
 import {
@@ -30,6 +30,7 @@ import { Logo } from './brand'
 import { useDragWidth, useStoredWidth } from './resize-handle'
 import { SearchDialog, showSearch } from './search'
 import { ApprovalsBadge } from '@/features/team/Approvals' // Team (optional)
+import { ActiveSubagentsStrip, SubagentsBadge } from '@/features/subagents/data'
 import { SidebarPins } from '@/features/pins/pins'
 import { AgentGlyph, AssistantDock, statusTitle, useAssistantStatus, useAssistantUnread } from '@/features/assistant/AssistantDock'
 import { AGENT_NAME, toggleAssistant, useAssistantOpen } from '@/features/assistant/store'
@@ -41,6 +42,7 @@ const NAV: { label?: string; items: NavItem[] }[] = [
     { to: '/projects', label: 'Projects', icon: FolderGit2 },
     { to: '/tasks', label: 'Tasks', icon: ListTodo },
     { to: '/sessions', label: 'Sessions', icon: Sparkles },
+    { to: '/subagents', label: 'Subagents', icon: Bot },
     { to: '/skills', label: 'Skills', icon: BookOpenCheck },
     { to: '/mcps', label: 'MCP servers', icon: Cable },
     { to: '/approvals', label: 'Approvals', icon: Inbox }, // Team
@@ -204,6 +206,7 @@ function AppSidebar({ waiting, pane }: { waiting: number; pane: ReturnType<typeo
                     <Link to={n.to}><n.icon /><span>{n.label}</span></Link>
                   </SidebarMenuButton>
                   {n.to === '/approvals' && <ApprovalsBadge />}
+                  {n.to === '/subagents' && <SubagentsBadge />}
                   {n.to === '/sessions' && waiting > 0 && (
                     <SidebarMenuBadge className="bg-attention-soft text-attention-foreground">{waiting}</SidebarMenuBadge>
                   )}
@@ -213,6 +216,7 @@ function AppSidebar({ waiting, pane }: { waiting: number; pane: ReturnType<typeo
           </SidebarGroup>
         </Fragment>))}
       </SidebarContent>
+      <ActiveSubagentsStrip variant="sidebar" />
       <SidebarFooter className="py-1.5">
         <SidebarTrigger title="Expand the sidebar (Ctrl+B)" className="mx-auto hidden text-muted-foreground group-data-[collapsible=icon]:inline-flex" />
         <UserMenu />
@@ -315,7 +319,7 @@ function MobileTabs({ waiting }: { waiting: number }) {
   // Inside a Claude chat the tabs step aside, as in messaging apps: the back arrow leads out.
   const inChat = useRouterState({ select: (s) => /^\/sessions\/[0-9a-f-]{36}$/.test(s.location.pathname) })
   if (inChat) return null
-  const moreActive = ['/more', '/autopilot', '/members', '/account', '/notes', '/tools', '/terminal', '/services', '/files', '/vault', '/network', '/storage', '/browser', '/server'].some((p) => active(p)) || active('/sessions/setup')
+  const moreActive = ['/more', '/subagents', '/autopilot', '/members', '/account', '/notes', '/tools', '/terminal', '/services', '/files', '/vault', '/network', '/storage', '/browser', '/server'].some((p) => active(p)) || active('/sessions/setup')
   return (
     <nav aria-label="Sections" className="grid shrink-0 grid-cols-5 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden [.keyboard-open_&]:hidden">
       {TABS.map((t) => {

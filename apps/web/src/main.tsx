@@ -10,6 +10,7 @@ import { ApiError, meQuery } from './lib/api'
 import { handleAppLinksAndDownloads, inShell } from './lib/shell'
 import { getTheme, setTheme } from './lib/theme'
 import { validateActivitySearch } from './features/autopilot/search'
+import { validateSubagentsSearch } from './features/subagents/data'
 import './styles.css'
 
 setTheme(getTheme())
@@ -66,6 +67,7 @@ const autopilotActivity = createRoute({
   component: lazy(() => import('./features/autopilot/ActivityPage'), 'ActivityPage'),
 })
 const autopilot = createRoute({ getParentRoute: () => app, path: '/autopilot', component: lazy(() => import('./features/autopilot/AutopilotPage'), 'AutopilotPage') })
+const subagents = createRoute({ getParentRoute: () => app, path: '/subagents', validateSearch: validateSubagentsSearch, component: lazy(() => import('./features/subagents/SubagentsPage'), 'SubagentsPage') })
 const more = createRoute({ getParentRoute: () => app, path: '/more', component: lazy(() => import('./features/more/MorePage'), 'MorePage') })
 const mcps = createRoute({ getParentRoute: () => app, path: '/mcps', component: lazy(() => import('./features/skills/McpsPage'), 'McpsPage') })
 const skills = createRoute({ getParentRoute: () => app, path: '/skills', component: lazy(() => import('./features/skills/SkillsPage'), 'SkillsPage') })
@@ -133,7 +135,7 @@ const legacyClaude = createRoute({
 })
 
 const router = createRouter({
-  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, mcps, skillReview, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity])]),
+  routeTree: root.addChildren([login, invite, storageCallback, app.addChildren([home, claude.addChildren([claudeIndex, claudeSetup, claudeSession]), legacyClaude, terminal, files, vaultRoute, network, storage, browserRoute, serverRoute, services, service, serviceView, projects, project, projectSkill, skills, mcps, skillReview, skill, teamRole, teamThreads, teamThread, approvals, approvalsProject, buildRun, tasks, task, tools, tool, notes, note, members, account, more, autopilot, autopilotActivity, subagents])]),
   context: { queryClient },
   defaultPreload: 'intent',
 })
