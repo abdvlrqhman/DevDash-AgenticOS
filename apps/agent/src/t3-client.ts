@@ -82,7 +82,17 @@ export class T3Client {
       return reply.result
     } catch (err) {
       if (err instanceof Error && /^(TimeoutError|AbortError)$/.test(err.name)) throw new T3RequestError('T3 Code MCP request timed out. Check the thread in T3 Code before retrying.')
-      if (err instanceof Error && err.message.startsWith('T3 Code')) throw err
+      if (err instanceof T3RequestError) throw err
+      if (err instanceof Error) {
+        if (err.message.startsWith('T3 Code')) throw err
+        if (err.message.includes('No credentials were sent') || err.message.includes('No local T3 Code listener') || err.message.includes('belongs to root or another')) {
+          throw new T3RequestError(this.clean(err.message), false)
+        }
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'ECONNREFUSED' || code === 'ENOENT') {
+          throw new T3RequestError('Could not connect to T3 Code MCP. Check its URL, token and server status.', false)
+        }
+      }
       throw new T3RequestError('Could not connect to T3 Code MCP. Check its URL, token and server status.')
     }
   }

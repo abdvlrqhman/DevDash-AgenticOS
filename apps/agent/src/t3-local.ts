@@ -66,8 +66,7 @@ export async function assertMemberEndpoint(raw: string): Promise<void> {
 }
 
 /** Check the connected server's reverse tuple, so rebinding the port after preflight cannot steal credentials. */
-export function assertOwnedConnection(tcp: string, tcp6: string, serverPort: number, clientPort: number, uid: number): void {
-  assertRegularMemberUid(uid)
+export function connectionOwners(tcp: string, tcp6: string, serverPort: number, clientPort: number): number[] {
   const addresses = new Set(['0100007F', '0000000000000000FFFF00000100007F'])
   const owners: number[] = []
   for (const line of `${tcp}\n${tcp6}`.split('\n')) {
@@ -79,14 +78,46 @@ export function assertOwnedConnection(tcp: string, tcp6: string, serverPort: num
     if (!/^\d+$/.test(row[7] ?? '')) throw new Error('Cannot verify the connected T3 Code peer owner.')
     owners.push(Number(row[7]))
   }
+  return owners
+}
+
+export function assertOwnedConnection(tcp: string, tcp6: string, serverPort: number, clientPort: number, uid: number): void {
+  assertRegularMemberUid(uid)
+  const owners = connectionOwners(tcp, tcp6, serverPort, clientPort)
   if (!owners.length || owners.some((owner) => owner !== uid)) throw new Error('The connected T3 Code peer is not owned by this Linux member. No credentials were sent.')
+}
+
+/**
+ * Wait briefly for Linux to finish accept() on the server side of the loopback handshake.
+ * Between TCP connect() and the peer's accept(), /proc/net/tcp can momentarily omit the reverse
+ * tuple or list uid 0 for the unaccepted kernel socket. Credentials are still never sent until
+ * the reverse tuple exclusively matches the member's UID.
+ */
+export async function waitOwnedConnection(
+  readTables: () => Promise<[string, string]>,
+  serverPort: number,
+  clientPort: number,
+  uid: number,
+  delaysMs: readonly number[] = [0, 5, 10, 20, 40, 80],
+): Promise<void> {
+  assertRegularMemberUid(uid)
+  let lastTables: [string, string] = ['', '']
+  for (let i = 0; i < delaysMs.length; i++) {
+    const wait = delaysMs[i]!
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+    lastTables = await readTables()
+    const owners = connectionOwners(lastTables[0], lastTables[1], serverPort, clientPort)
+    if (owners.length && owners.every((owner) => owner === uid)) return
+    // A concrete non-zero UID belonging to another member will not change on accept(): fail closed at once.
+    if (owners.some((owner) => owner !== 0 && owner !== uid)) break
+  }
+  assertOwnedConnection(lastTables[0], lastTables[1], serverPort, clientPort, uid)
 }
 
 export async function assertMemberConnection(socket: Socket): Promise<void> {
   const uid = assertRegularMemberUid(process.getuid?.())
   if (socket.remoteAddress !== '127.0.0.1' || !socket.remotePort || !socket.localPort) throw new Error('T3 Code requires a verified member-owned loopback connection.')
-  const [tcp, tcp6] = await socketTables()
-  assertOwnedConnection(tcp, tcp6, socket.remotePort, socket.localPort, uid)
+  await waitOwnedConnection(socketTables, socket.remotePort, socket.localPort, uid)
 }
 
 type MemberRequest = { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }

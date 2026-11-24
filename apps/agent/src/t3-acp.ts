@@ -113,11 +113,19 @@ const sentText = new Map<string, string>()
 const sentTools = new Map<string, string>()
 async function transcribe(items: Item[], replay = false) {
   for (const i of items) {
-    const text = await fullText(i)
-    const previous = sentText.get(i.itemId) ?? ''
+    let text = await fullText(i)
     // createdBy identifies who submitted the item (MCP sends are agent-created), not its conversation role.
     const user = i.type === 'user_message' || (i.type === 'message' && i.createdBy === 'user')
     const assistant = i.type === 'assistant_message' || (i.type === 'message' && i.createdBy === 'agent')
+    if (replay && user) {
+      const marker = /^\[DevDash rules ([a-f0-9-]{36})\]\n/.exec(text)
+      if (marker && requestMatches(i, marker[1]!)) {
+        const end = `\n[/DevDash rules ${marker[1]}]\n\n`
+        const idx = text.indexOf(end)
+        if (idx !== -1) text = text.slice(idx + end.length)
+      }
+    }
+    const previous = sentText.get(i.itemId) ?? ''
     if (assistant || (replay && user)) {
       if (text !== previous && text.startsWith(previous)) {
         update({ sessionUpdate: user ? 'user_message_chunk' : 'agent_message_chunk', messageId: i.itemId, content: { type: 'text', text: text.slice(previous.length) } })
@@ -240,8 +248,12 @@ const handlers: Record<string, (p: Record<string, unknown>) => unknown> = {
       if (busyThread(before)) throw new Error('This conversation is already running in T3 Code. Wait for it to finish or stop it there before sending another message.')
       if (stopped || closing) return { stopReason: 'cancelled' }
       const afterPosition = lastPosition
-      const message = prompt.map((b) => b.text ?? '').join('\n')
       const requestId = randomUUID()
+      const text = prompt.map((b) => b.text ?? '').join('\n')
+      const rules = typeof p.rulesContext === 'string' && p.rulesContext.trim() && before.items.length === 0
+        ? `[DevDash rules ${requestId}]\n${p.rulesContext.trim()}\n[/DevDash rules ${requestId}]`
+        : null
+      const message = rules ? `${rules}\n\n${text}` : text
       const baselineRuns = new Set(before.recentRuns.map((r) => r.runId))
       unresolvedSend = true
       let result: { runId: string; delivery?: string }

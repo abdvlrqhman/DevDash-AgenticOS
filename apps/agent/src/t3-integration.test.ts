@@ -502,13 +502,21 @@ test('T3 a lost send response cancels only the correlated accepted run without r
 })
 
 
-test('T3 sends only the member message, without copying DevDash rules or personal instructions', async () => {
+test('T3 receives DevDash non-personal rules on turn 1 without copying personal instructions, and strips them on replay', async () => {
   const l = launch()
   l.instructions = 'PRIVATE_SESSION_RULES_MUST_NOT_LEAVE_DEVDASH'
   await turn(l, 'quick')
-  const sent = calls.filter((c) => c.name === 't3_thread_send').at(-1)!
-  assert.equal(sent.args.message, 'quick')
-  assert.ok(!String(sent.args.message).includes('PRIVATE_SESSION_RULES'))
+  const sent1 = String(calls.filter((c) => c.name === 't3_thread_send').at(-1)!.args.message)
+  assert.match(sent1, /^\[DevDash rules [a-f0-9-]{36}\]\n/)
+  assert.ok(sent1.includes('devdash service add'), 'first turn includes non-personal DevDash rules')
+  assert.ok(sent1.endsWith('\n\nquick'))
+  assert.ok(!sent1.includes('PRIVATE_SESSION_RULES'), 'personal instructions never leave DevDash')
+  assert.ok(!sent1.includes('This session belongs to'), 'personal sharedNote never leaves DevDash')
+
+  // Follow-up turn sends only the plain member message (rules already delivered once)
+  await turn(l, 'follow up')
+  const sent2 = String(calls.filter((c) => c.name === 't3_thread_send').at(-1)!.args.message)
+  assert.equal(sent2, 'follow up')
   await H.stop(l.id)
 })
 

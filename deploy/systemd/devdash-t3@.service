@@ -8,10 +8,9 @@ Slice=system-devdash-agent.slice
 User=%i
 WorkingDirectory=~
 Environment=LANG=C.UTF-8
-EnvironmentFile=/home/%i/.config/devdash/t3-service.env
 ExecStartPre=/usr/bin/test %i != root
 ExecStartPre=/usr/bin/node -e "const uid = process.getuid(); if (uid < 1000 || uid >= 65534) process.exit(1)"
-ExecStart=/opt/devdash/t3code/current/t3 serve --base-dir /home/%i/.local/share/devdash-t3 --host 127.0.0.1 --port ${DEVDASH_T3_PORT}
+ExecStart=/bin/sh -c 'set -eu; set -a; . "$HOME/.config/devdash/t3-service.env"; set +a; exec /opt/devdash/t3code/current/t3 serve --base-dir "$HOME/.local/share/devdash-t3" --host 127.0.0.1 --port "$DEVDASH_T3_PORT"'
 KillMode=control-group
 Restart=on-failure
 RestartSec=3

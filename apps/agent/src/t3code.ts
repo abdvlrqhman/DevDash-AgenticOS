@@ -1,8 +1,12 @@
-// T3 Code's own MCP integration.
+// T3 Code's own MCP integration. Credentials belong to the DevDash member; the configured T3 server runs the tools.
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util' Credentials belong to the DevDash member; the configured T3 server runs the tools.
-import { existsSync, statSync } from 'node:fs'
+import { promisify } from 'node:util'
 import { T3Client, configPath } from './t3-client.ts'
 
 type Model = { id: string; label?: string | null; options?: { id: string; values: (string | boolean)[] }[] | null }
@@ -80,6 +84,61 @@ export type T3SetupKind = 'connect' | 'pair' | 'status'
 /** Command launched inside a DevDash terminal tab (t3-connect / t3-pair / t3-status) as this member. */
 export function setupCommand(kind: T3SetupKind) {
   return { env: {} as Record<string, string>, args: [process.execPath, SETUP_SCRIPT, kind, '--interactive'] }
+}
+
+function portFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = createServer()
+    srv.unref()
+    srv.once('error', () => resolve(false))
+    srv.listen(port, '127.0.0.1', () => {
+      srv.close(() => resolve(true))
+    })
+  })
+}
+
+async function pickMemberPort(): Promise<number> {
+  const uid = process.getuid?.() ?? 1000
+  const span = 3899 - 3781 + 1
+  const offset = Math.abs(uid) % span
+  for (let i = 0; i < span; i++) {
+    const port = 3781 + ((offset + i) % span)
+    if (await portFree(port)) return port
+  }
+  throw new Error('No free local port available for devdash-t3 (3781-3899).')
+}
+
+/**
+ * Prepares this member's private T3 Code directories and ~/.config/devdash/t3-service.env
+ * strictly as the unprivileged member (so the root helper never touches paths in /home/<user>).
+ */
+export async function prepareService(): Promise<{ port: number; baseDir: string; url: string }> {
+  const home = homedir()
+  const baseDir = join(home, '.local', 'share', 'devdash-t3')
+  const cfgDir = join(home, '.config', 'devdash')
+  const envFile = join(cfgDir, 't3-service.env')
+  mkdirSync(baseDir, { recursive: true, mode: 0o700 })
+  mkdirSync(cfgDir, { recursive: true, mode: 0o700 })
+
+  let port: number | null = null
+  if (existsSync(envFile)) {
+    const st = lstatSync(envFile)
+    if (!st.isFile() || st.isSymbolicLink()) {
+      throw new Error('~/.config/devdash/t3-service.env must be a regular file.')
+    }
+    const m = readFileSync(envFile, 'utf8').match(/^\s*DEVDASH_T3_PORT\s*=\s*(\d{4,5})\s*$/m)
+    if (m) {
+      const n = Number(m[1])
+      if (Number.isInteger(n) && n >= 1024 && n <= 65535) port = n
+    }
+  }
+  if (!port) {
+    port = await pickMemberPort()
+    const tmp = `${envFile}.tmp-${randomBytes(6).toString('hex')}`
+    writeFileSync(tmp, `DEVDASH_T3_PORT=${port}\n`, { mode: 0o600 })
+    renameSync(tmp, envFile)
+  }
+  return { port, baseDir, url: `http://127.0.0.1:${port}/mcp` }
 }
 
 /** Connects or renews this member's own T3 Code credential via deploy/t3-setup.mjs and refreshes capabilities. */

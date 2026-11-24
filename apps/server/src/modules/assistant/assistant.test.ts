@@ -154,6 +154,7 @@ test('after the update, the chat each member had becomes the one of its agent, w
   assert.deepEqual([st.agent!.harness, st.agent!.profile, st.agent!.model, st.agent!.effort, st.agent!.permissionMode, st.agent!.tz], ['opencode', 'work', 'x/y', 'high', 'acceptEdits', 'Africa/Cairo'])
   assert.deepEqual(st.chats, [{ harness: 'opencode', profile: 'work', sessionId: 'old', unread: true }])
   assert.equal(st.sessionId, 'old')
+})
 
 test('T3 Code cannot run Hamasa and rejecting it preserves the current agent and conversation', async () => {
   const { assistant, ann } = setup()

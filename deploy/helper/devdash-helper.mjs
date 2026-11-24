@@ -472,7 +472,7 @@ async function main() {
     const req = JSON.parse(input.split('\n')[0])
     const fn = Object.hasOwn(commands, req?.cmd) ? commands[req.cmd] : null
     if (!fn) throw new Refused('unknown command')
-    res = { ok: true, ...fn(req.args ?? {}) }
+    res = { ok: true, ...(await fn(req.args ?? {})) }
   } catch (err) {
     res = { ok: false, error: err instanceof Refused || err instanceof SyntaxError ? `refused: ${err.message}` : err.message }
   }

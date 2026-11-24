@@ -552,6 +552,7 @@ test('voice mode in a session: wherever they may send, never where they only wat
   assert.deepEqual(claude.voiceAccess(ann, 's3'), { assistant: true })
   assert.throws(() => claude.voiceAccess(bob, 's3'), /only watch|not_found|does not exist/)
   void cat
+})
 
 test('T3 Code preserves its native thread id, models, effort and defaults, and names notifications', async () => {
   const { claude, db, sent, notified, emit, ann } = setup()

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { chmod, copyFile, mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { assertMemberEndpoint, assertOwnedConnection, assertOwnedListener, assertRegularMemberUid, listenerUids, memberFetch, validateMemberUrl } from './t3-local.ts'
+import { assertMemberEndpoint, assertOwnedConnection, assertOwnedListener, assertRegularMemberUid, listenerUids, memberFetch, validateMemberUrl, waitOwnedConnection } from './t3-local.ts'
 
 const row = (address: string, port: number, uid: number, state = '0A') => ` 0: ${address}:${port.toString(16).padStart(4, '0').toUpperCase()} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000 ${uid} 0 123 1`
 
@@ -108,4 +108,23 @@ test('T3 root and different-user listeners receive zero HTTP headers', async (t)
     await new Promise<void>((resolve) => root.close(() => resolve()))
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('T3 waitOwnedConnection retries transient accept race (empty / uid 0) and fails closed on wrong member UID', async () => {
+  const established = (uid: number) => `0: 0100007F:${(3781).toString(16).padStart(4, '0')} 0100007F:${(45000).toString(16).padStart(4, '0')} 01 0:0 00:0 0 ${uid} 0 123`
+  let calls = 0
+  await waitOwnedConnection(async () => {
+    calls++
+    if (calls === 1) return ['', '']
+    if (calls === 2) return [established(0), '']
+    return [established(1001), '']
+  }, 3781, 45000, 1001, [0, 1, 1, 1])
+  assert.equal(calls, 3)
+
+  let wrongUidCalls = 0
+  await assert.rejects(
+    waitOwnedConnection(async () => { wrongUidCalls++; return [established(1002), ''] }, 3781, 45000, 1001, [0, 1, 1]),
+    /No credentials were sent/,
+  )
+  assert.equal(wrongUidCalls, 1, 'wrong member UID fails immediately without retrying')
 })

@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { notFound, PROTOCOL_VERSION, Rpc, Transcriber, type ToolCall, type Usage } from './acp.ts'
 import {
-  cliSession, ensureStorage, IDLE_CLOSE_MS, pageOf, PLUGIN_DIR, PROFILE_RE, setupTailnet, systemAppend, teardownTailnet, validate,
+  cliSession, ensureStorage, IDLE_CLOSE_MS, nonPersonalRules, pageOf, PLUGIN_DIR, PROFILE_RE, setupTailnet, systemAppend, teardownTailnet, validate,
   type Guest, type HistoryMessage, type Launch, type Pending, type Status,
 } from './claude.ts'
 import { guestMay } from './guest.ts'
@@ -571,7 +571,13 @@ async function runTurns(c: Chat) {
       const started = Date.now()
       try {
         const prompt = next.guest ? notACommand(toPrompt(next.content)) : toPrompt(next.content)
-        const r = await c.rpc.request<{ stopReason: string; usage?: Usage }>('session/prompt', { sessionId: c.sessionId, prompt })
+        const rulesContext = c.launch.harness === 't3code' && c.fresh ? nonPersonalRules() : undefined
+        const r = await c.rpc.request<{ stopReason: string; usage?: Usage }>('session/prompt', {
+          sessionId: c.sessionId,
+          prompt,
+          ...(rulesContext ? { rulesContext } : {}),
+        })
+        c.fresh = false
         for (const t of c.children.values()) t.flush()
         c.t.end({ stopReason: r.stopReason, durationMs: Date.now() - started, costUsd: c.cost, usage: r.usage, fresh: c.fresh })
       } catch (err) {
@@ -812,6 +818,9 @@ export function refreshT3() {
 }
 export function t3SetupCommand(kind: t3code.T3SetupKind) {
   return t3code.setupCommand(kind)
+}
+export async function prepareT3() {
+  return t3code.prepareService()
 }
 export async function connectT3(opts?: { url?: string; baseDir?: string; t3Bin?: string }) {
   const res = await t3code.connectMember(opts)

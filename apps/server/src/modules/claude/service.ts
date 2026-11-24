@@ -287,7 +287,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   /** The owner's connected cloud storage, for the agent to set up as an rclone remote (null: none connected). */
   storageFor?: (userId: number) => LaunchStorage | null
   /** Ensures the member's own devdash-t3@<user> service is running before their agent pairs with it. */
-  ensureT3?: (username: string) => Promise<{ port: number; baseDir: string; url: string } | null>
+  ensureT3?: (username: string, port?: number) => Promise<{ enabled: boolean; port?: number; url?: string } | null>
 }) {
   const repo = claudeRepo(db)
   const commands = (username: string, profile: string, harness: Harness, model?: string) =>
@@ -1417,10 +1417,15 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     finishSignIn: (user: User, url: string) => agents.request<{ ok: boolean }>(user.username, { op: 'agent.signin.finish', url }, 20_000),
     /** Provisions the member's local T3 service (if needed) and connects/renews their member-owned T3 credential. */
     connectT3: async (user: User) => {
-      const ensured = ensureT3 ? await ensureT3(user.username) : null
+      // Member's own unprivileged agent creates ~/.local/share/devdash-t3 and ~/.config/devdash/t3-service.env first;
+      // root helper only installs and enables the systemd unit.
+      const prepared = ensureT3
+        ? await agents.request<{ port: number; baseDir: string; url: string }>(user.username, { op: 't3.prepare' }, 15_000)
+        : null
+      if (ensureT3 && prepared) await ensureT3(user.username, prepared.port)
       return agents.request<{ agent: AgentInfo; expiresAt: string; renewed: boolean; revokedOld: boolean }>(
         user.username,
-        { op: 't3.connect', ...(ensured ? { url: ensured.url, baseDir: ensured.baseDir } : {}) },
+        { op: 't3.connect', ...(prepared ? { url: prepared.url, baseDir: prepared.baseDir } : {}) },
         40_000,
       )
     },
