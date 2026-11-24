@@ -16,7 +16,7 @@ import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { commandsQuery, FALLBACK_MODELS, profilesQuery } from '../claude/data'
-import { HARNESS, harnessOf, type Harness } from '../claude/harness'
+import { agentCapabilities, HARNESS, harnessOf, type Harness } from '../claude/harness'
 import { isDefaultModel, modelLabel, type ModelInfo } from '../claude/models'
 
 type State = Awaited<ReturnType<typeof fetchState>>
@@ -234,7 +234,7 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
   const claudeProfiles = (profiles.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? []
   const installed = agents.filter((a) => a.installed).map((a) => a.harness)
   const availableAgents: Harness[] = (['claude' as const, ...installed.filter((h) => h !== 'claude')]).filter(
-    (h, i, arr) => arr.indexOf(h) === i,
+    (h, i, arr) => agentCapabilities(h).completions && arr.indexOf(h) === i,
   ) as Harness[]
 
   const agentProfiles = v.harness === 'claude'
@@ -269,7 +269,7 @@ function SupervisorForm({ supervisor, onSaved }: { supervisor: Supervisor; onSav
           </NativeSelect>
         </Row>
         {v.harness !== 'claude' && (
-          <Row id="sv-cap" label="Daily model-call cap" description="OpenCode plan usage can't be read, so the supervisor stops after this many model calls per day.">
+          <Row id="sv-cap" label="Daily model-call cap" description="This provider's plan usage can't be read, so the supervisor stops after this many model calls per day.">
             <Input id="sv-cap" type="number" inputMode="numeric" min={1} max={10000} className="w-24" value={v.dailyCap}
               onChange={(e) => setV({ ...v, dailyCap: Number(e.target.value) })} />
           </Row>

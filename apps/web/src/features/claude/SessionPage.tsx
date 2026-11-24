@@ -25,21 +25,21 @@ import { FileViewerProvider } from '../files/FileViewer'
 import { KeyBar } from '../terminal/KeyBar'
 import { TerminalView, type Mods, type Status as TermStatus, type TerminalHandle } from '../terminal/TerminalView'
 import { ModelChoices } from './ModelChoices'
-import { effortLevels, modelLabel, type ModelInfo } from './models'
+import { effortLabel, effortLevels, modelLabel, type ModelInfo } from './models'
 import { Blocks, Prose } from './Blocks'
 import { Composer, type Doc, type Img, type Upload } from './Composer'
 import { Comments, CommentsButton, commentsQuery, WatchOnly, Watchers, type Comment, type Person } from './Collab'
 import { FAST_HINT, REMOTE_HINT, SessionChips } from './SessionChips'
 import {
-  EFFORTS, FALLBACK_MODELS, PERMISSION_MODES, commandsQuery, modeLabel, profilesQuery, sessionQuery, shortPath, STATUS_LABEL,
-  type Effort, type PendingRequest, type PermissionMode, type Session, sessionPlace } from './data'
+  EFFORTS, FALLBACK_MODELS, PERMISSION_MODES, modeLabel, profilesQuery, sessionQuery, shortPath, STATUS_LABEL, useOfferedModels,
+  type PendingRequest, type PermissionMode, type Session, sessionPlace } from './data'
 import { reconcilePending, type PendingChange } from './pending'
 import { createLiveText, type LiveTextStore } from './live-text'
 import { useArchiveSession } from './ArchiveSession'
 import { ShareDialog, sharingLabel } from './ShareDialog'
 import { Requests, requestSummary } from './Requests'
 import { PlanUsage } from './Usage'
-import { agentName, HARNESS, harnessOf } from './harness'
+import { agentCapabilities, agentName, HARNESS, harnessOf } from './harness'
 import { servicesQuery, stateOf } from '../services/data'
 import { tailnetStatusQuery } from '../network/NetworkPage'
 import { buildTranscript, lastTurnSpoken, mergePage, mergeRaw, sessionFacts, touchedFiles, type Raw } from './transcript'
@@ -325,12 +325,12 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
           <div className="hidden xl:flex"><Watchers viewers={viewers} me={me.id} /></div>
           {showComments && <CommentsButton count={commentCount} onClick={() => setCommentsOpen(true)} />}
           <ModelMenu s={s} disabled={!canSend} isOwner={isOwner} onUpdate={(v) => update.mutate(v)} />
-          <Tabs value={s.mode} onValueChange={(v) => v !== s.mode && switchMode.mutate(v as 'chat' | 'cli')}>
+          {HARNESS[harnessOf(s)].cli && <Tabs value={s.mode} onValueChange={(v) => v !== s.mode && switchMode.mutate(v as 'chat' | 'cli')}>
             <TabsList className="pointer-coarse:h-10!">
               <TabsTrigger value="chat" disabled={!canSend || switchMode.isPending}><MessageSquare /><span className="hidden xl:inline">Chat</span></TabsTrigger>
               <TabsTrigger value="cli" disabled={!fullAccess || switchMode.isPending}><SquareTerminal /><span className="hidden xl:inline">CLI</span></TabsTrigger>
             </TabsList>
-          </Tabs>
+          </Tabs>}
           <SessionMenu s={s} isOwner={isOwner} canSend={canSend} access={info.data!.access} onUpdate={(v) => update.mutate(v)} onShare={() => setShare(true)} onRename={() => setSettings(true)} onUsage={() => setUsage(true)} onTailnet={() => setTailnet(true)} />
         </>} />}
 
@@ -364,7 +364,7 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
                 tools={embedded ? embedded.voiceTool : <VoiceButton v={voiceSettings} snap={voiceSnap} onStart={() => void voice.start()} onSetup={toVoiceSettings} />}
                 disabledReason={canSend ? undefined : <div className="flex items-center gap-1">
                   {!embedded && <VoiceButton v={voiceSettings} snap={voiceSnap} onStart={() => {}} onSetup={toVoiceSettings} cannot="You can only watch this session, so you can't talk to it." />}
-                  <div className="min-w-0 flex-1"><WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} /></div>
+                  <div className="min-w-0 flex-1"><WatchOnly id={id} owner={s.owner.name} onComment={() => setCommentsOpen(true)} fullAccessOnly={!agentCapabilities(s.harness).guests} /></div>
                 </div>}
                 footer={<><SessionChips s={s} isOwner={isOwner} canSend={canSend} working={working} onUpdate={(v) => update.mutate(v)}
                   onCompact={() => void send('/compact', []).catch((err: Error) => toast.error(err.message))} /></>} />)}
@@ -533,18 +533,21 @@ const ADVISOR_LABEL = { sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' } as cons
 const ADVISOR_HINT = "A stronger model Claude consults on hard steps (Claude Code's advisor, experimental). It must be at least as capable as this session's model, and some advisors bill to usage credits. On or off applies right away; another advisor after /clear or /compact."
 
 export type Updater = (v: {
-  model?: string | null; effort?: Effort | null; permissionMode?: PermissionMode; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
+  model?: string | null; effort?: string | null; permissionMode?: PermissionMode; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
   fastMode?: boolean; remoteControl?: boolean; reachTailnet?: boolean; tailnetMcps?: { name: string; url: string }[] | null
   advisorModel?: 'sonnet' | 'opus' | 'fable' | null
 }) => void
 
 /** Model, effort and permissions, changed in place from the chip row. `compact`: always just the icon (a small window). */
 export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Session; disabled: boolean; isOwner: boolean; onUpdate: Updater; compact?: boolean }) {
-  const agent = HARNESS[harnessOf(s)]
-  const models = useQuery({ ...commandsQuery(s.profile, harnessOf(s)), enabled: !disabled }).data?.models as ModelInfo[] | undefined
-  const list: ModelInfo[] = models?.length ? models : harnessOf(s) === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
-  // Claude Code's levels for its model; another agent's are its model's own, reported while the session runs.
-  const levels = harnessOf(s) === 'claude' ? effortLevels(list, s.model, EFFORTS) : s.efforts ?? []
+  const harness = harnessOf(s)
+  const agent = HARNESS[harness]
+  const models = useOfferedModels(s.profile, harness, isOwner ? s.model : null, !disabled)
+  const list: ModelInfo[] = models?.length ? models : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default' }]
+  // An open thread knows its actual model, even when T3 chose it. Before launch, use the owner's catalog.
+  const levels = harness === 'claude' ? effortLevels(list, s.model, EFFORTS)
+    : s.efforts ?? (harness === 't3code' && isOwner ? effortLevels(list, s.model) : [])
+  const t3Busy = harness === 't3code' && (s.status === 'working' || s.status === 'waiting')
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={disabled}>
@@ -564,10 +567,10 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] w-72 overflow-y-auto">
         <DropdownMenuLabel>Model</DropdownMenuLabel>
-        <ModelChoices models={list} harness={harnessOf(s)} value={s.model} onChange={(v) => onUpdate({ model: v })} />
+        <ModelChoices models={list} harness={harnessOf(s)} value={s.model} onChange={(v) => onUpdate({ model: v })} hideDefault={!agent.defaultModelSwitch && s.started} />
         <DropdownMenuSeparator />
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Permissions: {modeLabel(s.permissionMode)}</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger disabled={!agent.mutablePermissions && s.started}>Permissions: {modeLabel(s.permissionMode)}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-72">
             <DropdownMenuRadioGroup value={s.permissionMode} onValueChange={(v) => onUpdate({ permissionMode: v as PermissionMode })}>
               {PERMISSION_MODES.filter((p) => agent.modes.includes(p.value)).map((p) => (
@@ -578,15 +581,15 @@ export function ModelMenu({ s, disabled, isOwner, onUpdate, compact }: { s: Sess
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        {agent.effort && (harnessOf(s) === 'claude' || levels.length > 0) && <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Effort: {s.effort ?? 'auto'}</DropdownMenuSubTrigger>
+        {agent.effort && (harness === 'claude' || levels.length > 0 || (harness === 't3code' && !!s.effort)) && <DropdownMenuSub>
+          <DropdownMenuSubTrigger disabled={t3Busy}>{harness === 't3code' ? `Thinking level: ${s.effort ? effortLabel(s.effort) : 'Default'}` : `Effort: ${s.effort ?? 'auto'}`}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
-            <DropdownMenuRadioGroup value={s.effort ?? ''} onValueChange={(v) => onUpdate({ effort: (v || null) as Effort | null })}>
-              <DropdownMenuRadioItem value="">Auto</DropdownMenuRadioItem>
-              {levels.map((e) => <DropdownMenuRadioItem key={e} value={e} className="capitalize">{e}</DropdownMenuRadioItem>)}
+            <DropdownMenuRadioGroup value={s.effort ?? ''} onValueChange={(v) => onUpdate({ effort: v || null })}>
+              <DropdownMenuRadioItem value="">{harness === 't3code' ? 'Default' : 'Auto'}</DropdownMenuRadioItem>
+              {levels.map((e) => <DropdownMenuRadioItem key={e} value={e} className="capitalize">{harness === 't3code' ? effortLabel(e) : e}</DropdownMenuRadioItem>)}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">{s.mode === 'cli' ? 'In the CLI it applies when the CLI next opens; use /effort to change it right away.' : 'Applies right away, even mid-answer.'}</p>
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">{harness === 't3code' ? 'Applies to the next message.' : s.mode === 'cli' ? 'In the CLI it applies when the CLI next opens; use /effort to change it right away.' : 'Applies right away, even mid-answer.'}</p>
           </DropdownMenuSubContent>
         </DropdownMenuSub>}
         {agent.advisor && <DropdownMenuSub>
@@ -639,7 +642,7 @@ function SessionMenu({ s, isOwner, canSend, access, onUpdate, onShare, onRename,
           <>
             <DropdownMenuItem onSelect={onRename}><Pencil />Rename</DropdownMenuItem>
             <DropdownMenuItem onSelect={onUsage}><Gauge />Usage</DropdownMenuItem>
-            <DropdownMenuItem onSelect={onTailnet}><Network />Reach my tailnet{s.reachTailnet ? ' · on' : ''}</DropdownMenuItem>
+            {agentCapabilities(s.harness).devdashConnections && <DropdownMenuItem onSelect={onTailnet}><Network />Reach my tailnet{s.reachTailnet ? ' · on' : ''}</DropdownMenuItem>}
             <DropdownMenuItem onSelect={() => openVoiceSettings(navigate, { path: `/sessions/${s.id}`, label: 'the session' })}><AudioLines />Voice mode settings</DropdownMenuItem>
             <DropdownMenuItem onSelect={onShare}>
               <Share2 />Share…<span className="ml-auto truncate text-xs text-muted-foreground">{sharingLabel(s) || 'only you'}</span>

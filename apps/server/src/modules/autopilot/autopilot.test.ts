@@ -598,6 +598,13 @@ test('supervisor settings: saved, returned in state, and logged', () => {
   assert.throws(() => t.autopilot.setSettings(t.yo, { svProfile: '!!!bad' }), /Unknown profile/)
 })
 
+test('T3 Code cannot be selected as supervisor and rejection leaves settings unchanged', () => {
+  const t = setup()
+  const before = t.autopilot.state(t.yo).supervisor
+  assert.throws(() => t.autopilot.setSettings(t.yo, { svHarness: 't3code', svModel: 'codex/gpt-6.1-sol', svDailyCap: 2 }), /tool-free background completions are unavailable/)
+  assert.deepEqual(t.autopilot.state(t.yo).supervisor, before)
+})
+
 test('red checks run before any model call, regardless of supervisor settings', async () => {
   const t = setup()
   t.autopilot.setEnabled(t.yo, true)
@@ -657,4 +664,20 @@ test('supervisor fallback: resets to defaults when the configured model or profi
   assert.equal(s.supervisor.profile, 'default')
   assert.equal(s.supervisor.model, 'sonnet')
   assert.ok(t.autopilot.entries(t.yo, { limit: 100 }).entries.some((e) => /reset to the default/.test(e.what)))
+})
+
+
+test('agents without autopilot capability get no rules, tools or automatic continuation', async () => {
+  const t = setup()
+  t.session('external')
+  t.db.prepare("update claude_sessions set harness = 't3code', drive = 0 where id = 'external'").run()
+  t.autopilot.setEnabled(t.yo, true)
+  assert.equal(t.autopilot.toolsHere('yo', 'external'), false)
+  await t.claude.send(t.yo, 'external', 'work on this', [])
+  assert.deepEqual(t.sends().at(-1)!.content, [{ type: 'text', text: 'work on this' }], 'do not copy personal autopilot rules to an unsupported agent')
+  t.quiet('external')
+  t.sent.length = 0
+  assert.deepEqual(await t.autopilot.sweep(), [])
+  assert.equal(t.sent.length, 0, 'the supervisor does not read, prompt or approve the external conversation')
+  await assert.rejects(t.rpc('autopilot_log', 'yo', 'external', { tier: 'green', what: 'do this' }), /doesn.t apply/)
 })

@@ -1,5 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { AppError } from '../../core/http.ts'
+import { authMiddleware } from '../auth/routes.ts'
+import type { AuthService } from '../auth/service.ts'
+import { claudeRoutes } from './routes.ts'
 import { openDb } from '../../core/db.ts'
 import { createHub } from '../../core/hub.ts'
 import type { AgentsService } from '../agents/service.ts'
@@ -8,7 +12,7 @@ import type { ProjectsService } from '../projects/service.ts'
 import { claudeService, checkTailnetMcp, isTailnetHost, requestNotification, sumTurns } from './service.ts'
 import type { TurnRow } from './repo.ts'
 
-function setup({ tailnetConnected }: { tailnetConnected?: (userId: number) => boolean } = {}) {
+function setup({ tailnetConnected, requestError }: { tailnetConnected?: (userId: number) => boolean; requestError?: (req: Record<string, unknown>) => Error | undefined } = {}) {
   const db = openDb(':memory:')
   const add = db.prepare("insert into users (id, email, username, name, password_hash, totp_secret, role) values (?, ?, ?, ?, 'x', 'x', 'member')")
   add.run(1, 'a@x.io', 'ann', 'Ann')
@@ -22,6 +26,8 @@ function setup({ tailnetConnected }: { tailnetConnected?: (userId: number) => bo
     onEvent: (fn: (username: string, ev: Record<string, unknown>) => void) => { onEvent = fn },
     request: async (_u: string, req: Record<string, unknown>) => {
       sent.push(req)
+      const error = requestError?.(req)
+      if (error) throw error
       return { ok: true }
     },
   } as unknown as AgentsService
@@ -518,7 +524,7 @@ test('an OpenCode session: its agent goes with every start, its own session id i
   emit({ ev: 'claude.status', id: 'o1', status: 'error', detail: 'boom' })
   assert.match(notified.at(-1)!.title, /^OpenCode stopped with an error/)
   // New sessions start with the agent the member chose as their default.
-  assert.equal(claude.saveDefaults(ann, { harness: 'opencode', profile: 'default', model: null, effort: null, permission_mode: 'acceptEdits', open_in: 'chat' }).harness, 'opencode')
+  assert.equal((await claude.saveDefaults(ann, { harness: 'opencode', profile: 'default', model: null, effort: null, permission_mode: 'acceptEdits', open_in: 'chat' })).harness, 'opencode')
 })
 
 test('the advisor is off unless the owner picks one; a pick applies live and on the next start, and only in Claude Code', async () => {
@@ -546,4 +552,309 @@ test('voice mode in a session: wherever they may send, never where they only wat
   assert.deepEqual(claude.voiceAccess(ann, 's3'), { assistant: true })
   assert.throws(() => claude.voiceAccess(bob, 's3'), /only watch|not_found|does not exist/)
   void cat
+})
+
+test('T3 Code preserves its native thread id, models, effort and defaults, and names notifications', async () => {
+  const { claude, db, sent, notified, emit, ann } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', started = 0, drive = 0 where id = 's1'").run()
+  assert.equal((await claude.get(ann, 's1')).session.harness, 't3code')
+  await claude.send(ann, 's1', 'hello', [])
+  const launch = sent.find((r) => r.op === 'claude.send')!.launch as { harness: string; nativeId: string | null }
+  assert.deepEqual([launch.harness, launch.nativeId], ['t3code', null])
+  emit({ ev: 'claude.native', id: 's1', nativeId: 't3-thread' })
+  sent.length = 0
+  await claude.send(ann, 's1', 'again', [])
+  assert.equal((sent.find((r) => r.op === 'claude.send')!.launch as { nativeId: string }).nativeId, 't3-thread')
+  assert.equal(await claude.command(ann, 's1', '/model codex/gpt-6.1-sol'), 'Model switched to codex/gpt-6.1-sol.')
+  emit({ ev: 'claude.efforts', id: 's1', efforts: ['medium', 'ultra'] })
+  assert.equal(await claude.command(ann, 's1', '/effort Ultra'), 'Effort set to ultra.')
+  const selected = db.prepare("select model, effort from claude_sessions where id = 's1'").get() as { model: string; effort: string }
+  assert.deepEqual([selected.model, selected.effort], ['codex/gpt-6.1-sol', 'ultra'])
+  emit({ ev: 'claude.status', id: 's1', status: 'error', detail: 'connection lost' })
+  assert.match(notified.at(-1)!.title, /^T3 Code stopped with an error/)
+  assert.equal((await claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: 'codex/gpt-6.1-sol', effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' })).harness, 't3code')
+})
+
+test('T3 Code creates Chat sessions with Drive disabled and rejects unsupported launch options before writing', async () => {
+  const { claude, db, ann } = inProject()
+  const input = { prompt: '', images: [], cwd: '', profile: 'default', model: null, effort: null, permissionMode: 'bypassPermissions', mode: 'chat' as const, project: 'app', harness: 't3code' as const }
+  const count = () => (db.prepare('select count(*) as n from claude_sessions').get() as { n: number }).n
+  await assert.rejects(claude.create(ann, { ...input, mode: 'cli' }), /open in Chat/)
+  await assert.rejects(claude.create(ann, { ...input, profile: 'work' }), /default connection/)
+  for (const permissionMode of ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto']) {
+    await assert.rejects(claude.create(ann, { ...input, permissionMode }), /explicit Full access/)
+  }
+  await assert.rejects(claude.create(ann, input, { toolPolicy: { tools: ['Read'] } }), /cannot enforce DevDash tool policies/)
+  assert.equal(count(), 0)
+  const created = await claude.create(ann, input)
+  assert.equal(created.harness, 't3code')
+  assert.equal((db.prepare('select drive from claude_sessions where id = ?').get(created.id) as { drive: number }).drive, 0)
+  await assert.rejects(claude.switchMode(ann, created.id, 'cli', 100, 30), /open in Chat/)
+  await assert.rejects(claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'cli' }), /open in Chat/)
+  await assert.rejects(claude.saveDefaults(ann, { harness: 't3code', profile: 'work', model: null, effort: null, permission_mode: 'bypassPermissions', open_in: 'chat' }), /default connection/)
+})
+
+test('T3 Code HTTP defaults and new sessions accept every advertised effort and reject unsupported pairs before saving', async () => {
+  const { db, ann } = inProject()
+  const levels = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ProviderSpecific']
+  const agents = {
+    onEvent: () => {},
+    request: async (_username: string, r: { op: string; model?: string }) => {
+      assert.equal(r.op, 'claude.commands')
+      return { commands: [], models: [
+        // This model is outside the short catalog. Its levels are available when requested by ID.
+        ...(r.model === 'codex/sol' ? [{ value: r.model, displayName: 'Sol', supportedEffortLevels: levels }] : []),
+        { value: 'another/fast', displayName: 'Fast', supportedEffortLevels: [] },
+      ] }
+    },
+  } as unknown as AgentsService
+  const projects = { bySlug: () => ({ id: 1, slug: 'app' }), path: () => '/srv/app' } as unknown as ProjectsService
+  const claude = claudeService({ db, agents, projects, hub: createHub(), notify: async () => {} })
+  const mw = authMiddleware({ sessionUser: () => ({ user: ann }) } as unknown as AuthService)
+  const app = claudeRoutes(claude, mw)
+  app.onError((e, c) => { if (e instanceof AppError) return c.json({ error: e.message }, e.status); throw e })
+  const request = (path: string, method: string, body: object) => app.request(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+  const listedModels = async (query: string) => {
+    const res = await app.request('/commands?' + query)
+    assert.equal(res.status, 200)
+    return ((await res.json()) as { models: { value: string }[] }).models.map((m) => m.value)
+  }
+  assert.deepEqual(await listedModels('harness=t3code'), ['another/fast'])
+  assert.deepEqual(await listedModels('harness=t3code&model=codex%2Fsol'), ['codex/sol', 'another/fast'])
+  assert.deepEqual(await listedModels('harness=opencode&model=codex%2Fsol'), ['another/fast'])
+  assert.equal((await app.request('/commands?harness=t3code&model=' + 'x'.repeat(161))).status, 400)
+
+  const sessionFrom = async (res: Response) => ((await res.json()) as { session: { id: string; effort: string | null } }).session
+  const defaults = { harness: 't3code', profile: 'default', model: 'codex/sol', permission_mode: 'bypassPermissions', open_in: 'chat' }
+  const newSession = { harness: 't3code', model: 'codex/sol', project: 'app' }
+  for (const effort of levels) {
+    const saved = await request('/defaults', 'PUT', { ...defaults, effort })
+    assert.equal(saved.status, 200)
+    assert.equal(((await saved.json()) as { defaults: { effort: string } }).defaults.effort, effort)
+    const created = await request('/sessions', 'POST', { ...newSession, effort })
+    assert.equal(created.status, 200)
+    assert.equal((await sessionFrom(created)).effort, effort)
+  }
+  const count = () => (db.prepare('select count(*) as n from claude_sessions').get() as { n: number }).n
+  const before = count()
+  for (const model of ['another/fast', null]) {
+    assert.equal((await request('/defaults', 'PUT', { ...defaults, model, effort: 'ultra' })).status, 400)
+    assert.equal((await request('/sessions', 'POST', { ...newSession, model, effort: 'ultra' })).status, 400)
+  }
+  assert.equal(count(), before)
+  assert.equal(claude.defaults(ann).effort, 'ProviderSpecific')
+  assert.equal((await request('/defaults', 'PUT', { ...defaults, harness: 'claude', effort: 'ultra' })).status, 400)
+
+  const idle = await sessionFrom(await request('/sessions', 'POST', { ...newSession, effort: 'ultra' }))
+  const path = `/sessions/${idle.id}`
+  assert.match((await claude.command(ann, idle.id, '/effort'))!, /low, medium, high, xhigh, max, ultra, ProviderSpecific/)
+  assert.equal((await request(path, 'PATCH', { model: 'another/fast', effort: 'ultra' })).status, 400)
+  const unchanged = db.prepare('select model, effort from claude_sessions where id = ?').get(idle.id)!
+  assert.deepEqual([unchanged.model, unchanged.effort], ['codex/sol', 'ultra'])
+  const changed = await request(path, 'PATCH', { model: 'another/fast' })
+  assert.equal((await sessionFrom(changed)).effort, null)
+})
+
+test('T3 Code rejects guest messages and uploads before using the owner account; full access can send', async () => {
+  const { claude, db, sent, ann, bob, cat } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0 where id = 's1'").run()
+  claude.setSharing(ann, 's1', { audience: 'people', people: [{ id: 2, canSend: false }, { id: 3, canSend: true, full: true }] })
+  // Even a guest writer left over from an older sharing setting cannot send through T3 Code.
+  db.prepare("insert into claude_session_writers (session_id, user_id) values ('s1', 2)").run()
+  assert.equal((await claude.get(bob, 's1')).canSend, false)
+  assert.equal((await claude.get(cat, 's1')).canSend, true)
+  sent.length = 0
+  await assert.rejects(claude.send(bob, 's1', 'hi', []), /requires full access/)
+  await assert.rejects(claude.uploadPiece(bob, 's1', { upload: 'ab'.repeat(16), name: 'hi.txt', offset: 0, total: 2 }, Buffer.from('hi')), /requires full access/)
+  assert.equal(sent.length, 0)
+  assert.equal((db.prepare('select count(*) as n from claude_message_senders').get() as { n: number }).n, 0)
+  await claude.send(cat, 's1', 'hi', [])
+  assert.equal(sent.find((r) => r.op === 'claude.send')!.guest, null)
+})
+
+test('T3 Code only supports explicit Full access and cannot silently persist approval modes', async () => {
+  const { claude, db, sent, ann } = setup({ tailnetConnected: () => true })
+  db.prepare("update claude_sessions set harness = 't3code', permission_mode = 'bypassPermissions', drive = 0 where id = 's1'").run()
+  const row = () => db.prepare("select title, permission_mode, reach_tailnet, fast_mode, remote_control, drive, tailnet_mcps from claude_sessions where id = 's1'").get()
+  const before = row()
+  for (const permissionMode of ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto']) {
+    await assert.rejects(claude.update(ann, 's1', { title: 'Changed', permissionMode }), /explicit Full access/)
+    await assert.rejects(claude.saveDefaults(ann, { harness: 't3code', profile: 'default', model: null, effort: null, permission_mode: permissionMode, open_in: 'chat' }), /explicit Full access/)
+  }
+  for (const patch of [
+    { reachTailnet: true }, { tailnetMcps: [{ name: 'ida', url: 'http://100.64.0.9/mcp' }] }, { drive: true },
+    { fastMode: true }, { remoteControl: true },
+  ]) await assert.rejects(claude.update(ann, 's1', { title: 'Changed', ...patch }), /T3 Code/)
+  assert.deepEqual(row(), before)
+  assert.equal(sent.length, 0)
+  await claude.update(ann, 's1', { permissionMode: 'bypassPermissions' })
+  assert.equal(sent.length, 0, 'an unchanged mode does not reach the immutable T3 runtime')
+  db.prepare("update claude_sessions set permission_mode = 'default' where id = 's1'").run()
+  await assert.rejects(claude.send(ann, 's1', 'continue', []), /explicit Full access/, 'legacy approval-mode sessions cannot run as full access')
+  assert.equal(sent.length, 0)
+})
+
+
+test('T3 Code refuses stored unsupported connections, tool policies and tool-free completion requests', async () => {
+  const { claude, db, sent, ann } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0, tool_policy = ? where id = 's1'").run(JSON.stringify({ tools: ['Read'] }))
+  await assert.rejects(claude.send(ann, 's1', 'hi', []), /cannot enforce DevDash tool policies/)
+  db.prepare("update claude_sessions set tool_policy = null, reach_tailnet = 1 where id = 's1'").run()
+  await assert.rejects(claude.send(ann, 's1', 'hi', []), /manages its own connections/)
+  assert.throws(() => claude.configure('s1', { title: 'Changed', toolPolicy: { tools: ['Read'] } }), /cannot enforce DevDash tool policies/)
+  await assert.rejects(claude.complete('ann', 'answer safely', { harness: 't3code' }), /Tool-free background completions are unavailable/)
+  assert.equal(sent.length, 0)
+  assert.equal((db.prepare("select title from claude_sessions where id = 's1'").get() as { title: string }).title, 'Fix login')
+})
+
+test('T3 Code sharing permits watching or named full access and rejects guest settings without changing access', async () => {
+  const { claude, db, ann, bob } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0 where id = 's1'").run()
+  claude.setSharing(ann, 's1', { audience: 'everyone' })
+  for (const input of [
+    { audience: 'everyone' as const, everyoneCanSend: true },
+    { audience: 'people' as const, people: [{ id: 2, canSend: true }] },
+    { audience: 'everyone' as const, caps: ['github' as const] },
+  ]) assert.throws(() => claude.setSharing(ann, 's1', input), /T3 Code/)
+  await assert.rejects(claude.update(ann, 's1', { sharedCanSend: true }), /T3 Code/)
+  assert.throws(() => claude.setWriter(ann, 's1', 2, true), /chosen people.*full access/)
+  assert.throws(() => claude.askToJoin(bob, 's1'), /by name.*full access/)
+  assert.equal((await claude.get(bob, 's1')).canSend, false)
+  assert.equal((await claude.get(ann, 's1')).session.audience, 'everyone')
+  claude.setSharing(ann, 's1', { audience: 'people', people: [{ id: 2, canSend: true, full: true }] })
+  assert.equal((await claude.get(bob, 's1')).canSend, true)
+  claude.setSharing(ann, 's1', { audience: 'everyone' })
+  assert.equal((await claude.get(bob, 's1')).canSend, false, 'whole-team sharing removes named full access')
+})
+
+test('T3 Code project sharing defaults become watch-only and explicit guest sharing is refused', async () => {
+  const { claude, ann } = inProject('shared_can_send')
+  const input = { prompt: '', images: [], cwd: '', profile: 'default', model: null, effort: null, permissionMode: 'bypassPermissions', mode: 'chat' as const, project: 'app', harness: 't3code' as const }
+  const session = await claude.create(ann, input)
+  assert.deepEqual([session.shared, session.sharedCanSend], [true, false])
+  await assert.rejects(claude.create(ann, { ...input, shared: true, sharedCanSend: true }), /T3 Code can be shared for watching/)
+})
+
+test('T3 Code rejects every attachment before storing a sender or writing uploaded files', async () => {
+  const { claude, db, sent, ann } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0 where id = 's1'").run()
+  const image = { mediaType: 'image/png' as const, data: 'aGk=' }
+  await assert.rejects(claude.send(ann, 's1', 'look', [image]), /Attachments are unavailable/)
+  await assert.rejects(claude.send(ann, 's1', 'read', [], [{ name: 'hello.txt', mediaType: 'text/plain', data: 'aGk=' }]), /Attachments are unavailable/)
+  await assert.rejects(claude.send(ann, 's1', 'read', [], [], [{ upload: 'ab'.repeat(16), name: 'hello.txt', size: 2 }]), /Attachments are unavailable/)
+  await assert.rejects(claude.uploadPiece(ann, 's1', { upload: 'ab'.repeat(16), name: 'hello.txt', offset: 0, total: 2 }, Buffer.from('hi')), /Attachments are unavailable/)
+  assert.equal(sent.length, 0)
+  assert.equal((db.prepare('select count(*) as n from claude_message_senders').get() as { n: number }).n, 0)
+  assert.equal((db.prepare('select count(*) as n from claude_turns').get() as { n: number }).n, 0)
+  const fresh = inProject()
+  await assert.rejects(fresh.claude.create(fresh.ann, { prompt: 'look', images: [image], cwd: '', profile: 'default', model: null, effort: null, permissionMode: 'bypassPermissions', mode: 'chat', project: 'app', harness: 't3code' }), /Attachments are unavailable/)
+  assert.equal((fresh.db.prepare('select count(*) as n from claude_sessions').get() as { n: number }).n, 0)
+})
+
+test('T3 Code validates one live model/effort pair before saving any requested changes', async () => {
+  let failing = true
+  let remote = { model: 'codex/original' as string | null, effort: 'high' as string | null }
+  const { claude, db, sent, ann } = setup({ requestError: (req) => {
+    if (req.op !== 'claude.selection') return undefined
+    if (failing) return new Error('T3 Code rejected selection')
+    remote = { model: req.model as string | null, effort: req.effort as string | null }
+    return undefined
+  } })
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0, model = 'codex/original', effort = 'high' where id = 's1'").run()
+  const row = () => db.prepare("select model, effort, title from claude_sessions where id = 's1'").get()
+  const before = row()
+  for (const patch of [
+    { model: 'codex/missing' }, { effort: 'missing' }, { model: 'codex/valid', effort: 'invalid-for-model' },
+  ]) {
+    sent.length = 0
+    await assert.rejects(claude.update(ann, 's1', { title: 'Changed', ...patch }), /rejected selection/)
+    assert.deepEqual(row(), before)
+    assert.deepEqual(remote, { model: 'codex/original', effort: 'high' })
+    assert.equal(sent.filter((req) => req.op === 'claude.selection').length, 1)
+    assert.ok(!sent.some((req) => req.op === 'claude.set' || req.op === 'claude.rename'), 'failed selections never partially apply another live setting')
+  }
+  failing = false
+  sent.length = 0
+  await claude.update(ann, 's1', { model: 'codex/gpt-6.1-sol', effort: 'ultra' })
+  const changed = row() as { model: string; effort: string }
+  assert.deepEqual([changed.model, changed.effort], ['codex/gpt-6.1-sol', 'ultra'])
+  assert.deepEqual(remote, { model: 'codex/gpt-6.1-sol', effort: 'ultra' })
+  assert.equal((sent[0]?.launch as { id: string }).id, 's1', 'the member agent can reattach a stopped chat')
+  const selections = () => sent.map(({ launch: _launch, ...selection }) => selection)
+  assert.deepEqual(selections(), [{ op: 'claude.selection', id: 's1', model: 'codex/gpt-6.1-sol', effort: 'ultra' }])
+  sent.length = 0
+  await claude.update(ann, 's1', { model: 'claude/sonnet' })
+  const nextModel = row() as { model: string; effort: string | null }
+  assert.deepEqual([nextModel.model, nextModel.effort], ['claude/sonnet', null], 'a different model cannot inherit effort levels from the old model on restart')
+  assert.deepEqual(selections(), [{ op: 'claude.selection', id: 's1', model: 'claude/sonnet', effort: null }])
+  sent.length = 0
+  await claude.update(ann, 's1', { effort: 'low' })
+  assert.deepEqual(selections(), [{ op: 'claude.selection', id: 's1', model: 'claude/sonnet', effort: 'low' }], 'effort-only changes include the saved model')
+})
+
+test('overlapping T3 model and effort changes resolve against the latest saved selection', async () => {
+  const { claude, db, sent, emit, ann } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0, model = 'codex/old', effort = 'high' where id = 's1'").run()
+  await Promise.all([
+    claude.update(ann, 's1', { model: 'other/new' }),
+    claude.update(ann, 's1', { effort: 'ultra' }),
+    claude.update(ann, 's1', { model: 'other/new' }),
+  ])
+  assert.deepEqual(sent.map((r) => [r.model, r.effort]), [['other/new', null], ['other/new', 'ultra'], ['other/new', 'ultra']])
+  const row = db.prepare("select model, effort from claude_sessions where id = 's1'").get()!
+  assert.deepEqual([row.model, row.effort], ['other/new', 'ultra'])
+
+  const levels = Array.from({ length: 25 }, (_, i) => `level-${i}`)
+  emit({ ev: 'claude.efforts', id: 's1', efforts: levels })
+  assert.deepEqual(claude.list(ann, false)[0]!.efforts, levels)
+})
+
+test('T3 Code existing conversations reject Default without silently changing the saved model', async () => {
+  const { claude, db, sent, ann } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', drive = 0, model = 'codex/original', effort = 'high' where id = 's1'").run()
+  await assert.rejects(claude.update(ann, 's1', { model: null }), /Choose a specific T3 Code model/)
+  assert.equal(sent.length, 0)
+  assert.equal((db.prepare("select model from claude_sessions where id = 's1'").get() as { model: string }).model, 'codex/original')
+  db.prepare("update claude_sessions set started = 0 where id = 's1'").run()
+  await claude.update(ann, 's1', { model: null })
+  assert.equal((db.prepare("select model from claude_sessions where id = 's1'").get() as { model: string | null }).model, null, 'unstarted sessions may choose the T3 default')
+  assert.equal(sent.length, 0)
+})
+
+test('an explicit profile refresh reaches the member agent and preserves ordinary profile reads', async () => {
+  const { claude, sent, ann } = setup()
+  await claude.profiles(ann)
+  assert.deepEqual(sent.pop(), { op: 'claude.profiles' })
+  await claude.profiles(ann, true)
+  assert.deepEqual(sent.pop(), { op: 'claude.profiles', refresh: true })
+})
+
+
+test('a restart never queues a duplicate Continue turn for externally running agents', async () => {
+  const { db, sent, emit } = setup()
+  db.prepare("update claude_sessions set harness = 't3code', status = 'working', drive = 0 where id = 's1'").run()
+  emit({ ev: 'snapshot', sessions: [] })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(sent.filter((r) => r.op === 'claude.send').length, 0)
+  assert.equal((db.prepare('select count(*) as n from claude_message_senders').get() as { n: number }).n, 0)
+  const row = db.prepare("select status, status_detail from claude_sessions where id = 's1'").get() as { status: string; status_detail: string }
+  assert.equal(row.status, 'error')
+  assert.match(row.status_detail, /may still be running.*Check its conversation/)
+  emit({ ev: 'snapshot', sessions: [] })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(sent.filter((r) => r.op === 'claude.send').length, 0, 'repeated snapshots cannot queue a synthetic turn')
+})
+
+test('Claude Code and OpenCode retain automatic restart recovery', async () => {
+  for (const harness of ['claude', 'opencode']) {
+    const { db, sent, emit } = setup()
+    db.prepare("update claude_sessions set harness = ?, status = 'working' where id = 's1'").run(harness)
+    emit({ ev: 'snapshot', sessions: [] })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const sends = sent.filter((r) => r.op === 'claude.send')
+    assert.equal(sends.length, 1, harness)
+    assert.match(JSON.stringify(sends[0]!.content), /Continue where you left off/)
+    assert.equal((db.prepare("select status from claude_sessions where id = 's1'").get() as { status: string }).status, 'working')
+  }
 })

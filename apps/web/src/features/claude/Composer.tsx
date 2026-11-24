@@ -70,6 +70,7 @@ export function Composer({ sessionId, profile, harness = 'claude', name, working
   onSend: (text: string, images: Img[], files: Doc[], uploads: Upload[]) => Promise<unknown>
   onStop: () => void
 }) {
+  const attachments = HARNESS[harness].attachments
   // The text draft is kept per session (see draft.ts): restore this session's on mount, and keep it written as it
   // changes so switching away and back doesn't lose it. Attachments stay in memory — they're blobs, not worth saving.
   const [text, setText] = useState(() => loadDraft(sessionId))
@@ -173,6 +174,7 @@ export function Composer({ sessionId, profile, harness = 'claude', name, working
   }
 
   const add = async (list: FileList | File[]) => {
+    if (!attachments) { setError(new Error('T3 Code accepts text messages through this connection. Attachments are unavailable.')); return }
     setError(null)
     try {
       const incoming = [...list].slice(0, Math.max(0, MAX_COUNT - images.length - files.length - bigs.length))
@@ -266,7 +268,7 @@ export function Composer({ sessionId, profile, harness = 'claude', name, working
   if (disabledReason) return <div className="py-2">{disabledReason}</div>
 
   return (
-    <div className="relative flex flex-col gap-2" onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
+    <div className="relative flex flex-col gap-2" onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); if (attachments) setDragging(true) } }}
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false) }} onDrop={onDrop}>
       {dragging && (
         <div className="pointer-events-none absolute -inset-1 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/90 text-sm font-medium">
@@ -328,8 +330,10 @@ export function Composer({ sessionId, profile, harness = 'claude', name, working
         placeholder={working ? `Add a message for ${name ?? HARNESS[harness].name}` : `Message ${name ?? HARNESS[harness].name}, @ to mention a file`}
         className="max-h-[40vh] min-h-9 resize-none rounded-none border-0 bg-transparent px-1.5 py-1 text-base leading-6 shadow-none [field-sizing:content] placeholder:truncate focus-visible:ring-0 md:text-sm md:leading-6 dark:bg-transparent" />
       <div className="flex items-center gap-1">
-        <Button size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-muted-foreground" aria-label="Attach files" title="Attach images, PDFs or any file" onClick={() => picker.current?.click()}><Paperclip /></Button>
-        <input ref={picker} type="file" multiple hidden onChange={(e) => { if (e.target.files) void add(e.target.files); e.target.value = '' }} />
+        {attachments && <>
+          <Button size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-muted-foreground" aria-label="Attach files" title="Attach images, PDFs or any file" onClick={() => picker.current?.click()}><Paperclip /></Button>
+          <input ref={picker} type="file" multiple hidden onChange={(e) => { if (e.target.files) void add(e.target.files); e.target.value = '' }} />
+        </>}
         {tools}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">{footer}</div>
         {/* Stop is always there while Claude works; Send joins it once something is typed (it waits for Claude). They look

@@ -12,7 +12,7 @@ import { api, unwrap } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { commandsQuery } from '../claude/data'
-import { HARNESS, HARNESSES, harnessOf, type Harness } from '../claude/harness'
+import { agentCapabilities, HARNESS, HARNESSES, harnessOf, type Harness } from '../claude/harness'
 import { DEFAULT_SCHEDULE, slotLabel, TEMPLATES } from './data'
 
 type Draft = { name: string; summary: string; instructions: string; harness: Harness; model: string | null }
@@ -32,8 +32,8 @@ export function RoleDialog({ open, onOpenChange, slug, role, onSaved }: {
     if (open) setD(role ? { name: role.name, summary: role.summary, instructions: role.instructions, harness: harnessOf(role), model: role.model ?? null } : EMPTY)
   }, [open, role])
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }))
-  // OpenCode's models are every provider the account connected; Claude's are the three families.
-  const openModels = (useQuery({ ...commandsQuery('default', 'opencode'), enabled: open && d.harness === 'opencode' }).data?.models as { value: string }[] | undefined ?? []).filter((m) => m.value)
+  // Other agents offer models from their connected providers; Claude's are the three families.
+  const otherModels = (useQuery({ ...commandsQuery('default', d.harness), enabled: open && d.harness !== 'claude' }).data?.models as { value: string; displayName?: string }[] | undefined ?? []).filter((m) => m.value)
   // A new role starts with its template's rhythm (or weekdays at 9); change it on the role's Schedule tab.
   const schedule = TEMPLATES.find((t) => t.name === d.name.trim())?.schedule ?? DEFAULT_SCHEDULE
 
@@ -96,13 +96,13 @@ export function RoleDialog({ open, onOpenChange, slug, role, onSaved }: {
                 <option value="opus">Opus: best judgment, uses the most</option>
                 <option value="sonnet">Sonnet: good balance</option>
                 <option value="haiku">Haiku: quick checks, uses the least</option>
-              </> : openModels.map((m) => <option key={m.value} value={m.value}>{m.value}</option>)}
+              </> : otherModels.map((m) => <option key={m.value} value={m.value}>{m.displayName || m.value}</option>)}
             </NativeSelect>
           </Field>
           <Field>
             <FieldLabel htmlFor="role-agent">Agent</FieldLabel>
             <NativeSelect id="role-agent" value={d.harness} onChange={(e) => set({ harness: e.target.value as Harness, model: null })}>
-              {HARNESSES.map((h) => <option key={h} value={h}>{HARNESS[h].label}</option>)}
+              {HARNESSES.filter((h) => agentCapabilities(h).toolPolicies).map((h) => <option key={h} value={h}>{HARNESS[h].label}</option>)}
             </NativeSelect>
             <FieldDescription>What its shifts and its chat run on, with the default profile of the account the team works as.</FieldDescription>
           </Field>

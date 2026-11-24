@@ -1,3 +1,5 @@
+import { HARNESSES, agentCapabilities, harnessId, supportsPermissionMode, type Harness } from '../../../../../packages/agents/capabilities.ts'
+export { HARNESSES, agentCapabilities, type Harness } from '../../../../../packages/agents/capabilities.ts'
 import { randomUUID } from 'node:crypto'
 import { transaction, type Db } from '../../core/db.ts'
 import type { Hub } from '../../core/hub.ts'
@@ -12,16 +14,15 @@ import { claudeRepo, type Defaults, type Patch, type SessionRow, type SessionSta
 export const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'] as const
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 /** The coding agents a session can run (the member's agent has a driver for each: apps/agent/src/harness.ts). */
-export const HARNESSES = ['claude', 'opencode'] as const
 /** Models Claude Code's advisor tool can consult (it refuses one less capable than the session's own model). */
 export const ADVISORS = ['sonnet', 'opus', 'fable'] as const
-export type Harness = (typeof HARNESSES)[number]
 /** How notifications and messages name the agent of a session. */
-export const agentName = (harness: string) => (harness === 'opencode' ? 'OpenCode' : 'Claude')
-export const harnessOf = (v: string | null | undefined): Harness => ((HARNESSES as readonly string[]).includes(v ?? '') ? (v as Harness) : 'claude')
+export const agentName = (harness: string) => agentCapabilities(harness).name
+export const harnessOf = harnessId
 /** Another agent as the member's agent sees it: installed or not, and its profiles with the providers each connected. */
-export type AgentInfo = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[] }
+export type AgentInfo = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[]; error?: string }
 const STATUSES = new Set<SessionStatus>(['working', 'waiting', 'idle', 'stopped', 'error'])
+type CatalogModel = { value: string; displayName: string; supportedEffortLevels?: string[] }
 const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,20}$/
 
 export type Image = { mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string }
@@ -88,7 +89,13 @@ export function parseTailnetMcps(s: { tailnet_mcps: string | null; tailnet_mcp: 
  * whether fast mode is actually serving (it can be on but unavailable, e.g. without extra usage on the plan).
  */
 type Task = { id: string; type: string; description: string }
-/** `efforts`: the effort levels of the model an agent other than Claude Code runs now (OpenCode's variants). */
+type SessionChanges = {
+  title?: string; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
+  model?: string | null; effort?: string | null; permissionMode?: string; fastMode?: boolean; remoteControl?: boolean; advisorModel?: string | null
+  reachTailnet?: boolean; tailnetMcp?: string | null; tailnetMcps?: TailnetMcp[] | null
+  /** Whether it gets the owner's Google Drive set up (server features only, like the personal agent's settings). */
+  drive?: boolean
+}
 type Live = { remoteUrl?: string | null; remoteError?: string | null; fast?: { state: string; reason: string | null }; tasks?: Task[]; efforts?: string[] }
 /** The end of a Chat answer, as Claude Code reports it. */
 type ResultMsg = {
@@ -272,15 +279,47 @@ export function requestNotification(toolName: string, input: Record<string, unkn
   return { title: `${agent} needs permission: ${sessionTitle}`, body: clip(`Allow ${toolName}${what ? `: ${what}` : ''}`) }
 }
 
-export function claudeService({ db, agents, hub, notify, projects, tailnetConnected, storageFor }: {
+export function claudeService({ db, agents, hub, notify, projects, tailnetConnected, storageFor, ensureT3 }: {
   db: Db; agents: AgentsService; hub: Hub; notify: Notify; projects: ProjectsService
   /** Whether the member has a connected tailnet node (so "Reach my tailnet" can only go on when they do). Optional:
    *  wired late in app.ts like Team's isRole, since the tailnet service is built after this one. */
   tailnetConnected?: (userId: number) => boolean
   /** The owner's connected cloud storage, for the agent to set up as an rclone remote (null: none connected). */
   storageFor?: (userId: number) => LaunchStorage | null
+  /** Ensures the member's own devdash-t3@<user> service is running before their agent pairs with it. */
+  ensureT3?: (username: string, port?: number) => Promise<{ enabled: boolean; port?: number; url?: string } | null>
 }) {
   const repo = claudeRepo(db)
+  const commands = (username: string, profile: string, harness: Harness, model?: string) =>
+    agents.request<{ commands: unknown[]; models: CatalogModel[] }>(username, {
+      op: 'claude.commands', profile, ...(harness !== 'claude' ? { harness } : {}), ...(harness === 't3code' && model ? { model } : {}),
+    })
+  async function t3EffortLevels(username: string, profile: string, model: string | null) {
+    if (!model) return []
+    const { models } = await commands(username, profile, 't3code', model)
+    return models.find((m) => m.value === model)?.supportedEffortLevels ?? []
+  }
+  async function checkT3Effort(username: string, profile: string, model: string | null, effort: string) {
+    if (!model) throw new AppError(400, 'bad_effort', 'Choose a T3 Code model before selecting its thinking level.')
+    if (!(await t3EffortLevels(username, profile, model)).includes(effort)) {
+      throw new AppError(400, 'bad_effort', 'That thinking level is unavailable for the selected T3 Code model.')
+    }
+  }
+  // Each edit sees the preceding native selection and its saved row, even when two clients change one session.
+  type UpdateSession = (user: User, id: string, changes: SessionChanges) => Promise<ReturnType<typeof toDto>>
+  function serializeSelections(update: UpdateSession): UpdateSession {
+    const pending = new Map<string, Promise<ReturnType<typeof toDto>>>()
+    return async (user, id, changes) => {
+      if ((changes.model === undefined && changes.effort === undefined) || !agentCapabilities(find(user, id).harness).atomicSelection) {
+        return update(user, id, changes)
+      }
+      const apply = () => update(user, id, changes)
+      const previous = pending.get(id)
+      const next = previous ? previous.then(apply, apply) : apply()
+      pending.set(id, next)
+      try { return await next } finally { if (pending.get(id) === next) pending.delete(id) }
+    }
+  }
   // Every launch also says whether the owner's Drive is connected: the agent sets up the remote and tells Claude about it.
   const launch = (s: SessionRow) => ({ ...baseLaunch(s), storage: s.drive === 0 ? null : storageFor?.(s.owner_id) ?? null, ownerName: s.owner_name })
   // The owner, everyone while it's shared with the team, or the members it's shared with by name.
@@ -436,7 +475,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     if (w === 'ask' || roleLabel(s) || (s.shared === 1 && s.shared_can_send === 1)) return 'ask'
     return 'watch'
   }
-  const canSend = (u: User, s: SessionRow) => ['owner', 'full', 'ask'].includes(accessOf(u, s))
+  const canSend = (u: User, s: SessionRow) => (agentCapabilities(s.harness).guests ? ['owner', 'full', 'ask'] : ['owner', 'full']).includes(accessOf(u, s))
   /** Someone whose messages must not run with the owner's access, as the agent's gate knows them; null: owner or full. */
   const guestOf = (u: { id: number; name: string }, s: SessionRow) =>
     u.id !== s.owner_id && repo.writerAccess(s.id, u.id) !== 'full' ? { id: u.id, name: u.name } : null
@@ -460,6 +499,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     return s
   }
   function requireSend(user: User, s: SessionRow) {
+    if (!agentCapabilities(s.harness).guests && accessOf(user, s) === 'ask') throw new AppError(403, 'no_guest', 'T3 Code requires full access to send messages. DevDash cannot enforce guest approvals through this connection.')
     if (!canSend(user, s)) throw new AppError(403, 'forbidden', 'Only the owner can send messages in this session.')
   }
   function requireOwner(user: User, s: SessionRow) {
@@ -516,9 +556,11 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       case 'claude.remote':
         setLive(s.id, { remoteUrl: typeof ev.url === 'string' ? ev.url : null, remoteError: typeof ev.error === 'string' ? ev.error : null })
         return publish(s.id)
-      case 'claude.efforts':
-        setLive(s.id, { efforts: Array.isArray(ev.efforts) ? (ev.efforts as unknown[]).filter((e): e is string => typeof e === 'string').slice(0, 20) : [] })
+      case 'claude.efforts': {
+        const efforts = Array.isArray(ev.efforts) ? ev.efforts.filter((e): e is string => typeof e === 'string') : []
+        setLive(s.id, { efforts: s.harness === 't3code' ? efforts : efforts.slice(0, 20) })
         return publish(s.id)
+      }
       case 'claude.tasks': {
         const had = live.get(s.id)?.tasks?.length ?? 0
         const tasks = Array.isArray(ev.tasks) ? (ev.tasks as Task[]).slice(0, 50) : []
@@ -633,6 +675,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   const resumed = new Map<string, number>()
   async function resumeInterrupted(s: SessionRow) {
     resumed.set(s.id, Date.now())
+    if (!agentCapabilities(s.harness).automaticResume) {
+      // Its provider process can outlive DevDash. A synthetic Continue would queue a second turn.
+      repo.setStatus(s.id, 'error', `${agentName(s.harness)} may still be running after the restart. Check its conversation before sending another message.`, 'chat')
+      publish(s.id)
+      return
+    }
     try {
       const uuid = randomUUID()
       repo.addSender(s.id, uuid, s.owner_id)
@@ -736,6 +784,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   }
 
   async function sendTo(user: User, s: SessionRow, text: string, images: Image[], files: Attachment[] = [], uploads: Upload[] = [], typed = false) {
+    const capabilities = agentCapabilities(s.harness)
+    if (!capabilities.guests) requireSend(user, s)
+    if (!capabilities.attachments && (images.length || files.length || uploads.length)) throw new AppError(400, 'text_only', `${capabilities.label} accepts text messages through this connection. Attachments are unavailable.`)
+    if (!capabilities.toolPolicies && s.tool_policy) throw new AppError(400, 'unsupported_policy', `${capabilities.label} cannot enforce DevDash tool policies. Use a regular Chat session.`)
+    if (!capabilities.devdashConnections && (s.reach_tailnet || parseTailnetMcps(s).length || s.drive)) throw new AppError(400, 'unsupported_connection', `${capabilities.label} manages its own connections. DevDash Drive, tailnet routing and MCP forwarding are unavailable.`)
+    if (!supportsPermissionMode(s.harness, s.permission_mode)) throw new AppError(400, 'bad_mode', `${capabilities.label} requires explicit Full access. Start a new session with Bypass permissions.`)
     const inline = [...images, ...files].reduce((n, a) => n + (a.data.length * 3) / 4, 0)
     if (inline + uploads.reduce((n, u) => n + u.size, 0) > MAX_ATTACHMENTS_BYTES) {
       throw new AppError(400, 'too_big', 'Attachments can add up to 250 MB per message.')
@@ -881,6 +935,14 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       shared?: boolean; sharedCanSend?: boolean
     }, extra: SessionExtras = {}) {
       if (!PROFILE_RE.test(input.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
+      const capabilities = agentCapabilities(input.harness)
+      if (!capabilities.terminal && input.mode === 'cli') throw new AppError(400, 'no_cli', 'T3 Code sessions open in Chat.')
+      if (!capabilities.profiles && input.profile !== 'default') throw new AppError(400, 'bad_profile', 'T3 Code uses the default connection.')
+      if (!capabilities.toolPolicies && extra.toolPolicy) throw new AppError(400, 'unsupported_policy', 'T3 Code cannot enforce DevDash tool policies. Use a regular Chat session.')
+      if (!supportsPermissionMode(input.harness, input.permissionMode)) throw new AppError(400, 'bad_mode', 'This agent requires explicit Full access with Bypass permissions.')
+      if (!capabilities.attachments && input.images.length) throw new AppError(400, 'text_only', 'T3 Code accepts text messages through this connection. Attachments are unavailable.')
+      if (!capabilities.guests && (input.sharedCanSend || extra.sharedCanSend)) throw new AppError(400, 'no_guest', 'T3 Code can be shared for watching, or with named people given full access.')
+      if (input.harness === 't3code' && input.effort) await checkT3Effort(user.username, input.profile, input.model, input.effort)
       const home = `/home/${user.username}`
       // In a project: its shared checkout, or a fresh worktree on its own branch so parallel sessions don't collide.
       const wt = input.project && input.worktree ? await projects.worktree(user, input.project) : null
@@ -907,8 +969,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         // A role brings its own instructions; otherwise a session follows the project's instructions (like a Claude Project).
         instructions: extra.instructions ?? (project?.instructions?.trim() || undefined), tool_policy: extra.toolPolicy ? JSON.stringify(extra.toolPolicy) : undefined,
         listed: extra.listed === false ? 0 : undefined,
-        shared: sharing.shared ? 1 : undefined, shared_can_send: sharing.shared && sharing.canSend ? 1 : undefined,
+        shared: sharing.shared ? 1 : undefined, shared_can_send: capabilities.guests && sharing.shared && sharing.canSend ? 1 : undefined,
         origin_kind: extra.origin?.kind, origin_role: extra.origin && 'role' in extra.origin ? extra.origin.role : undefined,
+        drive: capabilities.devdashConnections ? undefined : 0,
       })
       const s = repo.byId(id)!
       try {
@@ -938,13 +1001,23 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const [, name, arg] = m as unknown as [string, string, string | undefined]
       if (name.toLowerCase() === 'model') {
         if (!arg) return `The model is ${s.model ?? 'the default'}. Type /model with a name (opus, sonnet, haiku or a model id), or /model default.`
-        if (!/^[\w.:[\]-]{1,120}$/.test(arg)) throw new AppError(400, 'bad_model', "That isn't a model name.")
+        if (!/^[\w./:@[\]-]{1,160}$/.test(arg)) throw new AppError(400, 'bad_model', "That isn't a model name.")
         const model = arg.toLowerCase() === 'default' ? null : arg
         await this.update(user, id, { model })
         return model ? `Model switched to ${model}.` : 'Model switched to the default.'
       }
-      if (!arg) return `The effort is ${s.effort ?? 'the default'}. Type /effort with ${EFFORTS.join(', ')}, or /effort default.`
-      const effort = arg.toLowerCase() === 'default' ? null : arg.toLowerCase()
+      const lower = arg?.toLowerCase()
+      let effort = lower === 'default' ? null : arg ?? null
+      if (lower !== 'default') {
+        const current = `The effort is ${s.effort ?? 'the default'}.`
+        const levels = s.harness === 't3code'
+          ? live.get(id)?.efforts ?? await t3EffortLevels(s.owner_username, s.profile, s.model)
+          : EFFORTS
+        if (!arg) return levels.length ? `${current} Type /effort with ${levels.join(', ')}, or /effort default.` : `${current} No thinking levels are listed for this model.`
+        effort = s.harness === 't3code'
+          ? levels.find((v) => v === arg) ?? levels.find((v) => v.toLowerCase() === lower) ?? arg
+          : arg.toLowerCase()
+      }
       await this.update(user, id, { effort })
       return effort ? `Effort set to ${effort}.` : 'Effort set to the default.'
     },
@@ -972,6 +1045,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     async uploadPiece(user: User, id: string, p: { upload: string; name: string; offset: number; total: number }, data: Buffer) {
       const s = find(user, id)
       requireSend(user, s)
+      if (!agentCapabilities(s.harness).attachments) throw new AppError(400, 'text_only', 'T3 Code accepts text messages through this connection. Attachments are unavailable.')
       if (p.total > MAX_ATTACHMENTS_BYTES || p.offset + data.length > p.total) {
         throw new AppError(400, 'too_big', 'Attachments can add up to 250 MB per message.')
       }
@@ -992,6 +1066,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     askToJoin(user: User, id: string) {
       const s = find(user, id)
       if (canSend(user, s)) throw new AppError(409, 'already', 'You can already send messages here.')
+      if (!agentCapabilities(s.harness).guests) throw new AppError(400, 'no_guest', 'Ask the owner to share this T3 Code session with you by name and give you full access.')
       const key = `${id}:${user.id}`
       if (Date.now() - (asked.get(key) ?? 0) < 60_000) return
       asked.set(key, Date.now())
@@ -1006,6 +1081,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const s = find(user, id)
       requireOwner(user, s)
       if (userId === s.owner_id) throw new AppError(400, 'owner', 'You can always send messages in your own session.')
+      if (!agentCapabilities(s.harness).guests && allowed) throw new AppError(400, 'no_guest', 'Share this T3 Code session with chosen people and give them full access to allow messages.')
       const who = db.prepare('select id from users where id = ? and disabled_at is null').get(userId)
       if (!who) throw new AppError(404, 'not_found', 'No such member.')
       repo.setWriter(id, userId, allowed)
@@ -1027,6 +1103,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const picked = input.audience === 'people' ? (input.people ?? []).filter((p) => p.id !== s.owner_id) : []
       if (picked.some((p) => !known.has(p.id))) throw new AppError(404, 'not_found', 'No such member.')
       const people = [...new Map(picked.map((p) => [p.id, { ...p, canSend: p.canSend || !!p.full }])).values()]
+      if (!agentCapabilities(s.harness).guests && (input.everyoneCanSend || people.some((p) => p.canSend && !p.full))) throw new AppError(400, 'no_guest', 'T3 Code supports watching or full access for chosen people. Guest messages are unavailable.')
+      if (!agentCapabilities(s.harness).guests && input.caps?.length) throw new AppError(400, 'no_guest', 'T3 Code cannot enforce DevDash guest permissions. Choose Watch or Full access instead.')
       const before = new Set(others.filter((u) => canView(u, s)).map((u) => u.id))
       transaction(db, () => {
         repo.patch(id, {
@@ -1083,14 +1161,10 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       await agents.request(s.owner_username, { op: 'claude.interrupt', id })
     },
 
-    async update(user: User, id: string, p: {
-      title?: string; shared?: boolean; sharedCanSend?: boolean; archived?: boolean
-      model?: string | null; effort?: string | null; permissionMode?: string; fastMode?: boolean; remoteControl?: boolean; advisorModel?: string | null
-      reachTailnet?: boolean; tailnetMcp?: string | null; tailnetMcps?: TailnetMcp[] | null
-      /** Whether it gets the owner's Google Drive set up (server features only, like the personal agent's settings). */
-      drive?: boolean
-    }) {
+    update: serializeSelections(async (user, id, p) => {
       const s = find(user, id)
+      if (agentCapabilities(s.harness).atomicSelection && p.model !== undefined && p.model !== s.model && p.effort === undefined) p = { ...p, effort: null }
+      if (p.effort && s.harness === 'opencode' && !/^[a-z0-9][a-z0-9_.-]{0,39}$/i.test(p.effort)) throw new AppError(400, 'bad_effort', 'Unknown effort level.')
       if (p.effort && s.harness === 'claude' && !(EFFORTS as readonly string[]).includes(p.effort)) throw new AppError(400, 'bad_effort', 'Unknown effort level.')
       if (p.advisorModel && s.harness !== 'claude') throw new AppError(400, 'no_advisor', 'Only Claude Code sessions have an advisor.')
       const ownerOnly = p.title !== undefined || p.shared !== undefined || p.sharedCanSend !== undefined || p.archived !== undefined
@@ -1098,6 +1172,13 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         || p.drive !== undefined
       if (ownerOnly) requireOwner(user, s)
       else requireSend(user, s)
+      const capabilities = agentCapabilities(s.harness)
+      if (!capabilities.defaultModelSwitch && s.started && p.model === null) throw new AppError(400, 'explicit_model_required', 'Choose a specific T3 Code model for an existing conversation. Start a new session to use its default.')
+      if (p.permissionMode !== undefined && !supportsPermissionMode(s.harness, p.permissionMode)) throw new AppError(400, 'bad_mode', 'This agent requires explicit Full access with Bypass permissions.')
+      if (!capabilities.mutablePermissions && s.started && p.permissionMode !== undefined && p.permissionMode !== s.permission_mode) throw new AppError(409, 'immutable_mode', 'T3 Code permission modes are fixed once a session starts. Start a new session to change permissions.')
+      if (!capabilities.devdashConnections && (p.reachTailnet || p.tailnetMcp?.trim() || p.tailnetMcps?.length || p.drive)) throw new AppError(400, 'unsupported_connection', 'T3 Code manages its own connections. DevDash Drive, tailnet routing and MCP forwarding are unavailable.')
+      if (!capabilities.devdashConnections && (p.fastMode || p.remoteControl)) throw new AppError(400, 'unsupported_feature', 'T3 Code does not support Claude fast mode or Remote Control.')
+      if (!capabilities.guests && p.sharedCanSend) throw new AppError(400, 'no_guest', 'T3 Code can be shared for watching, or with named people given full access.')
       // Tailnet routing (owner-only): only allow turning it on if the owner has a connected tailnet node; validate each
       // MCP URL points at a tailnet address. An empty list clears them. These apply when the session process next starts.
       if (p.reachTailnet && !tailnetConnected?.(user.id)) {
@@ -1109,6 +1190,17 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         : undefined
       const tailnetMcps = mcps === undefined ? undefined : JSON.stringify(checkTailnetMcps(mcps ?? []))
       const touchedTailnet = p.reachTailnet !== undefined || p.tailnetMcp !== undefined || p.tailnetMcps !== undefined || p.drive !== undefined
+      // New sessions use the member's model catalog. Existing threads validate and apply the pair in T3 first.
+      if (capabilities.atomicSelection && !s.started && p.effort) {
+        await checkT3Effort(s.owner_username, s.profile, p.model === undefined ? s.model : p.model, p.effort)
+      }
+      if (capabilities.atomicSelection && s.started && s.mode === 'chat') {
+        if (p.model !== undefined || p.effort !== undefined) await agents.request(s.owner_username, {
+          op: 'claude.selection', id, launch: launch(s),
+          model: p.model === undefined ? s.model : p.model,
+          effort: p.effort === undefined ? s.effort : p.effort,
+        })
+      }
       const patch: Patch = {
         title: p.title?.trim().slice(0, 120) || undefined,
         shared: p.shared === undefined ? undefined : p.shared ? 1 : 0,
@@ -1129,6 +1221,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       repo.patch(id, patch)
       if (p.shared !== undefined) repo.clearPeople(id) // the plain switch means the whole team, or only the owner
       for (const [key, value] of [['model', p.model], ['effort', p.effort], ['permissionMode', p.permissionMode], ['fast', p.fastMode], ['advisor', p.advisorModel]] as const) {
+        if (capabilities.atomicSelection) continue
         if (value !== undefined && s.mode === 'chat') await agents.request(s.owner_username, { op: 'claude.set', id, key, value })
       }
       // Turning it on again while it has no link (it failed, or the process went away) tries again.
@@ -1152,12 +1245,13 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       }
       publish(id)
       return toDto(repo.byId(id)!)
-    },
+    }),
 
     /** Chat ↔ CLI on the same session id. The agent makes sure the old process is gone before the new one starts. */
     async switchMode(user: User, id: string, mode: 'chat' | 'cli', cols: number, rows: number) {
       const s = find(user, id)
       requireSend(user, s)
+      if (!agentCapabilities(s.harness).terminal && mode === 'cli') throw new AppError(400, 'no_cli', 'T3 Code sessions open in Chat.')
       // The CLI is a terminal running as the owner with nothing between keystrokes and their access (cliAccess).
       if (mode === 'cli' && !['owner', 'full'].includes(accessOf(user, s))) {
         throw new AppError(403, 'forbidden', `Only ${s.owner_name} and people with full access can use the CLI in this session.`)
@@ -1175,6 +1269,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
     /** Changes what a feature gave a session it started; the next Claude process for it uses the new values. */
     configure(id: string, extra: Pick<SessionExtras, 'title' | 'instructions' | 'toolPolicy'>) {
+      if (!agentCapabilities(repo.byId(id)?.harness).toolPolicies && extra.toolPolicy) throw new AppError(400, 'unsupported_policy', 'T3 Code cannot enforce DevDash tool policies. Use a regular Chat session.')
       repo.patch(id, {
         title: extra.title?.slice(0, 120), instructions: extra.instructions, tool_policy: extra.toolPolicy ? JSON.stringify(extra.toolPolicy) : undefined,
       })
@@ -1231,10 +1326,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
      * One answer from an agent, run as `username` on one of their profiles: no tools, no session left behind. Claude Code
      * unless `harness` names another (a role that runs on OpenCode, a member whose agent is OpenCode).
      */
-    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; system?: string; harness?: Harness } = {}) =>
-      (await agents.request<{ text: string }>(username, {
+    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; system?: string; harness?: Harness } = {}) => {
+      if (!agentCapabilities(o.harness).completions) throw new AppError(400, 'unsupported_completion', 'T3 Code is available for Chat sessions. Tool-free background completions are unavailable through this connection.')
+      return (await agents.request<{ text: string }>(username, {
         op: 'claude.complete', profile: o.profile ?? 'default', prompt, model: o.model, system: o.system, ...(o.harness && o.harness !== 'claude' ? { harness: o.harness } : {}),
-      }, 180_000)).text,
+      }, 180_000)).text
+    },
 
     /**
      * A page of the conversation: the last few prompts and what followed, before message `before` when given. Each
@@ -1303,8 +1400,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       return { owner: s.owner_username, readonly: !['owner', 'full'].includes(accessOf(user, s)) }
     },
 
-    commands: (user: User, profile: string, harness: Harness = 'claude') =>
-      agents.request<{ commands: unknown[]; models: unknown[] }>(user.username, { op: 'claude.commands', profile, ...(harness !== 'claude' ? { harness } : {}) }),
+    commands: (user: User, profile: string, harness: Harness = 'claude', model?: string) => commands(user.username, profile, harness, model),
     /** Plan limits of one of the member's own Claude profiles. */
     usage: async (user: User, profile: string) =>
       (await agents.request<{ usage: unknown }>(user.username, { op: 'claude.usage', profile }, 45_000)).usage as {
@@ -1313,12 +1409,29 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
         limits: Record<string, { utilization: number | null; resets_at: string | null } | { display_name: string; utilization: number | null; resets_at: string | null }[] | { is_enabled: boolean; monthly_limit: number | null; used_credits: number | null; utilization: number | null; currency?: string | null } | null> | null
       },
     /** The member's Claude profiles, whether the other agents are installed (and set up for them), and their defaults. */
-    profiles: async (user: User) => {
-      const r = await agents.request<{ profiles: unknown[]; agents?: AgentInfo[] }>(user.username, { op: 'claude.profiles' })
+    profiles: async (user: User, refresh = false) => {
+      const r = await agents.request<{ profiles: unknown[]; agents?: AgentInfo[] }>(user.username, { op: 'claude.profiles', ...(refresh ? { refresh: true } : {}) })
       return { profiles: r.profiles, agents: r.agents ?? [], defaults: repo.defaults(user.id) }
     },
     /** The last step of a browser sign-in in the member's terminal tab (agent harness.ts finishSignIn), delivered as them. */
     finishSignIn: (user: User, url: string) => agents.request<{ ok: boolean }>(user.username, { op: 'agent.signin.finish', url }, 20_000),
+    /** Provisions the member's local T3 service (if needed) and connects/renews their member-owned T3 credential. */
+    connectT3: async (user: User) => {
+      // Member's own unprivileged agent creates ~/.local/share/devdash-t3 and ~/.config/devdash/t3-service.env first;
+      // root helper only installs and enables the systemd unit.
+      const prepared = ensureT3
+        ? await agents.request<{ port: number; baseDir: string; url: string }>(user.username, { op: 't3.prepare' }, 15_000)
+        : null
+      if (ensureT3 && prepared) await ensureT3(user.username, prepared.port)
+      return agents.request<{ agent: AgentInfo; expiresAt: string; renewed: boolean; revokedOld: boolean }>(
+        user.username,
+        { op: 't3.connect', ...(prepared ? { url: prepared.url, baseDir: prepared.baseDir } : {}) },
+        40_000,
+      )
+    },
+    /** Revokes this member's DevDash T3 OAuth session and removes their ~/.config/devdash/t3code.json. */
+    disconnectT3: (user: User) =>
+      agents.request<{ removed: boolean; revoked: boolean }>(user.username, { op: 't3.disconnect' }, 25_000),
     createProfile: (user: User, name: string, harness: Harness = 'claude') => agents.request(user.username, { op: 'claude.profile.create', name, ...(harness !== 'claude' ? { harness } : {}) }),
     memoryHealth: (user: User) => memoryHealth(agents, user.username),
     restartMemory: async (user: User) => {
@@ -1340,8 +1453,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       return { pending: !done }
     },
     defaults: (user: User) => repo.defaults(user.id),
-    saveDefaults: (user: User, d: Defaults) => {
+    saveDefaults: async (user: User, d: Defaults) => {
       if (!PROFILE_RE.test(d.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
+      if (!agentCapabilities(d.harness).terminal && d.open_in === 'cli') throw new AppError(400, 'no_cli', 'T3 Code sessions open in Chat.')
+      if (!agentCapabilities(d.harness).profiles && d.profile !== 'default') throw new AppError(400, 'bad_profile', 'T3 Code uses the default connection.')
+      if (!supportsPermissionMode(d.harness, d.permission_mode)) throw new AppError(400, 'bad_mode', 'This agent requires explicit Full access with Bypass permissions.')
+      if (d.harness === 't3code' && d.effort) await checkT3Effort(user.username, d.profile, d.model, d.effort)
       repo.saveDefaults(user.id, d)
       return repo.defaults(user.id)
     },

@@ -50,6 +50,12 @@ async function ensureTerminal(name: string, cols: number, rows: number) {
       + ' || { echo; echo "GitHub sign-in did not finish."; read -r -p "Press Enter to close this tab. " _; }'
     return void (await tmux(...base, '-e', 'BROWSER=echo', 'bash', '-lc', script))
   }
+  // T3 Code's interactive member setup tabs (t3-connect, t3-pair, t3-status).
+  const t3Setup = /^t3-(connect|pair|status)$/.exec(name)
+  if (t3Setup) {
+    const { env, args } = harness.t3SetupCommand(t3Setup[1]! as 'connect' | 'pair' | 'status')
+    return void (await tmux(...base, ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), ...args))
+  }
   // OpenCode's sign-ins (oc-<kind>-<profile>: any provider, its own account, its Go key), else a Claude profile's.
   const other = /^oc-(login|acct|go)-(.+)$/.exec(name)
   if (other) {
@@ -106,6 +112,11 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'claude.answer': (r) => (running(str(r.id, 'id')).answer(str(r.id, 'id'), str(r.requestId, 'requestId'), r.result as never, { owner: (r.by as { owner?: unknown } | undefined)?.owner === true }), { ok: true }),
   'claude.interrupt': async (r) => (await running(str(r.id, 'id')).interrupt(str(r.id, 'id')), { ok: true }),
   'claude.set': async (r) => (await running(str(r.id, 'id')).setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
+  'claude.selection': async (r) => {
+    if ((r.model !== null && typeof r.model !== 'string') || (r.effort !== null && typeof r.effort !== 'string')) throw new Error('Invalid T3 Code model or effort.')
+    await harness.setSelection(str(r.id, 'id'), r.model as string | null, r.effort as string | null, launchOf(r))
+    return { ok: true }
+  },
   'claude.remote': (r) => (acp(r) ? { url: null } : claude.remote(launchOf(r), r.enabled === true)),
   'claude.complete': async (r) => {
     const o = { model: typeof r.model === 'string' ? r.model : undefined, system: typeof r.system === 'string' ? r.system : undefined }
@@ -122,13 +133,22 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   // Another agent's subagents are in the transcript itself, nested under their Task step.
   'claude.subagent': (r) => (acp(r) ? { found: false, agentType: null, description: null, messages: [] } : claude.subagent(launchOf(r), str(r.toolUseId, 'toolUseId'))),
   'claude.task.stop': async (r) => (await claude.stopTask(str(r.id, 'id'), str(r.taskId, 'taskId')), { ok: true }),
-  'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile')) : claude.commandsAndModels(str(r.profile, 'profile'))),
+  'claude.commands': (r) => (harness.isAcp(r.harness) ? harness.commandsAndModels(r.harness, str(r.profile, 'profile'), typeof r.model === 'string' ? r.model : undefined) : claude.commandsAndModels(str(r.profile, 'profile'))),
   'claude.title': (r) => (acp(r) ? harness : claude).title(launchOf(r)),
   'claude.rename': async (r) => (await (acp(r) ? harness : claude).rename(launchOf(r), str(r.title, 'title')), { ok: true }),
-  'claude.profiles': async () => ({
-    profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })),
-    agents: await harness.agents().catch(() => []),
+  't3.prepare': async () => harness.prepareT3(),
+  't3.connect': async (r) => harness.connectT3({
+    ...(typeof r.url === 'string' && r.url ? { url: r.url } : {}),
+    ...(typeof r.baseDir === 'string' && r.baseDir ? { baseDir: r.baseDir } : {}),
   }),
+  't3.disconnect': async () => harness.disconnectT3(),
+  'claude.profiles': async (r) => {
+    if (r.refresh === true) harness.refreshT3()
+    return {
+      profiles: (await claude.profiles()).map((p) => ({ ...p, memory: memory.enabled(p.name) })),
+      agents: await harness.agents().catch(() => []),
+    }
+  },
   'claude.memory': async (r) => (await memory.set(str(r.profile, 'profile'), r.enabled === true), { ok: true }),
   'claude.memory.health': async () => ({ health: await memory.health(claude.profileNames()) }),
   'claude.memory.restart': async () => (await memory.restart(claude.profileNames()), { ok: true }),

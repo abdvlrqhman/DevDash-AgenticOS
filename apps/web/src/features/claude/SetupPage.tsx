@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ChevronDown, LogIn, Plus, RotateCw } from 'lucide-react'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { ChevronDown, LogIn, Plug, Plus, RotateCw } from 'lucide-react'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { confirmAction } from '@/components/app/confirm'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -14,16 +15,16 @@ import { Spinner } from '@/components/ui/spinner'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { api, unwrap } from '@/lib/api'
 import { ErrorAlert } from '../auth/LoginPage'
-import { commandsQuery, FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, type PermissionMode } from './data'
+import { FALLBACK_MODELS, PERMISSION_MODES, profilesQuery, useOfferedModels, type PermissionMode } from './data'
 import { describeMemory, memoryQuery } from './memory'
 import { HARNESS, HARNESSES, harnessOf } from './harness'
-import { ModelField } from './ModelChoices'
-import type { ModelInfo } from './models'
+import { ModelField, ThinkingLevelField } from './ModelChoices'
+import { effortLevels, type ModelInfo } from './models'
 
 type Profile = { name: string; loggedIn: boolean; authMethod: string | null; email: string | null; plan: string | null; memory: boolean }
 type Defaults = { harness: string; profile: string; model: string | null; effort: string | null; permission_mode: string; open_in: 'chat' | 'cli' }
 /** Another coding agent on this server, as the member's agent sees it (apps/agent/src/harness.ts). */
-type Agent = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[] }
+type Agent = { harness: string; installed: boolean; version: string | null; profiles: { name: string; providers: string[] }[]; error?: string }
 
 const profileName = (p: Profile) => (p.name === 'default' ? 'Default' : p.name)
 
@@ -83,9 +84,145 @@ export function SetupPage() {
         </Group>
         {!q.isPending && profiles.length > 0 && <MemorySection profiles={profiles} />}
         {q.data && <OpenCodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 'opencode')} onConnect={(p, kind) => navigate({ to: '/terminal', search: { open: `oc-${kind}-${p}` } })} />}
+        {q.data && <T3CodeSection agent={(q.data.agents as Agent[]).find((a) => a.harness === 't3code')} onTerminal={(tab) => navigate({ to: '/terminal', search: { open: tab } })} />}
         {q.data && <DefaultsCard profiles={profiles} agents={q.data.agents as Agent[]} initial={q.data.defaults} />}
       </PageBody>
     </>
+  )
+}
+
+function T3CodeSection({ agent, onTerminal }: { agent: Agent | undefined; onTerminal: (tab: 't3-connect' | 't3-pair' | 't3-status') => void }) {
+  const qc = useQueryClient()
+  const connected = !!agent?.installed && !agent.error
+  const providers = agent?.profiles.find((p) => p.name === 'default')?.providers ?? []
+
+  const syncT3Queries = async () => {
+    const data = await unwrap(api.api.claude.profiles.$get({ query: { refresh: 'true' } }))
+    qc.setQueryData(profilesQuery.queryKey, data)
+    await qc.invalidateQueries({ queryKey: ['claude', 'commands', 't3code'] })
+    return data
+  }
+
+  const refresh = useMutation({
+    mutationFn: syncT3Queries,
+    onSuccess: () => toast.success('T3 Code connection refreshed'),
+  })
+
+  const connect = useMutation({
+    mutationFn: () => unwrap(api.api.claude.t3.connect.$post()),
+    onSuccess: async (res) => {
+      await syncT3Queries()
+      const found = res.agent?.profiles?.find((p) => p.name === 'default')?.providers ?? []
+      if (found.length) {
+        toast.success(res.renewed ? 'T3 Code credential renewed' : `T3 Code connected (${found.join(', ')})`)
+      } else {
+        toast.success(res.renewed ? 'T3 Code credential renewed. Pair T3 Code to connect providers.' : 'T3 Code connected. Pair T3 Code to add model providers.')
+      }
+    },
+  })
+
+  const disconnect = useMutation({
+    mutationFn: () => unwrap(api.api.claude.t3.disconnect.$post()),
+    onSuccess: async () => {
+      await syncT3Queries()
+      toast.success('T3 Code disconnected')
+    },
+  })
+
+  const busy = connect.isPending || disconnect.isPending || refresh.isPending
+  const error = connect.error || disconnect.error || refresh.error
+
+  const handleDisconnect = async () => {
+    const ok = await confirmAction({
+      title: 'Disconnect T3 Code?',
+      description: 'Revokes DevDash’s T3 OAuth session and removes ~/.config/devdash/t3code.json from your account. Your T3 Code chats and providers stay untouched.',
+      action: 'Disconnect',
+      destructive: true,
+    })
+    if (ok) disconnect.mutate()
+  }
+
+  return (
+    <Group title="T3 Code connection" description="Use the providers and models connected in T3 Code. Sessions open in Chat and keep their conversation in T3 Code.">
+      <div className="flex flex-col gap-3 rounded-2xl bg-surface px-4 py-3.5 text-sm sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+          <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center sm:mt-0"><StatusLight state={connected ? 'live' : 'idle'} /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block font-medium">{connected ? 'Connected' : 'Not connected'}</span>
+            <span className="block text-pretty text-muted-foreground">
+              {agent?.error || (connected
+                ? providers.join(', ') || 'No model providers connected yet. Pair T3 app to sign in to providers, then refresh.'
+                : 'Start your account’s T3 Code service and link it in one click, or run the setup helper in Terminal.')}
+            </span>
+            {connected && agent?.version && <span className="block text-muted-foreground">T3 Code {agent.version}</span>}
+          </span>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 pl-8 sm:pl-0">
+          {!connected ? (
+            <Button size="sm" disabled={busy} onClick={() => connect.mutate()}>
+              {connect.isPending ? <Spinner /> : <Plug />}Connect T3 Code
+            </Button>
+          ) : (
+            <>
+              {!providers.length && (
+                <Button size="sm" disabled={busy} onClick={() => onTerminal('t3-pair')}>
+                  <LogIn />Pair T3 app
+                </Button>
+              )}
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => refresh.mutate()}>
+                <RotateCw className={refresh.isPending ? 'animate-spin' : ''} />Refresh
+              </Button>
+            </>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant={connected ? 'ghost' : 'outline'} className={connected ? 'hover:bg-surface-2 dark:hover:bg-surface-2' : undefined} disabled={busy}>
+                {connected ? 'Manage' : 'Setup tools'}<ChevronDown />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => onTerminal('t3-pair')}>
+                <span>Pair T3 app (add providers)</span>
+                <span className="text-xs text-muted-foreground">Show a pairing code & QR to sign into Claude, Codex, OpenCode, or Antigravity</span>
+              </DropdownMenuItem>
+              {connected && (
+                <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => connect.mutate()}>
+                  <span>Reconnect / renew credential</span>
+                  <span className="text-xs text-muted-foreground">Mint a fresh member OAuth session and revoke the previous one</span>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => onTerminal('t3-connect')}>
+                <span>Open setup script in terminal</span>
+                <span className="text-xs text-muted-foreground">Run deploy/t3-setup.mjs interactively in DevDash Terminal</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="flex-col items-start gap-0" onSelect={() => onTerminal('t3-status')}>
+                <span>Check T3 status in terminal</span>
+                <span className="text-xs text-muted-foreground">Inspect binary, service port, listener ownership, and providers</span>
+              </DropdownMenuItem>
+              {!connected && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => refresh.mutate()}>Refresh connection</DropdownMenuItem>
+                </>
+              )}
+              {connected && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" className="flex-col items-start gap-0" onSelect={() => void handleDisconnect()}>
+                    <span>Disconnect T3 Code</span>
+                    <span className="text-xs text-muted-foreground">Revoke DevDash’s OAuth session and remove t3code.json</span>
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      <ErrorAlert error={error} />
+      <p className="text-sm text-pretty text-muted-foreground">
+        One-click connect starts your account’s loopback T3 Code service and saves a private credential in ~/.config/devdash/t3code.json (never in DevDash). This connection supports text Chat with explicit Full access; DevDash approval prompts, Plan mode, guests, Hamasa, and Autopilot are unavailable.
+      </p>
+    </Group>
   )
 }
 
@@ -302,23 +439,27 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
   const [d, setD] = useState(initial)
   useEffect(() => setD(initial), [initial])
   const save = useMutation({
-    mutationFn: (next: Defaults) => unwrap(api.api.claude.defaults.$put({ json: { ...next, harness: harnessOf(next), effort: null, permission_mode: next.permission_mode as PermissionMode } })),
-    onSuccess: () => {
-      toast.success('Defaults saved')
-      void qc.invalidateQueries({ queryKey: profilesQuery.queryKey })
+    scope: { id: 'session-defaults' },
+    mutationKey: ['claude', 'save-defaults'],
+    mutationFn: (next: Defaults) => unwrap(api.api.claude.defaults.$put({ json: { ...next, harness: harnessOf(next), permission_mode: next.permission_mode as PermissionMode } })),
+    onSuccess: ({ defaults }) => {
+      if (qc.isMutating({ mutationKey: ['claude', 'save-defaults'] }) === 1) {
+        qc.setQueryData(profilesQuery.queryKey, (prev) => prev && { ...prev, defaults })
+        toast.success('Defaults saved')
+      }
     },
   })
   const set = (patch: Partial<Defaults>) => {
     const next = { ...d, ...patch }
+    if (!HARNESS[harnessOf(next)].cli) next.open_in = 'chat'
     setD(next)
     save.mutate(next)
   }
   const harness = harnessOf(d)
   const profiles = harness === 'claude' ? claudeProfiles.map((p) => p.name) : agents.find((a) => a.harness === harness)?.profiles.map((p) => p.name) ?? ['default']
   // The same models a new session offers: Claude Code's with every version, OpenCode's from each provider you connected.
-  const listed = useQuery({ ...commandsQuery(d.profile, harness), enabled: profiles.includes(d.profile) })
-  const offered = listed.data?.models as ModelInfo[] | undefined
-  const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default', description: "OpenCode's own default" }]
+  const offered = useOfferedModels(d.profile, harness, d.model, profiles.includes(d.profile))
+  const models: ModelInfo[] = offered?.length ? offered : harness === 'claude' ? FALLBACK_MODELS : [{ value: '', displayName: 'Default', description: HARNESS[harness].defaultModel }]
   const [customModel, setCustomModel] = useState(false)
   const Row = ({ id, label, value, options, onPick, description }: { id: string; label: string; value: string; options: { value: string; label: string }[]; onPick: (v: string) => void; description?: string }) => (
     <Field>
@@ -333,18 +474,20 @@ function DefaultsCard({ profiles: claudeProfiles, agents, initial }: { profiles:
     <Group title="Defaults for new sessions" description="You can change any of these per session.">
       <div className="rounded-2xl bg-surface p-4 md:p-5">
         <FieldGroup>
-          <Row id="d-agent" label="Agent" value={harness} onPick={(v) => (setCustomModel(false), set({ harness: v, profile: 'default', model: null, permission_mode: HARNESS[harnessOf({ harness: v })].modes.includes(d.permission_mode as PermissionMode) ? d.permission_mode : 'bypassPermissions' }))}
+          <Row id="d-agent" label="Agent" value={harness} onPick={(v) => (setCustomModel(false), set({ harness: v, profile: 'default', model: null, effort: null, permission_mode: HARNESS[harnessOf({ harness: v })].modes.includes(d.permission_mode as PermissionMode) ? d.permission_mode : 'bypassPermissions' }))}
             options={HARNESSES.map((h) => ({ value: h, label: HARNESS[h].label }))} />
-          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v })} options={profiles.map((p) => ({ value: p, label: p === 'default' ? 'Default' : p }))} />}
+          {profiles.length > 1 && <Row id="d-profile" label="Profile" value={d.profile} onPick={(v) => set({ profile: v, effort: null })} options={profiles.map((p) => ({ value: p, label: p === 'default' ? 'Default' : p }))} />}
           <Field>
             <FieldLabel htmlFor="d-model">Model</FieldLabel>
             <ModelField id="d-model" harness={harness} models={models} value={d.model ?? ''} custom={customModel} onCustom={setCustomModel}
-              onChange={(v) => setD({ ...d, model: v || null })} onCommit={(v) => (v || null) !== initial.model && set({ model: v || null })}
+              onChange={(v) => setD({ ...d, model: v || null, effort: (v || null) === d.model ? d.effort : null })}
+              onCommit={(v) => { if (customModel || (v || null) !== d.model) set({ model: v || null, effort: (v || null) === d.model ? d.effort : null }) }}
               note="New sessions start on this model." />
           </Field>
+          {harness === 't3code' && <ThinkingLevelField id="d-effort" levels={effortLevels(models, d.model)} value={d.effort} onChange={(effort) => set({ effort })} />}
           <Row id="d-perm" label="Permissions" value={d.permission_mode} onPick={(v) => set({ permission_mode: v })}
             options={PERMISSION_MODES.filter((p) => HARNESS[harness].modes.includes(p.value)).map((p) => ({ value: p.value, label: p.label }))} description={PERMISSION_MODES.find((p) => p.value === d.permission_mode)?.hint} />
-          <Row id="d-open" label="Open sessions in" value={d.open_in} onPick={(v) => set({ open_in: v as 'chat' | 'cli' })} options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]} />
+          {HARNESS[harness].cli && <Row id="d-open" label="Open sessions in" value={d.open_in} onPick={(v) => set({ open_in: v as 'chat' | 'cli' })} options={[{ value: 'chat', label: 'Chat' }, { value: 'cli', label: 'CLI' }]} />}
           <ErrorAlert error={save.error} />
         </FieldGroup>
       </div>

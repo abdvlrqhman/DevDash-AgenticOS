@@ -263,6 +263,9 @@ Your own Anthropic API calls are NOT proxied; they go out directly as usual.`
 /** Once the team's shared tools exist (shared-tools.ts): use them, don't download private copies. */
 const SHARED_TOOLS_NOTE = `The team shares its downloaded tools in ${sharedRoot()}, already set in your environment: the Android SDK ($ANDROID_HOME), Flutter (on PATH; a project that needs another version pins it with FVM, whose versions are shared too), and package caches (pub, npm, pip, Hugging Face models, Playwright browsers). Use them: don't download SDKs, browsers or models into the home folder or a project. A project that already keeps its own copy (like .tools/android-sdk, or its scripts setting ANDROID_HOME or GRADLE_USER_HOME to one) predates them: when you work on that part, point it at the shared one, check the build still works, and remove the copy. Install packages into the project, not globally (no npm -g or pip --user). Add an Android platform or tool with sdkmanager into $ANDROID_HOME, for everyone. Logins (tokens, .npmrc, pip.conf) stay in each person's own config, never in ${sharedRoot()}.`
 
+/** DevDash's shared-machine and shared-toolchain rules, with no personal account or session-private instructions. */
+export const nonPersonalRules = () => (existsSync(sharedRoot()) ? `${RULES}\n\n${SHARED_TOOLS_NOTE}` : RULES)
+
 export const systemAppend = (l: Launch) => {
   const parts = [RULES, sharedNote(l.ownerName ?? 'the owner'), storage.note(l.storage, storage.driveFolder(l.cwd))]
   if (existsSync(sharedRoot())) parts.push(SHARED_TOOLS_NOTE)
