@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { meQuery } from '@/lib/api'
 import { ErrorAlert } from '../auth/LoginPage'
 import { Board, TaskList } from '../work/Board'
 import { projectsQuery, tasksQuery, useLiveWork } from '../work/data'
@@ -15,6 +16,9 @@ import { NewTask } from '../work/TaskBits'
 const stored = (k: string, d: string) => {
   try { return localStorage.getItem(`devdash.${k}`) ?? d } catch { return d }
 }
+/** The project filter's "Your projects": every project you created. */
+const YOURS = '@yours'
+
 const store = (k: string, v: string) => {
   try { localStorage.setItem(`devdash.${k}`, v) } catch { /* not remembered */ }
 }
@@ -26,8 +30,13 @@ export function TasksPage() {
   const [project, setProject] = useState(() => stored('tasks-project', ''))
   const [adding, setAdding] = useState(false)
   const projects = useQuery(projectsQuery).data?.projects ?? []
-  const tasks = useQuery(tasksQuery({ project: project || undefined, assignee: whose === 'mine' ? 'me' : undefined }))
-  const list = tasks.data?.tasks ?? []
+  const me = useQuery(meQuery).data
+  // Projects you created come first; the rest of the team's ("Shared") after them.
+  const own = new Set(projects.filter((p) => !!me && p.creator.username === me.username).map((p) => p.slug))
+  const one = project && project !== YOURS ? project : undefined
+  const tasks = useQuery(tasksQuery({ project: one, assignee: whose === 'mine' ? 'me' : undefined }))
+  const list = (tasks.data?.tasks ?? []).filter((t) => project !== YOURS || own.has(t.project.slug))
+  const pick = (p: { slug: string; name: string }) => <option key={p.slug} value={p.slug}>{p.name}</option>
 
   return (
     <>
@@ -45,7 +54,11 @@ export function TasksPage() {
           {projects.length > 1 && (
             <NativeSelect aria-label="Project" className="min-w-40 flex-1 sm:w-48 sm:flex-none [&_select]:h-7 pointer-coarse:[&_select]:h-9" value={project} onChange={(e) => { setProject(e.target.value); store('tasks-project', e.target.value) }}>
               <option value="">All projects</option>
-              {projects.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
+              {own.size > 0 && <option value={YOURS}>Your projects</option>}
+              {own.size > 0 && own.size < projects.length ? <>
+                <optgroup label="Yours">{projects.filter((p) => own.has(p.slug)).map(pick)}</optgroup>
+                <optgroup label="Shared">{projects.filter((p) => !own.has(p.slug)).map(pick)}</optgroup>
+              </> : projects.map(pick)}
             </NativeSelect>
           )}
         </div>
@@ -61,12 +74,12 @@ export function TasksPage() {
             </EmptyHeader>
           </Empty>
         ) : view === 'board' ? (
-          <Board tasks={list} project={project || undefined} showProject={!project && projects.length > 1} />
+          <Board tasks={list} project={one} showProject={!one && projects.length > 1} first={own} />
         ) : (
-          <TaskList tasks={list} showProject={!project && projects.length > 1} />
+          <TaskList tasks={list} showProject={!one && projects.length > 1} first={own} />
         )}
       </PageBody>
-      <NewTask open={adding} onClose={() => setAdding(false)} project={project || undefined} />
+      <NewTask open={adding} onClose={() => setAdding(false)} project={one} />
     </>
   )
 }

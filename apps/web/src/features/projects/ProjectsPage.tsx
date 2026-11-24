@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { ApiError, api, unwrap } from '@/lib/api'
+import { ApiError, api, meQuery, unwrap } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { relativeTime } from '../claude/data'
@@ -68,6 +68,13 @@ export function ProjectsPage() {
   const list = useQuery(projectsQuery)
   const [adding, setAdding] = useState(false)
   const projects = list.data?.projects ?? []
+  // Yours (you created them) first, then the rest of the team's; "Yours" shows only your own.
+  const me = useQuery(meQuery).data
+  const yours = projects.filter((p) => !!me && p.creator.username === me.username)
+  const shared = projects.filter((p) => !yours.includes(p))
+  const [show, setShow] = useState(() => { try { return localStorage.getItem('devdash.projects-show') ?? 'all' } catch { return 'all' } })
+  const onlyYours = show === 'yours' && yours.length > 0
+  const grouped = yours.length > 0 && shared.length > 0
   const working = projects.filter((p) => p.live.working > 0).length
   const waiting = projects.filter((p) => p.live.waiting > 0).length
   const where = working === projects.length
@@ -101,15 +108,34 @@ export function ProjectsPage() {
               !working && !waiting && 'text-muted-foreground')}>
               {headline}
             </h2>
-            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {projects.map((p) => <ProjectCard key={p.slug} p={p} />)}
-            </ul>
+            {grouped && (
+              <ToggleGroup type="single" variant="outline" size="sm" className="self-start" aria-label="Which projects" value={onlyYours ? 'yours' : 'all'}
+                onValueChange={(v) => { if (v) { setShow(v); try { localStorage.setItem('devdash.projects-show', v) } catch { /* not remembered */ } } }}>
+                <ToggleGroupItem value="all">All</ToggleGroupItem>
+                <ToggleGroupItem value="yours">Yours</ToggleGroupItem>
+              </ToggleGroup>
+            )}
+            {grouped ? <>
+              <ProjectGroup title="Yours" projects={yours} />
+              {!onlyYours && <ProjectGroup title="Shared" projects={shared} />}
+            </> : <ProjectGroup projects={projects} />}
           </>
         )}
         <RecentlyDeleted />
       </PageBody>
       <NewProject open={adding} onClose={() => setAdding(false)} />
     </>
+  )
+}
+
+function ProjectGroup({ title, projects }: { title?: string; projects: Project[] }) {
+  return (
+    <section className="flex flex-col gap-2">
+      {title && <h3 className="text-sm font-medium text-muted-foreground">{title} <span className="tabular-nums">{projects.length}</span></h3>}
+      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {projects.map((p) => <ProjectCard key={p.slug} p={p} />)}
+      </ul>
+    </section>
   )
 }
 

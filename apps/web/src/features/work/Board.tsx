@@ -32,7 +32,11 @@ function useMoveTask() {
   })
 }
 
-const byColumn = (tasks: Task[]) => Object.fromEntries(STATUSES.map((s) => [s.value, tasks.filter((t) => t.status === s.value).sort((a, b) => a.sort - b.sort)])) as Record<Status, Task[]>
+/** Each status's tasks in their board order; `first` (e.g. your own projects) above the rest, each in its own order. */
+const byColumn = (tasks: Task[], first?: Set<string>) => {
+  const rank = (t: Task) => (first && !first.has(t.project.slug) ? 1 : 0)
+  return Object.fromEntries(STATUSES.map((s) => [s.value, tasks.filter((t) => t.status === s.value).sort((a, b) => rank(a) - rank(b) || a.sort - b.sort)])) as Record<Status, Task[]>
+}
 const idOf = (t: Task) => `${t.project.slug}#${t.number}`
 /** Drop targets that are whole columns, or on phones their tabs, as opposed to cards. */
 const COLUMN = 'column:'
@@ -61,9 +65,9 @@ function sortAt(list: Task[], index: number) {
  * pointer events (dnd-kit), not the browser's HTML drag and drop, which touch screens and the desktop app's web view
  * don't give pages. A keyboard can move cards too: focus one, space, arrows, space.
  */
-export function Board({ tasks, project, showProject }: { tasks: Task[]; project?: string; showProject: boolean }) {
+export function Board({ tasks, project, showProject, first }: { tasks: Task[]; project?: string; showProject: boolean; first?: Set<string> }) {
   const mobile = useIsMobile()
-  const cols = byColumn(tasks)
+  const cols = byColumn(tasks, first)
   const [column, setColumn] = useState<Status>('in_progress')
   const [adding, setAdding] = useState<Status | null>(null)
   const move = useMoveTask()
@@ -195,8 +199,8 @@ function ColumnTab({ status, label, count, current, dragging, onPick }: {
 }
 
 /** The same tasks as a list, grouped by status (Done last). */
-export function TaskList({ tasks, showProject }: { tasks: Task[]; showProject: boolean }) {
-  const cols = byColumn(tasks)
+export function TaskList({ tasks, showProject, first }: { tasks: Task[]; showProject: boolean; first?: Set<string> }) {
+  const cols = byColumn(tasks, first)
   const order: Status[] = ['in_progress', 'review', 'todo', 'backlog', 'done']
   return (
     <div className="flex flex-col gap-4">
