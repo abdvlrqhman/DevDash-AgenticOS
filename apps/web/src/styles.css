@@ -213,6 +213,10 @@
 [data-sileo-viewport] { font-family: var(--font-sans); }
 [data-sileo-viewport] [data-sileo-title] { text-transform: none; letter-spacing: -0.005em; }
 [data-sileo-viewport] [data-sileo-description] { line-height: 1.45; }
+.dark [data-sileo-viewport] [data-sileo-pill],
+.dark [data-sileo-viewport] [data-sileo-body] { fill: #242424; }
+.dark [data-sileo-viewport] [data-sileo-svg] { filter: drop-shadow(0 6px 20px rgba(0, 0, 0, 0.55)); }
+.dark [data-sileo-viewport] [data-sileo-description] { color: rgba(255, 255, 255, 0.78); }
 
 /* Inside the native app nothing selects except what people actually copy: messages, code, inputs, the terminal. */
 .shell body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
