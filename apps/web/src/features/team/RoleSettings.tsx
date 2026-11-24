@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, X } from 'lucide-react'
 import { toast } from '@/lib/toast'
+import { NativeSelect } from '@/components/app/native-select'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -11,13 +12,18 @@ import { api, unwrap } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { DAY_NAMES, nextLabel, TRIGGER_LABELS, type RoleDetail, type Slot } from './data'
 
+/** A job's starting permission level, as a session's mode menu names them. */
+const JOB_MODES = [['default', 'Ask first'], ['acceptEdits', 'Accept edits'], ['plan', 'Plan'], ['auto', 'Auto'], ['dontAsk', "Don't ask"], ['bypassPermissions', 'Bypass']] as const
+type JobMode = (typeof JOB_MODES)[number][0]
+
 type Settings = {
   autonomy: 'advisor' | 'operator'; autoApprove: ('code' | 'goal')[]; schedule: Slot[]; triggers: ('work' | 'task_done' | 'task_created')[]
   paused: boolean; dailyLimit: number; monthlyBudget: number | null; lead: boolean; selfClose: 'default' | 'always_ask' | 'allow'
+  jobPermission: JobMode | null
 }
 const pick = (r: RoleDetail['role']): Settings => ({
   autonomy: r.autonomy, autoApprove: r.autoApprove as Settings['autoApprove'], schedule: r.schedule, triggers: r.triggers as Settings['triggers'],
-  paused: r.paused, dailyLimit: r.dailyLimit, monthlyBudget: r.monthlyBudget, lead: r.lead, selfClose: r.selfClose,
+  paused: r.paused, dailyLimit: r.dailyLimit, monthlyBudget: r.monthlyBudget, lead: r.lead, selfClose: r.selfClose, jobPermission: r.jobPermission as JobMode | null,
 })
 const ORDER = [1, 2, 3, 4, 5, 6, 0] // the week starts on Monday here
 
@@ -90,6 +96,13 @@ export function RoleSettings({ r, project }: { r: RoleDetail['role']; project: R
         <label className="flex items-start gap-3 text-sm">
           <Checkbox className="mt-0.5" checked={s.autoApprove.includes('goal')} onCheckedChange={() => set({ autoApprove: toggle(s.autoApprove, 'goal') })} />
           <span><span className="font-medium">Set goals</span><br /><span className="text-muted-foreground">New goals appear on the Team tab without asking.</span></span>
+        </label>
+        <label className="flex flex-col gap-1.5 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <span><span className="font-medium">Its coding jobs run with</span><br /><span className="text-muted-foreground">The permission level a job's session starts with. Bypass runs every command without asking.</span></span>
+          <NativeSelect className="sm:w-56" aria-label="Its coding jobs run with" value={s.jobPermission ?? ''} onChange={(e) => set({ jobPermission: (e.target.value || null) as JobMode | null })}>
+            <option value="">The approver's default</option>
+            {JOB_MODES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+          </NativeSelect>
         </label>
         <p className="text-xs text-muted-foreground">Publishing, posting, spending money and contacting people outside the team always come to you.</p>
       </section>

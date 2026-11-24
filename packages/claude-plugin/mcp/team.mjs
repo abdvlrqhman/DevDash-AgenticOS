@@ -152,6 +152,7 @@ const MANAGE = [
       monthly_budget: { type: ['number', 'null'], description: 'Most it may spend per month in USD, or null for no cap.' },
       auto_approve: { type: 'array', items: { type: 'string', enum: ['code', 'goal'] }, description: 'Kinds it may run on its own without a person.' },
       self_close: { type: 'string', enum: ['default', 'always_ask', 'allow'], description: 'How it closes: "default" (operators self-close at 8+, advisors ask), "always_ask" (never self-close), "allow" (may self-close even as an advisor).' },
+      job_permission_mode: { type: ['string', 'null'], enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto', null], description: "The permission level its coding jobs (approved code proposals) start with, e.g. bypassPermissions; null: the approving member's own default. Change it only when the person asks." },
     }, ['role']),
   },
   {

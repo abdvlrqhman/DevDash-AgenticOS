@@ -195,6 +195,17 @@ test("session settings: model, effort and advisor freely; the permission level o
   await assert.rejects(set({ permission_mode: 'root' }), /permission_mode is one of/)
 })
 
+test('session_archive archives a session (DevDash\'s delete) and brings it back', async () => {
+  const { assistant, rpc, sent, db, ann } = setup()
+  const { sessionId } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'Europe/Berlin' })
+  assert.match(String(await rpc('ann', 'session_archive', sessionId, { id: 'plain' })), /Archived "Fix login"/)
+  assert.equal((db.prepare("select archived from claude_sessions where id = 'plain'").get() as { archived: number }).archived, 1)
+  assert.ok(sent.some((r) => r.op === 'claude.stop' && r.id === 'plain'), 'it stops')
+  assert.match(String(await rpc('ann', 'session_archive', sessionId, { id: 'plain', archived: false })), /back in the lists/)
+  assert.equal((db.prepare("select archived from claude_sessions where id = 'plain'").get() as { archived: number }).archived, 0)
+  await assert.rejects(rpc('bob', 'session_archive', sessionId, { id: 'plain' }), /only in your personal agent/)
+})
+
 test('a new project only on the member\'s own word: made like the Projects page makes it, then a session can start there', async () => {
   const { assistant, claude, projects, rpc, sent, db, emit, ann, bob } = setup()
   const { sessionId } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'Europe/Berlin' })

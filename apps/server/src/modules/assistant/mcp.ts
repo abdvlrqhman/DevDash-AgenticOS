@@ -76,9 +76,21 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
   })
 
   on('sessions_list', (c) => {
-    const all = claude.list(c.user, !!c.args.archived).filter((s) => s.id !== c.sessionId)
     const project = str(c.args.project)
-    return all.filter((s) => !project || s.project?.slug === project).filter((s) => !c.args.mine || s.owner.id === c.user.id).slice(0, 60).map(brief)
+    // In a project, everything in it they may open, like its page: team jobs, role chats and shifts too.
+    if (project) {
+      return claude.inProject(c.user, project, !!c.args.archived).sessions.filter((s) => s.id !== c.sessionId && (!c.args.mine || s.owner.id === c.user.id))
+        .slice(0, 80).map((s) => ({ ...brief(s), kind: s.kind, ...(s.role ? { role: s.role.name } : {}) }))
+    }
+    const all = claude.list(c.user, !!c.args.archived).filter((s) => s.id !== c.sessionId)
+    return all.filter((s) => !c.args.mine || s.owner.id === c.user.id).slice(0, 60).map(brief)
+  })
+  // Archive (DevDash's way to delete a session: stopped, out of the lists, its clean worktree removed) or bring one back.
+  on('session_archive', async (c) => {
+    const id = need(c.args.id, 'the session id')
+    const archived = c.args.archived !== false
+    const s = await claude.update(c.user, id, { archived })
+    return archived ? `Archived "${s.title}": stopped and out of the lists; its branch keeps any committed work. session_archive with archived false brings it back.` : `"${s.title}" is back in the lists.`
   })
   on('session_read', async (c) => {
     const id = need(c.args.id, 'the session id')

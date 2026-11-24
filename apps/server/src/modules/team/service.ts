@@ -5,7 +5,7 @@ import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
 import type { ActivityService } from '../activity/service.ts'
 import type { User } from '../auth/repo.ts'
-import { agentName, harnessOf, type ClaudeService, type Harness, type TurnEnd } from '../claude/service.ts'
+import { agentName, harnessOf, PERMISSION_MODES, type ClaudeService, type Harness, type TurnEnd } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import type { ProjectsService } from '../projects/service.ts'
 import type { Priority, TasksService } from '../tasks/service.ts'
@@ -65,6 +65,8 @@ export type RoleInput = { name: string; summary: string; instructions: string; m
 export type RoleSettingsInput = {
   autonomy: 'advisor' | 'operator'; autoApprove: string[]; schedule: unknown[]; triggers: string[]
   paused: boolean; dailyLimit: number; monthlyBudget: number | null; lead?: boolean; selfClose?: SelfClose
+  /** Undefined: unchanged; null: the approver's default. */
+  jobPermission?: string | null
 }
 export type ProposalInput = {
   kind: ProposalKind; title: string; why: string
@@ -153,6 +155,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     const p = db.prepare('select id, slug, name from projects where id = ?').get(r.project_id) as { id: number; slug: string; name: string }
     return { r, p: { ...p } }
   }
+  const jobMode = (v: unknown) => (typeof v === 'string' && (PERMISSION_MODES as readonly string[]).includes(v) ? v : null)
   const settingsOf = (r: RoleRow) => ({
     autonomy: r.autonomy === 'advisor' ? 'advisor' as const : 'operator' as const,
     autoApprove: json<string[]>(r.auto_approve, []).filter((k) => (KINDS as readonly string[]).includes(k)),
@@ -160,6 +163,8 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     triggers: json<string[]>(r.triggers, []).filter((t): t is Trigger => (TRIGGERS as readonly string[]).includes(t)),
     paused: !!r.paused, dailyLimit: r.daily_limit, monthlyBudget: r.monthly_budget, lead: !!r.lead,
     selfClose: (['default', 'always_ask', 'allow'] as const).includes(r.self_close) ? r.self_close : 'default',
+    /** Its coding jobs' permission level; null: the approving member's own default. */
+    jobPermission: jobMode(r.job_permission),
   })
   /** Whether this role may close a confident item directly: 'allow' always, 'always_ask' never, else operators only. */
   const canSelfClose = (s: ReturnType<typeof settingsOf>) => s.selfClose === 'allow' ? true : s.selfClose === 'always_ask' ? false : s.autonomy === 'operator'
@@ -250,9 +255,11 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     }
     if (x.kind === 'code') {
       const d = claude.defaults(user)
+      const role = repo.role(x.role_id)
       const prompt = `${payload.prompt?.trim() || x.title}\n\n(Proposed by the ${x.role_name} role on the DevDash team, approved by ${user.name}. Work on this branch; commit when done.)`
       const s = await claude.create(user, {
-        prompt, images: [], cwd: '', harness: harnessOf(d.harness), profile: d.profile, model: d.model, effort: d.effort, permissionMode: d.permission_mode,
+        prompt, images: [], cwd: '', harness: harnessOf(d.harness), profile: d.profile, model: d.model, effort: d.effort,
+        permissionMode: (role && settingsOf(role).jobPermission) || d.permission_mode, // the role's job setting, else the approver's
         mode: 'chat', project: x.project_slug, worktree: true,
         // Unlisted: it lives under the project's "From approvals" group, not everyone's global session list.
       }, { title: `${x.role_name}: ${x.title}`, origin: { kind: 'proposal', role: x.role_name }, listed: false })
@@ -997,6 +1004,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
         paused: o.paused, dailyLimit: Math.max(0, Math.min(48, Math.round(o.dailyLimit))),
         monthlyBudget: o.monthlyBudget === null ? null : Math.max(0, o.monthlyBudget),
         selfClose: o.selfClose && (['default', 'always_ask', 'allow'] as const).includes(o.selfClose) ? o.selfClose : settingsOf(r).selfClose,
+        jobPermission: o.jobPermission === undefined ? settingsOf(r).jobPermission : jobMode(o.jobPermission),
       })
       if (o.lead !== undefined && o.lead !== !!r.lead) repo.setLead(p.id, id, o.lead)
       const next = repo.role(id)!
@@ -1385,8 +1393,14 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       role: string | number; name?: string; summary?: string; instructions?: string; model?: string | null
       schedule?: unknown[]; triggers?: string[]; autonomy?: string; paused?: boolean; lead?: boolean
       project?: string; dailyLimit?: number; monthlyBudget?: number | null; autoApprove?: string[]; selfClose?: SelfClose
+      jobPermission?: string | null
     }) {
       const who = this.sessionActor(username, sessionId, input.project)
+      // A security setting: the personal agent changes it only on the member's own word, never from a schedule or autopilot.
+      if (input.jobPermission !== undefined && this.personalAgent(username, sessionId) && !claude.typedByOwner(sessionId)) {
+        throw new AppError(403, 'not_asked', `Only ${who.user.name.split(' ')[0]} can change a role's job permission level, by asking you in a message they write. It's unchanged.`)
+      }
+      if (input.jobPermission && !jobMode(input.jobPermission)) throw new AppError(400, 'bad_args', `job_permission_mode is one of: ${PERMISSION_MODES.join(', ')} (or null for the approver's default).`)
       const r = typeof input.role === 'number' ? repo.role(input.role) : roleNamed(who.projectId, String(input.role))
       if (!r || r.archived || r.project_id !== who.projectId) throw new AppError(404, 'not_found', `There is no role ${input.role} in this project. See team_roles.`)
       if (input.name !== undefined || input.summary !== undefined || input.instructions !== undefined || input.model !== undefined) {
@@ -1406,6 +1420,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
         dailyLimit: input.dailyLimit ?? s.dailyLimit,
         monthlyBudget: input.monthlyBudget !== undefined ? input.monthlyBudget : s.monthlyBudget,
         selfClose: input.selfClose ?? s.selfClose,
+        jobPermission: input.jobPermission,
       })
       return `Updated ${repo.role(r.id)!.name}.`
     },
@@ -1507,6 +1522,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
         roles: o.roles.map((r) => ({
           id: r.id, name: r.name, summary: r.summary, model: r.model, lead: r.lead, paused: r.paused, autonomy: r.autonomy,
           autoApprove: r.autoApprove, schedule: r.schedule, triggers: r.triggers, dailyLimit: r.dailyLimit, monthlyBudget: r.monthlyBudget,
+          jobPermission: r.jobPermission,
         })),
       }
     },

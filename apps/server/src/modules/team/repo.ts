@@ -8,6 +8,7 @@ export type RoleRow = {
   autonomy: 'advisor' | 'operator'; auto_approve: string; schedule: string; triggers: string; schedule_state: string
   paused: number; daily_limit: number; monthly_budget: number | null; last_triggered: number; lead: number
   self_close: 'default' | 'always_ask' | 'allow'
+  job_permission: string | null
 }
 export type SelfClose = RoleRow['self_close']
 export type ShiftRow = {
@@ -47,7 +48,7 @@ export type SourceRow = {
 }
 export type RoleSettings = {
   autonomy: 'advisor' | 'operator'; autoApprove: string[]; schedule: unknown[]; triggers: string[]
-  paused: boolean; dailyLimit: number; monthlyBudget: number | null; selfClose: SelfClose
+  paused: boolean; dailyLimit: number; monthlyBudget: number | null; selfClose: SelfClose; jobPermission: string | null
 }
 
 // node:sqlite rows have no prototype; plain objects compare and serialize like any other.
@@ -66,7 +67,7 @@ export function teamRepo(db: Db) {
     newActivity: db.prepare(`select id, kind, summary, via_claude from activity where project_id = ? and id > ? order by id limit 200`),
     lastActivity: db.prepare(`select coalesce(max(id), 0) as id from activity`),
     roleSettings: db.prepare(`update team_roles set autonomy = ?, auto_approve = ?, schedule = ?, triggers = ?, paused = ?, daily_limit = ?,
-      monthly_budget = ?, self_close = ?, updated_at = unixepoch() where id = ?`),
+      monthly_budget = ?, self_close = ?, job_permission = ?, updated_at = unixepoch() where id = ?`),
     scheduleState: db.prepare(`update team_roles set schedule_state = ? where id = ?`),
     triggered: db.prepare(`update team_roles set last_triggered = ? where id = ?`),
     autoShiftsSince: db.prepare(`select count(*) as n from team_shifts where role_id = ? and trigger != 'manual' and started_at >= ?`),
@@ -223,7 +224,7 @@ export function teamRepo(db: Db) {
     newActivity: (projectId: number, after: number) => all<{ id: number; kind: string; summary: string; via_claude: number }>(s.newActivity.all(projectId, after)),
     lastActivity: () => (s.lastActivity.get() as { id: number }).id,
     roleSettings: (id: number, o: RoleSettings) => void s.roleSettings.run(
-      o.autonomy, JSON.stringify(o.autoApprove), JSON.stringify(o.schedule), JSON.stringify(o.triggers), o.paused ? 1 : 0, o.dailyLimit, o.monthlyBudget, o.selfClose, id),
+      o.autonomy, JSON.stringify(o.autoApprove), JSON.stringify(o.schedule), JSON.stringify(o.triggers), o.paused ? 1 : 0, o.dailyLimit, o.monthlyBudget, o.selfClose, o.jobPermission, id),
     scheduleState: (id: number, state: Record<string, string>) => void s.scheduleState.run(JSON.stringify(state), id),
     triggered: (id: number, at: number) => void s.triggered.run(at, id),
     autoShiftsSince: (roleId: number, since: number) => (s.autoShiftsSince.get(roleId, since) as { n: number }).n,

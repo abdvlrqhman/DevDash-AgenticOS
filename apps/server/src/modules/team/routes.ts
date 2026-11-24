@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { AppError, json, query } from '../../core/http.ts'
 import type { AuthEnv, authMiddleware } from '../auth/routes.ts'
 import { TRIGGERS } from './schedule.ts'
-import { HARNESSES } from '../claude/service.ts'
+import { HARNESSES, PERMISSION_MODES } from '../claude/service.ts'
 import { CLOSE_AS, MESSAGE_KINDS, type TeamService } from './service.ts'
 import { SOURCE_KINDS } from './sources.ts'
 
@@ -169,6 +169,7 @@ export function teamRoutes(team: TeamService | null, mw: ReturnType<typeof authM
       monthlyBudget: z.number().min(0).max(100_000).nullable(),
       lead: z.boolean().optional(),
       selfClose: z.enum(['default', 'always_ask', 'allow']).optional(),
+      jobPermission: z.enum(PERMISSION_MODES).nullable().optional(),
     })), (c) => c.json({ role: t().roleSettings(id(c.req.param('id')), c.req.valid('json')) }))
     .get('/roles/:id', (c) => c.json(t().role(id(c.req.param('id')))))
     .put('/roles/:id', json(RoleInput), (c) => c.json({ role: t().updateRole(id(c.req.param('id')), c.req.valid('json')) }))

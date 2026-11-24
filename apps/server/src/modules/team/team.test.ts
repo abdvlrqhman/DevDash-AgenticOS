@@ -517,6 +517,32 @@ test('roles start shifts on their own: on schedule, on triggers, within their da
   assert.equal(activityTrigger({ kind: 'task.created', summary: 'created x', via_claude: 1 }), null) // roles' own tasks never wake roles
 })
 
+test("a role's coding jobs start with its job permission level; the personal agent sets it only on the member's word", async (t) => {
+  const { team, claude, yara, omar, db, event } = setup()
+  t.after(() => team.stop())
+  team.enable(yara, 'shop')
+  const cto = team.createRole(yara, 'shop', { name: 'CTO', summary: '', instructions: '', model: null })
+  assert.equal(team.role(cto.id).role.jobPermission, null, "the approver's default until someone sets it")
+
+  // Hamasa (the member's personal agent, in no project): refused until the member asks in their own message.
+  const s = await claude.create(yara, { prompt: 'Hi', images: [], cwd: '/home/yara', profile: 'default', model: null, effort: null, permissionMode: 'default', mode: 'chat' })
+  db.prepare("update claude_sessions set project_id = null, origin_kind = 'assistant', listed = 0 where id = ?").run(s.id)
+  assert.throws(() => team.sessionUpdateRole('yara', s.id, { role: 'cto', project: 'shop', jobPermission: 'bypassPermissions' }), /Only Yara can change a role's job permission level/)
+  event('yara', { ev: 'claude.status', id: s.id, status: 'idle' }) // its first turn ended
+  await claude.send(yara, s.id, 'Let the CTO jobs run in bypass', [], [], [], { typed: true })
+  team.sessionUpdateRole('yara', s.id, { role: 'cto', project: 'shop', jobPermission: 'bypassPermissions' })
+  assert.equal(team.role(cto.id).role.jobPermission, 'bypassPermissions')
+  assert.throws(() => team.sessionUpdateRole('yara', s.id, { role: 'cto', project: 'shop', jobPermission: 'root' }), /job_permission_mode is one of/)
+
+  await team.propose(cto.id, { kind: 'code', title: 'Add retry', why: 'stuck users', prompt: 'Add a retry button.' })
+  const [x] = team.approvals('pending')
+  await team.decide(omar, x!.id, true, '')
+  const job = db.prepare("select permission_mode from claude_sessions where origin_kind = 'proposal' order by rowid desc limit 1").get() as { permission_mode: string }
+  assert.equal(job.permission_mode, 'bypassPermissions', 'the job starts with the role setting, not the approver default')
+  team.roleSettings(cto.id, { ...team.role(cto.id).role, jobPermission: null })
+  assert.equal(team.role(cto.id).role.jobPermission, null, 'back to the approver default')
+})
+
 test('proposals: an operator adds tasks itself; code waits for a person, runs as them, and the answer reaches the notebook', async (t) => {
   const { team, sent, tasks, notified, yara, omar } = setup()
   t.after(() => team.stop())

@@ -11,7 +11,7 @@ const days = {
 export const ASSISTANT_TOOLS = [
   {
     name: 'sessions_list',
-    description: "Coding sessions you can see: the person's own and ones teammates shared, newest first, with status (working, waiting = blocked on a person, idle, error), agent, project and link.",
+    description: "Coding sessions you can see: the person's own and ones teammates shared, newest first, with status (working, waiting = blocked on a person, idle, error), agent, project and link. With project: everything in it, team roles' coding jobs, chats and shifts included (kind says which).",
     inputSchema: obj({ project: { type: 'string', description: 'Only this project.' }, mine: { type: 'boolean', description: "Only the person's own." }, archived: { type: 'boolean' } }),
   },
   {
@@ -66,6 +66,11 @@ export const ASSISTANT_TOOLS = [
       id, answers: { type: 'object', description: '{"<the question, exactly>": "<the chosen option\'s label, or your answer>"}', additionalProperties: { type: 'string' } },
       tier: { type: 'string', enum: ['green', 'yellow'] }, why: { type: 'string' },
     }, ['id', 'answers', 'tier', 'why']),
+  },
+  {
+    name: 'session_archive',
+    description: "Archive one of the person's sessions (DevDash's way to delete one: it stops, leaves the lists, and its worktree goes if nothing is uncommitted; committed work stays on its branch), or bring it back with archived false. Only their own sessions.",
+    inputSchema: obj({ id, archived: { type: 'boolean', description: 'false to bring it back. Default true.' } }, ['id']),
   },
   {
     name: 'session_settings',

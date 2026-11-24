@@ -87,6 +87,7 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
       monthlyBudget: a.monthly_budget === null ? null : typeof a.monthly_budget === 'number' ? a.monthly_budget : undefined,
       autoApprove: Array.isArray(a.auto_approve) ? a.auto_approve.filter((x): x is string => typeof x === 'string') : undefined,
       selfClose: a.self_close === 'default' || a.self_close === 'always_ask' || a.self_close === 'allow' ? a.self_close : undefined,
+      jobPermission: a.job_permission_mode === null ? null : typeof a.job_permission_mode === 'string' ? a.job_permission_mode : undefined,
     })
   })
   // Data sources: a person's own sessions too ("connect our database for the team"). Keys are best pasted on the Team tab.
