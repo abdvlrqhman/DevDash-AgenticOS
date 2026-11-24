@@ -7,14 +7,14 @@ import { requestLine } from '../../core/unix.ts'
 import type { User } from '../auth/repo.ts'
 
 const NEKO = 'http://127.0.0.1:8090/browser'
-const IDLE_MS = 30 * 60_000
+const IDLE_MS = 15 * 60_000
 const ENV_FILE = '/etc/devdash/browser.env'
 
 type Invite = { id: number; token_hash: string; token_sealed: string; label: string; can_control: number; expires_at: number; created_by: number; created_at: number; revoked_at: number | null; creator_name: string }
 
 /**
  * The team's shared remote browser: one Chromium (neko) in Docker, started by the root helper when someone opens it
- * and stopped after 30 minutes with nobody watching. Logins and cookies persist in a volume between runs.
+ * and stopped after 15 minutes with nobody watching. Logins and cookies persist in a volume between runs.
  *
  * Members join under their own name with full control; invite links let guests watch only. Caddy lets a request reach
  * /browser/ only with a DevDash session or a live invite cookie, so a revoked or expired invite stops working at once.
@@ -71,18 +71,28 @@ export function browserService({ db, runDir, dataDir, masterKey, origin }: { db:
     }
   }
 
-  // Every minute: an unwatched browser stops after 30 minutes.
+  // Check once after startup in case a browser container was already running across a DevDash restart,
+  // avoiding a helper + docker inspect spawn every minute while the browser is stopped.
+  let startupChecked = false
+  if (runDir) {
+    setTimeout(() => {
+      if (startupChecked || lastSeen) return
+      startupChecked = true
+      void helper<{ running: boolean }>('browser-status')
+        .then((r) => { if (r.running && !lastSeen) lastSeen = Date.now() })
+        .catch(() => {})
+    }, 5_000).unref()
+  }
+
+  // Every minute (only while running): an unwatched browser stops after 15 minutes.
   setInterval(() => {
     void (async () => {
-      if (!runDir) return
-      if (!lastSeen) {
-        const r = await helper<{ running: boolean }>('browser-status').catch(() => ({ running: false }))
-        if (r.running) lastSeen = Date.now() // found running (e.g. after a DevDash restart): start counting
-      } else if (Date.now() - lastSeen > IDLE_MS) {
+      if (!runDir || !lastSeen) return
+      if (Date.now() - lastSeen > IDLE_MS) {
         if (await anyoneWatching()) lastSeen = Date.now()
         else {
           lastSeen = 0
-          console.log('browser stopped: nobody watched for 30 minutes')
+          console.log('browser stopped: nobody watched for 15 minutes')
           await helper('browser-stop').catch((err) => console.error('browser stop:', (err as Error).message))
         }
       }
