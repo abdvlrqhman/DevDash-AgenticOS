@@ -183,7 +183,7 @@ test('the socket: refused with a reason when voice is off, else wired into the c
   const SESSION = '11111111-2222-3333-4444-555555555555', OTHERS = '99999999-2222-3333-4444-555555555555'
   const sent: string[] = []
   const claude = {
-    send: async (_u: User, id: string, text: string) => { sent.push(`${id}:${text}`); return 'uuid' },
+    send: async (_u: User, id: string, text: string) => { sent.push(`${id}:${text}`); listener?.(id, { type: 'user', message: { content: [{ type: 'text', text }] } }); return 'uuid' },
     interrupt: async () => {},
     onMessage: (fn: (id: string, m: unknown) => void) => { listener = fn; return () => { listener = null } },
     onPrompt: (fn: (s: { id: string }, r: { toolName: string }) => void) => { prompt = fn; return () => { prompt = null } },
@@ -216,7 +216,7 @@ test('the socket: refused with a reason when voice is off, else wired into the c
   ws.emit('message', Buffer.from(JSON.stringify({ type: 'send' })), false) // tapped Send: no waiting out the pause
   await new Promise((r) => setImmediate(r))
   assert.equal(sent.length, 1)
-  assert.match(sent[0]!, /^chat-1:<devdash-voice lang="en"\/>\n\nhello there$/)
+  assert.match(sent[0]!, /^chat-1:<devdash-voice lang="en"\/>\n<system-reminder>[\s\S]*<\/system-reminder>\n\nhello there$/)
   listener!('other-session', { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '<voice>Not this one.</voice>' } } })
   listener!('chat-1', { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '<voice>Hi.</voice>' } } })
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))

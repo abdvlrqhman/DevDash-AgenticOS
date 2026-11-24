@@ -20,5 +20,9 @@ export function splitReply(text: string): { spoken: string; written: string } {
 /** The reply as plain text, spoken part first: to copy it, or to tell whether there's anything to show. Pure, tested. */
 export const plainReply = (text: string) => { const r = splitReply(text); return [r.spoken, r.written].filter(Boolean).join('\n\n') }
 
+/** A reply to a message that wasn't spoken: its <voice> blocks become ordinary text (cues dropped). Pure, tested. */
+export const unwrapVoice = (text: string) =>
+  text.includes('<voice') ? text.replace(PARTIAL_TAG, '').replace(BLOCK, (_, inner: string) => inner.replace(CUE, ' ').replace(/[ \t]{2,}/g, ' ').trim()).trim() : text
+
 /** A message they spoke: the tag the voice pipeline adds after the page tag. */
 export const VOICE_TAG_RE = /^\s*<devdash-voice\b[^>]*\/>\s*/

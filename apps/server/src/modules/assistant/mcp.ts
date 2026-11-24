@@ -1,7 +1,7 @@
 import { AppError } from '../../core/http.ts'
 import type { AgentsService } from '../agents/service.ts'
 import type { User } from '../auth/repo.ts'
-import { HARNESSES, PERMISSION_MODES, type ClaudeService, type Harness } from '../claude/service.ts'
+import { ADVISORS, HARNESSES, PERMISSION_MODES, type ClaudeService, type Harness } from '../claude/service.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { Create as ProjectCreate } from '../projects/routes.ts'
 import type { ProjectsService } from '../projects/service.ts'
@@ -103,7 +103,7 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     const project = str(c.args.project)
     const s = await claude.create(c.user, {
       prompt, images: [], cwd: str(c.args.folder) ?? '~', harness, profile: str(c.args.profile) ?? (same ? d.profile : 'default'),
-      model: str(c.args.model) ?? (same ? d.model : null), effort: same ? d.effort : null, permissionMode: mode, mode: 'chat',
+      model: str(c.args.model) ?? (same ? d.model : null), effort: str(c.args.effort) ?? (same ? d.effort : null), permissionMode: mode, mode: 'chat',
       project, worktree: project ? c.args.worktree !== false : undefined,
     })
     // Followed from its first message: its whole run reports back here.
@@ -128,6 +128,32 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     const uuid = await claude.send(c.user, id, `(From ${AGENT_NAME}, ${first}'s personal agent) ${text}`, [])
     follow?.sent(c.user, id, uuid)
     return `Sent. Check on it with session_read; it's at /sessions/${id}.`
+  })
+  // A session's model, effort, permission level and advisor, as its menus set them (claude.update: who may, applied live).
+  on('session_settings', async (c) => {
+    const id = need(c.args.id, 'the session id')
+    const a = c.args
+    const mode = str(a.permission_mode)
+    if (mode !== undefined) {
+      if (!(PERMISSION_MODES as readonly string[]).includes(mode)) throw new AppError(400, 'bad_args', `permission_mode is one of: ${PERMISSION_MODES.join(', ')}.`)
+      // A security setting: only on their word, in a message they write to you now; never from a schedule or autopilot.
+      if (!claude.typedByOwner(c.sessionId)) {
+        const first = c.user.name.split(' ')[0]
+        throw new AppError(403, 'not_asked', `Only ${first} can change a session's permission level, by asking you in a message they write here. This turn didn't come from that, so it's unchanged.`)
+      }
+    }
+    const advisor = str(a.advisor)
+    if (advisor !== undefined && advisor !== 'off' && !(ADVISORS as readonly string[]).includes(advisor)) throw new AppError(400, 'bad_args', `advisor is "off" or one of: ${ADVISORS.join(', ')}.`)
+    const patch = {
+      model: a.model === null ? null : str(a.model), effort: a.effort === null ? null : str(a.effort), permissionMode: mode,
+      advisorModel: advisor === undefined ? undefined : advisor === 'off' ? null : advisor,
+    }
+    if (Object.values(patch).every((v) => v === undefined)) throw new AppError(400, 'bad_args', 'Say what to change: model, effort, permission_mode or advisor.')
+    const s = await claude.update(c.user, id, patch)
+    return {
+      session: s.title, url: `/sessions/${s.id}`, model: s.model ?? 'default', effort: s.effort ?? 'default', permission_mode: s.permissionMode,
+      advisor: s.advisorModel ?? 'off', note: s.mode === 'chat' ? 'Applied now; a turn already running finishes as it was.' : 'Applies when its terminal app next starts.',
+    }
   })
   on('session_stop', async (c) => {
     await claude.interrupt(c.user, need(c.args.id, 'the session id'))

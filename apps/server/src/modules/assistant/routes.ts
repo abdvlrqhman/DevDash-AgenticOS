@@ -15,6 +15,8 @@ const Settings = z.object({
   reachTailnet: z.boolean().optional(),
   drive: z.boolean().optional(),
 })
+const Switch = z.object({ harness: z.enum(HARNESSES) })
+const Seen = z.object({ sessionId: z.string().min(1).max(100).optional() })
 const Follow = z.object({ sessionId: z.string().min(1).max(100), goal: z.string().min(1).max(300) })
 const SchedulePatch = z.object({ enabled: z.boolean().optional(), title: z.string().max(80).optional(), prompt: z.string().max(8000).optional() })
 
@@ -27,8 +29,9 @@ export function assistantRoutes(assistant: AssistantService, mw: ReturnType<type
     .get('/', (c) => c.json(full(c.get('user'), assistant.state(c.get('user')))))
     .put('/', json(Setup), async (c) => c.json(full(c.get('user'), await assistant.setup(c.get('user'), c.req.valid('json')))))
     .patch('/', json(Settings), async (c) => c.json(full(c.get('user'), await assistant.settings(c.get('user'), c.req.valid('json')))))
+    .post('/switch', json(Switch), async (c) => c.json(full(c.get('user'), await assistant.switchTo(c.get('user'), c.req.valid('json').harness))))
     .post('/new', async (c) => c.json(full(c.get('user'), await assistant.fresh(c.get('user')))))
-    .post('/seen', (c) => c.json(full(c.get('user'), assistant.seen(c.get('user')))))
+    .post('/seen', json(Seen), (c) => c.json(full(c.get('user'), assistant.seen(c.get('user'), c.req.valid('json').sessionId))))
     // Following sessions (in testing: an admin turns it on for themself).
     .put('/following', json(z.object({ on: z.boolean() })), (c) => {
       follow.setOn(c.get('user'), c.req.valid('json').on)

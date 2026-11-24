@@ -61,6 +61,33 @@ export async function providers(profile: string): Promise<string[]> {
   return [...new Set(names.filter((n): n is string => !!n))]
 }
 
+/**
+ * OpenCode's background server (what its terminal app starts) listens on one fixed port for everyone (49374), so on a
+ * shared server only the first member's starts and the others get "port already in use". Each member gets one of their
+ * own from their Linux uid, outside DevDash's service ports (20000-20999). Pure, tested.
+ */
+export const servicePort = (uid: number) => 21000 + (uid % 1000)
+/** The port to set, from `opencode service get`'s answer: none when they already have one (theirs stays) or it's unclear. */
+export function portToSet(got: string, uid: number) {
+  try {
+    const c = JSON.parse(got) as unknown
+    return c && typeof c === 'object' && !Array.isArray(c) && !('port' in c) ? servicePort(uid) : null
+  } catch {
+    return null
+  }
+}
+/**
+ * Gives the member's background server its own port, once. A server still running on the old one isn't theirs to
+ * OpenCode anymore: their next `opencode` starts one on the new port and the old port is free again.
+ */
+export async function ensureServicePort(uid = process.getuid?.() ?? 0) {
+  if (!installed()) return null
+  const got = await run(OPENCODE_BIN, ['service', 'get'], { timeout: 15_000, cwd: homedir() }).then((r) => r.stdout)
+  const port = portToSet(got, uid)
+  if (port !== null) await run(OPENCODE_BIN, ['service', 'set', 'port', String(port)], { timeout: 15_000, cwd: homedir() })
+  return port
+}
+
 /** Every model the profile can use, as provider/model ids. */
 export async function models(profile: string): Promise<string[]> {
   const out = await opencode(profile, ['models'], 45_000).catch(() => '')

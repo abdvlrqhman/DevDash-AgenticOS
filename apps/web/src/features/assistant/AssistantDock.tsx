@@ -57,23 +57,22 @@ function Launcher() {
   )
 }
 
-/** Whether the agent wrote in their chat since they last looked. */
+/** Whether the agent wrote in either of their chats since they last looked. */
 export const useAssistantUnread = () => !!useQuery(assistantQuery).data?.unread
 
-/** Their chat with the agent in sight (the panel, or its full page a notification opens): what it wrote is seen. */
+/** One of their chats with the agent in sight (the panel, or its full page a notification opens): what it wrote is seen. */
 export function useMarkSeen(id: string) {
   const qc = useQueryClient()
-  const st = useQuery(assistantQuery).data
-  const due = st?.sessionId === id && st.unread
+  const due = !!useQuery(assistantQuery).data?.chats.some((c) => c.sessionId === id && c.unread)
   useEffect(() => {
     if (!due) return
     const look = () => {
-      if (document.visibilityState === 'visible') void unwrap(api.api.assistant.seen.$post()).then((r) => qc.setQueryData(assistantQuery.queryKey, r), () => {})
+      if (document.visibilityState === 'visible') void unwrap(api.api.assistant.seen.$post({ json: { sessionId: id } })).then((r) => qc.setQueryData(assistantQuery.queryKey, r), () => {})
     }
     look()
     document.addEventListener('visibilitychange', look)
     return () => document.removeEventListener('visibilitychange', look)
-  }, [due, qc])
+  }, [due, id, qc])
 }
 
 /** The agent showing a page (its open_page tool), the panel's data changing elsewhere, and the keyboard shortcut. */
@@ -113,9 +112,13 @@ export function useAssistantStatus(): Session['status'] | null {
   return s?.status ?? null
 }
 
-/** The agent's mark, with a dot while it works (pulsing), waits for the person (amber) or wrote something they haven't seen (blue). */
+/** A chat's dot: while it works (pulsing), waits for the person (amber) or wrote something they haven't seen (blue). */
+export const statusDot = (status: Session['status'] | null, unread?: boolean) =>
+  status === 'waiting' ? 'bg-attention' : status === 'working' ? 'animate-pulse bg-emerald-500' : unread ? 'bg-sky-500' : null
+
+/** The agent's mark, with its chat's dot. */
 export function AgentGlyph({ status, unread, className }: { status: Session['status'] | null; unread?: boolean; className?: string }) {
-  const dot = status === 'waiting' ? 'bg-attention' : status === 'working' ? 'animate-pulse bg-emerald-500' : unread ? 'bg-sky-500' : null
+  const dot = statusDot(status, unread)
   return (
     <span className={cn('relative inline-flex', className)}>
       <Bot className="size-4" />

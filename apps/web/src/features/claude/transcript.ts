@@ -1,7 +1,7 @@
 // Turns Claude messages (transcript history from the SDK and live SDK events share the same shape) into display
 // blocks. Tool results attach to their tool call; subagent messages nest under the Task/Agent call that spawned them.
 // Pure and DOM-free so it can be tested with node:test.
-import { plainReply, VOICE_TAG_RE } from '../voice/reply.ts'
+import { plainReply, unwrapVoice, VOICE_TAG_RE } from '../voice/reply.ts'
 
 type Content = { type: string; [k: string]: unknown }
 type Origin = { kind?: string; subkind?: string; from?: string; name?: string; server?: string; body?: string }
@@ -111,6 +111,9 @@ export function buildTranscript(raws: Raw[]): Block[] {
   const top: Block[] = []
   const tools = new Map<string, ToolBlock>()
   const into = (parent?: string | null) => (parent ? tools.get(parent)?.children : undefined) ?? top
+  // Whether the message these replies answer was spoken: only then is a <voice> block a spoken line. A reply to a typed
+  // message, a wake-up or a reminder shows its <voice> text as ordinary text, once.
+  let voiceTurn = false
 
   raws.forEach((r, i) => {
     const key = r.uuid ?? `i${i}`
@@ -120,7 +123,8 @@ export function buildTranscript(raws: Raw[]): Block[] {
       content.forEach((b, j) => {
         const k = `${key}:${j}`
         const list = into(r.parent_tool_use_id)
-        if (b.type === 'text' && plainReply(String(b.text ?? '')).trim()) list.push({ kind: 'text', key: k, text: String(b.text), ...(r.cwd ? { cwd: r.cwd } : {}) })
+        const said = voiceTurn || r.parent_tool_use_id ? String(b.text ?? '') : unwrapVoice(String(b.text ?? ''))
+        if (b.type === 'text' && plainReply(said).trim()) list.push({ kind: 'text', key: k, text: said, ...(r.cwd ? { cwd: r.cwd } : {}) })
         else if (b.type === 'thinking' && String(b.thinking ?? '').trim()) list.push({ kind: 'thinking', key: k, text: String(b.thinking) })
         else if (b.type === 'tool_use' || b.type === 'server_tool_use' || b.type === 'mcp_tool_use') {
           const name = b.type === 'mcp_tool_use' ? `mcp__${String(b.server_name ?? 'mcp')}__${String(b.name)}` : String(b.name)
@@ -145,6 +149,7 @@ export function buildTranscript(raws: Raw[]): Block[] {
       }
       if (r.parent_tool_use_id) return // a subagent's prompt: the tool call already shows it
       const text = typeof content === 'string' ? content : Array.isArray(content) ? content.filter((b) => b.type === 'text').map((b) => String(b.text)).join('\n') : ''
+      if (text.trim()) voiceTurn = VOICE_TAG_RE.test(text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/^\s*<devdash-page\b[^>]*\/>\s*/, ''))
       const images = Array.isArray(content) ? imagesOf(content) : []
       // PDFs and text files sent as documents: shown by name.
       const files = Array.isArray(content) ? content.filter((b) => b.type === 'document').map((b) => String(b.title ?? 'File')) : []
@@ -277,4 +282,16 @@ export function sessionFacts(blocks: Block[]) {
   }
   walk(blocks)
   return { todos, files: [...files.values()] }
+}
+
+/** Whether the latest message sent in this conversation was spoken (its replies may be spoken lines). Pure, tested. */
+export function lastTurnSpoken(raws: Raw[]): boolean {
+  for (let i = raws.length - 1; i >= 0; i--) {
+    const r = raws[i]!
+    if (r.type !== 'user' || r.parent_tool_use_id) continue
+    const c = r.message?.content
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => b.type === 'text').map((b) => String(b.text)).join('\n') : ''
+    if (text.trim()) return VOICE_TAG_RE.test(text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/^\s*<devdash-page\b[^>]*\/>\s*/, ''))
+  }
+  return false
 }

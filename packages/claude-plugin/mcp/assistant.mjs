@@ -30,6 +30,7 @@ export const ASSISTANT_TOOLS = [
       agent: { type: 'string', enum: ['claude', 'opencode'] },
       profile: { type: 'string', description: 'Account (profile) name.' },
       model: { type: 'string' },
+      effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'], description: 'Claude Code: how hard it thinks.' },
       permission_mode: { type: 'string', enum: ['default', 'acceptEdits', 'bypassPermissions', 'plan'] },
       follow: { type: 'string', description: 'Follow it from the start (see session_follow): the goal in one line. When they asked you for this work.' },
     }, ['prompt']),
@@ -65,6 +66,17 @@ export const ASSISTANT_TOOLS = [
       id, answers: { type: 'object', description: '{"<the question, exactly>": "<the chosen option\'s label, or your answer>"}', additionalProperties: { type: 'string' } },
       tier: { type: 'string', enum: ['green', 'yellow'] }, why: { type: 'string' },
     }, ['id', 'answers', 'tier', 'why']),
+  },
+  {
+    name: 'session_settings',
+    description: "Change a session's settings, as its menus do: model, effort, permission level, and the advisor (Claude Code's stronger reviewer model; \"off\" turns it off). Applied to a Chat session right away. Change the permission level only when the person asks you to, in a message they write you now: DevDash refuses it otherwise.",
+    inputSchema: obj({
+      id,
+      model: { type: ['string', 'null'], description: 'A model name (e.g. "opus", "sonnet"; OpenCode: provider/model), or null for the default.' },
+      effort: { type: ['string', 'null'], enum: ['low', 'medium', 'high', 'xhigh', 'max', null], description: 'Claude Code: how hard it thinks; null for the default.' },
+      permission_mode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto'] },
+      advisor: { type: 'string', enum: ['off', 'sonnet', 'opus', 'fable'], description: 'Claude Code sessions only.' },
+    }, ['id']),
   },
   {
     name: 'session_stop',

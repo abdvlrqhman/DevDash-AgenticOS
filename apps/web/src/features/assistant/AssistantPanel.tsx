@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, CalendarClock, Ellipsis, Eraser, ExternalLink, Maximize2, Minimize2, Minus, Settings2, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, CalendarClock, Ellipsis, Eraser, ExternalLink, Maximize2, Minimize2, Minus, Settings2, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { confirmAction } from '@/components/app/confirm'
 import { NativeSelect } from '@/components/app/native-select'
 import { Button } from '@/components/ui/button'
@@ -11,13 +11,14 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, unwrap } from '@/lib/api'
+import { useTopic } from '@/lib/live'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { modeLabel, profilesQuery, relativeTime, sessionQuery, STATUS_LABEL, type Session } from '../claude/data'
 import { HARNESS, HARNESSES, harnessOf, type Harness } from '../claude/harness'
 import { ModelMenu, SessionView, type Updater } from '../claude/SessionPage'
-import { AgentGlyph, assistantQuery } from './AssistantDock'
+import { AgentGlyph, assistantQuery, statusDot } from './AssistantDock'
 import { AGENT_NAME, pageTag, panelCoversPage, setAssistantOpen, showingSession, toggleBig, useBig } from './store'
 import { openVoiceSettings, useVoice, VoiceBar, VoiceButton, voiceQuery } from '../voice/VoiceMode'
 import { FollowSetting, FollowStrip } from './Following'
@@ -84,6 +85,7 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
   const talking = snap.phase !== 'off'
   const toVoiceSettings = () => { closeOnPhones(); openVoiceSettings(navigate, { path: `${location.pathname}${location.search}`, label: 'where you were' }) }
   const active = st.schedules.filter((s) => s.enabled).length
+  const other = useOtherChat(st)
 
   const header = (
     <header className="flex min-h-12 shrink-0 items-center gap-0.5 border-b pt-[env(safe-area-inset-top)] pr-2 pl-3">
@@ -96,17 +98,34 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
       </div>
       {/* Model, effort and permission level, one tap away; kept for new conversations too. */}
       {session && <ModelMenu s={session} disabled={false} isOwner compact onUpdate={settings} />}
-      {/* One conversation: clearing it starts afresh (the old one is archived, not deleted). */}
+      {/* One conversation per agent: clearing this one starts it afresh (the old one is archived, not deleted). */}
       <Button variant="ghost" size="icon" aria-label="Clear conversation" title="Clear conversation" disabled={fresh.isPending} onClick={async () => {
-        if (await confirmAction({ title: 'Clear the conversation?', description: `${AGENT_NAME} starts afresh. Your schedules and settings stay.`, action: 'Clear' })) fresh.mutate()
+        if (await confirmAction({
+          title: 'Clear the conversation?', action: 'Clear',
+          description: `Your ${HARNESS[agent.harness].label} chat with ${AGENT_NAME} starts afresh. Your other chat, schedules and settings stay.`,
+        })) fresh.mutate()
       }}><Eraser /></Button>
       <Button variant="ghost" size="icon" aria-label={`Schedules${active ? ` (${active} on)` : ''}`} title="Schedules" className="relative" onClick={() => onView('schedules')}>
         <CalendarClock />
         {active > 0 && <span className="absolute top-1 right-1 min-w-3.5 rounded-full bg-muted px-0.5 text-[9px] leading-3.5 font-semibold text-foreground tabular-nums">{active}</span>}
       </Button>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="More"><Ellipsis /></Button></DropdownMenuTrigger>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="relative" aria-label={other?.said ? `More (your ${other.label} chat: ${other.said})` : 'More'}>
+            <Ellipsis />
+            {/* The other chat's news, small: it waits behind this menu, not in a bar of its own. */}
+            {other?.dot && <span className={cn('absolute top-1 right-1 size-2 rounded-full ring-2 ring-background', other.dot)} />}
+          </Button>
+        </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-52">
+          {other && (
+            <DropdownMenuItem disabled={other.switching} onSelect={other.switchTo}>
+              <ArrowLeftRight />
+              <span className="flex-1">{other.started ? `Switch to ${other.label}` : `Chat on ${other.label}`}</span>
+              {other.dot && <span className={cn('size-1.5 shrink-0 rounded-full', other.dot)} />}
+              {other.said && <span className="text-xs text-muted-foreground">{other.said}</span>}
+            </DropdownMenuItem>
+          )}
           {id && <DropdownMenuItem onSelect={() => { closeOnPhones(); void navigate({ to: '/sessions/$id', params: { id } }) }}><ExternalLink />Open as a full page</DropdownMenuItem>}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => onView('settings')}><Settings2 />Settings and access…</DropdownMenuItem>
@@ -137,6 +156,37 @@ function Chat({ st, onView }: { st: State; onView: (v: View) => void }) {
 function describe(agent: NonNullable<State['agent']>, s: Session | undefined) {
   const model = (s?.model ?? agent.model)?.replace(/^.*\//, '')
   return [HARNESS[agent.harness].label, model, modeLabel(s?.permissionMode ?? agent.permissionMode)].filter(Boolean).join(' · ')
+}
+
+/**
+ * Hamasa keeps a chat on each agent; the header shows the one they're in. The other one, for the … menu: its agent,
+ * its dot, live (working, waiting for them, or wrote since they looked), and switching to it, which also moves where
+ * schedules hand over, follow-ups wake and voice talks. None when only one agent can be used here.
+ */
+function useOtherChat(st: State) {
+  const qc = useQueryClient()
+  const agents = useQuery(profilesQuery).data?.agents as AgentInfo[] | undefined
+  const current = st.agent!.harness
+  const harness = HARNESSES.find((h) => h !== current)!
+  const chat = st.chats.find((c) => c.harness === harness)
+  const id = chat?.sessionId ?? null
+  const status = useQuery({ ...sessionQuery(id ?? ''), enabled: !!id }).data?.session.status ?? null
+  useTopic(id ? `session:${id}` : null, (e) => {
+    if (e.type === 'session') qc.setQueryData(sessionQuery(id!).queryKey, (old) => (old ? { ...old, session: e.session as Session } : old))
+  })
+  const sw = useMutation({
+    mutationFn: () => unwrap(api.api.assistant.switch.$post({ json: { harness } })),
+    onSuccess: (r) => qc.setQueryData(assistantQuery.queryKey, r),
+    onError: (e) => toast.error(e.message),
+  })
+  // An agent not installed on this server can't be switched to, unless a chat on it is still there to go back to.
+  if (harness !== 'claude' && !chat && !agents?.find((a) => a.harness === harness)?.installed) return null
+  const dot = statusDot(status, chat?.unread)
+  return {
+    label: HARNESS[harness].label, dot, started: !!chat,
+    said: status === 'waiting' ? 'needs you' : status === 'working' ? 'working' : dot ? 'new message' : null,
+    switching: sw.isPending, switchTo: () => sw.mutate(),
+  }
 }
 
 /** Changes Hamasa's settings: kept for new conversations, and the current one follows (the server applies both). */
@@ -186,26 +236,32 @@ function Starters({ send }: { send: (text: string) => void }) {
   )
 }
 
-/** Picking the agent (Claude Code or OpenCode) and the account it runs on. */
+/**
+ * Picking the agent to talk in (Claude Code or OpenCode) and the account it runs on. Each agent keeps its own chat:
+ * picking the other one switches to it, and only another account for an agent starts its chat afresh.
+ */
 function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?: () => void }) {
   const current = st.agent
   const qc = useQueryClient()
   const setup = useQuery(profilesQuery)
   const agents = setup.data?.agents as AgentInfo[] | undefined
   const [harness, setHarness] = useState<Harness | null>(current?.harness ?? null)
-  const [profile, setProfile] = useState(current?.profile ?? 'default')
+  const [profile, setProfile] = useState<string | null>(null) // picked here; otherwise the agent's own
   const picked = harness ?? harnessOf(setup.data?.defaults)
-  useEffect(() => { if (!current && setup.data && harness === null) setProfile(setup.data.defaults.profile) }, [current, setup.data, harness])
+  const chat = st.chats.find((c) => c.harness === picked)
   const installed = (h: Harness) => h === 'claude' || !!agents?.find((a) => a.harness === h)?.installed
   const profiles = picked === 'claude'
     ? ((setup.data?.profiles as { name: string; loggedIn: boolean }[] | undefined) ?? [])
     : (agents?.find((a) => a.harness === picked)?.profiles ?? []).map((p) => ({ name: p.name, loggedIn: true }))
-  const chosen = profiles.find((p) => p.name === profile) ? profile : (profiles[0]?.name ?? 'default')
+  // Its chat's account; for its first chat, the account new sessions get when it's their default agent.
+  const want = profile ?? chat?.profile ?? (setup.data && harnessOf(setup.data.defaults) === picked ? setup.data.defaults.profile : 'default')
+  const chosen = profiles.find((p) => p.name === want) ? want : (profiles[0]?.name ?? 'default')
   const save = useMutation({
     mutationFn: () => unwrap(api.api.assistant.$put({ json: { harness: picked, profile: chosen, tz: Intl.DateTimeFormat().resolvedOptions().timeZone } })),
     onSuccess: (r) => { qc.setQueryData(assistantQuery.queryKey, r); onDone() },
   })
-  const restarts = !!current && (current.harness !== picked || current.profile !== chosen)
+  const switches = !!current && current.harness !== picked
+  const restarts = !!chat && chat.profile !== chosen
   return (
     <>
       <Bar title={current ? 'Settings and access' : `Meet ${AGENT_NAME}`} onBack={onBack} />
@@ -216,17 +272,32 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
             notes and schedules, starts sessions and keeps an eye on them, and asks before it changes anything. Pick what it runs on.
           </p>
         )}
+        {current && (
+          <div>
+            <h2 className="text-sm font-semibold">Agent</h2>
+            <p className="mt-1 text-xs text-pretty text-muted-foreground">
+              {AGENT_NAME} keeps a chat on each agent, with its own conversation, account and model. Pick the one you talk to; the other chat is kept
+              as you left it. The … menu above the chat switches too.
+            </p>
+          </div>
+        )}
         {setup.isPending ? <Skeleton className="h-28" /> : (
-          <RadioGroup value={picked} onValueChange={(v) => setHarness(v as Harness)} className="gap-2">
-            {HARNESSES.map((h) => (
-              <label key={h} className={cn('flex items-start gap-3 rounded-lg border p-3 text-sm has-[[data-state=checked]]:border-primary', !installed(h) && 'opacity-60')}>
-                <RadioGroupItem value={h} disabled={!installed(h)} className="mt-0.5" />
-                <span className="min-w-0">
-                  <span className="block font-medium">{HARNESS[h].label}</span>
-                  <span className="block text-muted-foreground">{installed(h) ? HARNESS[h].hint : 'Not installed on this server: an admin installs it on the Server page.'}</span>
-                </span>
-              </label>
-            ))}
+          <RadioGroup value={picked} onValueChange={(v) => { setHarness(v as Harness); setProfile(null) }} className="gap-2" aria-label="Agent">
+            {HARNESSES.map((h) => {
+              const tag = current?.harness === h ? 'In use' : st.chats.some((c) => c.harness === h && c.sessionId) ? 'Chat kept' : null
+              return (
+                <label key={h} className={cn('flex items-start gap-3 rounded-lg border p-3 text-sm has-[[data-state=checked]]:border-primary', !installed(h) && 'opacity-60')}>
+                  <RadioGroupItem value={h} disabled={!installed(h)} className="mt-0.5" />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 font-medium">
+                      {HARNESS[h].label}
+                      {tag && <span className="rounded-full bg-muted px-1.5 text-[11px] leading-5 font-normal text-muted-foreground">{tag}</span>}
+                    </span>
+                    <span className="block text-muted-foreground">{installed(h) ? HARNESS[h].hint : 'Not installed on this server: an admin installs it on the Server page.'}</span>
+                  </span>
+                </label>
+              )
+            })}
           </RadioGroup>
         )}
         {profiles.length > 1 && (
@@ -241,9 +312,20 @@ function Setup({ st, onDone, onBack }: { st: State; onDone: () => void; onBack?:
         {profiles.find((p) => p.name === chosen)?.loggedIn === false && (
           <p className="text-sm text-attention-foreground">This account isn't signed in. Sign in under <Link to="/sessions/setup" className="underline" onClick={closeOnPhones}>Agent setup</Link> first.</p>
         )}
-        {restarts && <p className="text-xs text-muted-foreground">This clears the conversation and starts it afresh.</p>}
+        {current && (restarts || switches) && (
+          <p className="text-xs text-pretty text-muted-foreground">
+            {restarts ? `This clears your ${HARNESS[picked].label} chat and starts it afresh on this account.`
+              : chat?.sessionId ? `Your ${HARNESS[picked].label} chat opens as you left it.` : `A new chat on ${HARNESS[picked].label}; your other chat stays.`}
+          </p>
+        )}
         <ErrorAlert error={save.error} />
-        {(!current || restarts) && <div><Button type="submit" disabled={save.isPending || setup.isPending}>{current ? 'Switch' : 'Start'}</Button></div>}
+        {(!current || switches || restarts) && (
+          <div>
+            <Button type="submit" disabled={save.isPending || setup.isPending}>
+              {!current ? 'Start' : restarts ? 'Switch account' : `Switch to ${HARNESS[picked].label}`}
+            </Button>
+          </div>
+        )}
         {current && <Access st={st} />}
         {current && <VoiceLink />}
         {current && <FollowSetting st={st} />}

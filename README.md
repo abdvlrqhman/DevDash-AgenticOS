@@ -82,8 +82,8 @@ Every member has their own agent, one shortcut away (⌘I or Ctrl+I) or a tap on
 - **Works on a schedule.** Ask for a morning brief on weekdays, or a one-off check after tonight's deploy. Each schedule
   runs on its own, out of your chat, and stays silent. When something needs you (a check-in, a question, a failure), it
   hands it to your chat: Hamasa writes to you there and you get one notification.
-- **Your agent, your access.** It runs as your own Linux user, on Claude Code or OpenCode, with the model, effort and
-  permission level you pick. Reading is free; anything that changes things asks first unless you choose otherwise. It
+- **Your agent, your access.** It runs as your own Linux user, with a chat on Claude Code and one on OpenCode, each
+  with its own conversation, account, model, effort and permission level (switch in its settings or its … menu). Reading is free; anything that changes things asks first unless you choose otherwise. It
   can reach your tailnet and your Google Drive when you switch them on. It can't answer another session's questions
   for you: it tells you which one is waiting and links it.
 - **A real session underneath.** Questions, permissions, history and notifications work as in any

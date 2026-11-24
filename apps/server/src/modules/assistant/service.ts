@@ -1,7 +1,8 @@
-// Each member's personal agent: one conversation at a time with Claude Code or OpenCode, running as the member in their
-// home folder, with DevDash tools across everything they can see (mcp.ts). Underneath it is an ordinary session
-// (unlisted, origin 'assistant'), so questions, permissions, models, history and notifications work as in any other.
-// Schedules send it a prompt at set times.
+// Each member's personal agent: a chat with it on each agent (Claude Code, OpenCode), side by side with their own
+// context, running as the member in their home folder, with DevDash tools across everything they can see (mcp.ts). The
+// one they last picked is the one they talk in: schedules hand over, follow-ups wake and voice talks there. Underneath
+// each is an ordinary session (unlisted, origin 'assistant'), so questions, permissions, models, history and
+// notifications work as in any other. Schedules send it a prompt at set times.
 import type { Db } from '../../core/db.ts'
 import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
@@ -11,11 +12,18 @@ import { HARNESSES, type ClaudeService, type Harness } from '../claude/service.t
 import type { NotificationKind } from '../notifications/service.ts'
 import { AGENT_NAME, instructions, READ_ONLY } from './prompt.ts'
 
-type Row = {
+/** The member's Hamasa: the agent they talk in now, and what both chats share (what they reach, the time zone). */
+type Member = { user_id: number; harness: Harness; reach_tailnet: number; drive: number; tz: string }
+/** One agent's chat: its account, how it works, its conversation and whether it wrote since they looked; with the shared part. */
+type Chat = {
   user_id: number; harness: Harness; profile: string; model: string | null; effort: string | null; permission_mode: string
-  fast: number; reach_tailnet: number; drive: number; tz: string; session_id: string | null; unread: number
+  fast: number; session_id: string | null; unread: number; reach_tailnet: number; drive: number; tz: string
 }
-/** How the agent works and what it reaches; each change applies to the current conversation too. */
+const CHAT = 'select c.*, a.reach_tailnet, a.drive, a.tz from assistant_chats c join assistants a on a.user_id = c.user_id'
+/**
+ * How the agent works and what it reaches; each change applies to the current conversation too. Model, effort,
+ * permission level and fast mode belong to the chat they talk in (each agent has its own); tailnet and Drive to both.
+ */
 export type Settings = { model?: string | null; effort?: string | null; permissionMode?: string; fastMode?: boolean; reachTailnet?: boolean; drive?: boolean }
 type ScheduleRow = {
   id: number; user_id: number; title: string; prompt: string; slots: string; run_at: number | null; tz: string; ran: string
@@ -77,13 +85,20 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
   driveConnected?: (userId: number) => boolean
 }) {
   const q = {
-    get: db.prepare('select * from assistants where user_id = ?'),
-    put: db.prepare(`insert into assistants (user_id, harness, profile, tz) values (?1, ?2, ?3, ?4)
-      on conflict (user_id) do update set harness = ?2, profile = ?3, tz = ?4`),
-    setSession: db.prepare('update assistants set session_id = ? where user_id = ?'),
-    setUnread: db.prepare('update assistants set unread = ? where user_id = ?'),
-    everyone: db.prepare('select a.*, u.name, u.username from assistants a join users u on u.id = a.user_id where u.disabled_at is null'),
-    settings: db.prepare('update assistants set model = ?, effort = ?, permission_mode = ?, fast = ?, reach_tailnet = ?, drive = ? where user_id = ?'),
+    member: db.prepare('select user_id, harness, reach_tailnet, drive, tz from assistants where user_id = ?'),
+    putMember: db.prepare(`insert into assistants (user_id, harness, tz) values (?1, ?2, ?3)
+      on conflict (user_id) do update set harness = ?2, tz = ?3`),
+    setActive: db.prepare('update assistants set harness = ? where user_id = ?'),
+    access: db.prepare('update assistants set reach_tailnet = ?, drive = ? where user_id = ?'),
+    chat: db.prepare(`${CHAT} where c.user_id = ? and c.harness = ?`),
+    chats: db.prepare(`${CHAT} where c.user_id = ? order by c.harness`),
+    putChat: db.prepare(`insert into assistant_chats (user_id, harness, profile) values (?1, ?2, ?3)
+      on conflict (user_id, harness) do update set profile = ?3`),
+    setSession: db.prepare('update assistant_chats set session_id = ? where user_id = ? and harness = ?'),
+    setUnread: db.prepare('update assistant_chats set unread = ? where user_id = ? and harness = ?'),
+    chatOf: db.prepare('select user_id, harness from assistant_chats where session_id = ?'),
+    agentSettings: db.prepare('update assistant_chats set model = ?, effort = ?, permission_mode = ?, fast = ? where user_id = ? and harness = ?'),
+    everyone: db.prepare('select a.user_id, a.tz, u.name, u.username from assistants a join users u on u.id = a.user_id where u.disabled_at is null'),
     session: db.prepare('select id, archived, started, harness, profile from claude_sessions where id = ?'),
     ofSession: db.prepare(`select u.id, u.email, u.username, u.name, u.role from claude_sessions s join users u on u.id = s.owner_id
       where s.id = ? and u.username = ? and s.origin_kind = 'assistant' and u.disabled_at is null`),
@@ -99,12 +114,30 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     setScheduleSession: db.prepare('update assistant_schedules set session_id = ? where id = ?'),
     bySession: db.prepare('select id, title from assistant_schedules where session_id = ? and user_id = ?'),
     // The schedules' own conversations that are still open (not archived): settings changes reach them too.
-    scheduleSessions: db.prepare(`select s.id from assistant_schedules a join claude_sessions s on s.id = a.session_id
+    scheduleSessions: db.prepare(`select s.id, s.harness from assistant_schedules a join claude_sessions s on s.id = a.session_id
       where a.user_id = ? and s.archived = 0`),
   }
   hub.authorize('assistant', () => true) // events are published only to the member they're for
 
-  const row = (userId: number) => q.get.get(userId) as Row | undefined
+  const member = (userId: number) => q.member.get(userId) as Member | undefined
+  const chatFor = (userId: number, harness: string) => q.chat.get(userId, harness) as Chat | undefined
+  const chats = (userId: number) => q.chats.all(userId) as Chat[]
+  /** The chat they talk in (picked in the panel), where schedules hand over, follow-ups wake and voice talks. */
+  const active = (userId: number) => {
+    const m = member(userId)
+    return m ? chatFor(userId, m.harness) : undefined
+  }
+  /** A chat's conversation, unless it was archived (from its own page) or deleted: then the panel offers a new one. */
+  const live = (c: Chat | undefined) => {
+    const s = c?.session_id ? (q.session.get(c.session_id) as { archived: number } | undefined) : undefined
+    return s && !s.archived ? c!.session_id : null
+  }
+  /** Their open chats, the one they talk in first. */
+  const openChats = (userId: number) => {
+    const m = member(userId)
+    const all = chats(userId)
+    return [...all.filter((c) => c.harness === m?.harness), ...all.filter((c) => c.harness !== m?.harness)].map(live).filter((x): x is string => !!x)
+  }
   const changed = (userId: number) => hub.publish('assistant', { type: 'changed' }, (u) => u.id === userId)
   const scheduleDto = (s: ScheduleRow, now = Date.now()) => {
     const slots = JSON.parse(s.slots) as Slot[]
@@ -118,25 +151,32 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     }
   }
   const schedules = (userId: number) => (q.schedules.all(userId) as ScheduleRow[]).map((s) => scheduleDto(s))
-  const tzOf = (userId: number) => row(userId)?.tz ?? 'UTC'
+  const tzOf = (userId: number) => member(userId)?.tz ?? 'UTC'
   function state(user: User) {
-    const a = row(user.id)
-    const s = a?.session_id ? (q.session.get(a.session_id) as { archived: number } | undefined) : undefined
+    const m = member(user.id)
+    const all = m ? chats(user.id) : []
+    const a = all.find((c) => c.harness === m!.harness)
+    // Each agent's chat, for the panel: its account, its conversation, and whether it wrote since they last looked.
+    const list = all.map((c) => {
+      const id = live(c)
+      return { harness: c.harness, profile: c.profile, sessionId: id, unread: !!c.unread && !!id }
+    })
     return {
-      agent: a ? {
-        harness: a.harness, profile: a.profile, tz: a.tz, model: a.model, effort: a.effort, permissionMode: a.permission_mode,
-        fastMode: !!a.fast, reachTailnet: !!a.reach_tailnet, drive: !!a.drive,
+      agent: m && a ? {
+        harness: a.harness, profile: a.profile, tz: m.tz, model: a.model, effort: a.effort, permissionMode: a.permission_mode,
+        fastMode: !!a.fast, reachTailnet: !!m.reach_tailnet, drive: !!m.drive,
       } : null,
       // What there is to reach: switching one on needs it connected first.
       connected: { tailnet: !!tailnetConnected?.(user.id), drive: !!driveConnected?.(user.id) },
-      sessionId: s && !s.archived ? a!.session_id : null, // archived from its own page: the panel offers a new one
-      unread: !!a?.unread && !!s && !s.archived, // it wrote in their chat since they last looked
+      sessionId: live(a), // the chat they talk in
+      chats: list,
+      unread: list.some((t) => t.unread), // in either chat: the launchers' dot
       schedules: schedules(user.id),
     }
   }
 
-  /** A new conversation on the member's chosen agent, set up as they set it; the session starts on the first message. */
-  async function open(user: User, a: Row, title?: string) {
+  /** A new conversation on one of the member's agents, set up as they set it; the session starts on the first message. */
+  async function open(user: User, a: Chat, title?: string) {
     const s = await claude.create(user, {
       prompt: '', images: [], cwd: '~', profile: a.profile, model: a.model, effort: a.effort, permissionMode: a.permission_mode, mode: 'chat', harness: a.harness,
     }, {
@@ -148,25 +188,26 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     if (a.reach_tailnet) await claude.update(user, s.id, { reachTailnet: true }).catch(() => {})
     return s.id
   }
-  /** A fresh conversation to talk in: the panel switches to it. */
-  async function start(user: User, a: Row) {
+  /** A fresh conversation in that agent's chat: the panel switches to it. */
+  async function start(user: User, a: Chat) {
     const id = await open(user, a)
-    q.setSession.run(id, user.id)
+    q.setSession.run(id, user.id, a.harness)
     changed(user.id)
     return id
   }
   const scheduleTitle = (title: string) => `Scheduled: ${title}`
   /**
-   * Where a schedule runs: its own conversation, never the one the member is talking in, so a run doesn't land in the
-   * middle of their chat. Each run follows the earlier ones there. A new one when it was archived or deleted, or the
-   * member picked another agent or account since.
+   * Where a schedule runs: its own conversation, never one the member is chatting in, so a run doesn't land in the
+   * middle of their chat. Each run follows the earlier ones there, whichever chat they switch to meanwhile. A new one (on
+   * the agent they talk in) when it was archived or deleted, or no chat of theirs runs on its agent and account anymore.
    */
   async function conversationFor(user: User, s: ScheduleRow) {
-    const a = row(user.id)
+    const a = active(user.id)
     if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
     const c = s.session_id ? (q.session.get(s.session_id) as { id: string; archived: number; harness: string; profile: string } | undefined) : undefined
-    // Never their chat (an earlier version could open a schedule's conversation as the chat).
-    if (c && !c.archived && c.harness === a.harness && c.profile === a.profile && c.id !== a.session_id) return c.id
+    const all = chats(user.id)
+    // Never one of their chats (an earlier version could open a schedule's conversation as the chat).
+    if (c && !c.archived && !all.some((x) => x.session_id === c.id) && all.some((x) => x.harness === c.harness && x.profile === c.profile)) return c.id
     const id = await open(user, a, scheduleTitle(s.title))
     q.setScheduleSession.run(id, s.id)
     return id
@@ -174,10 +215,11 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
   // Chats a schedule handed something to: when the agent's answer there is done, that answer is the notification.
   const handedOff = new Set<string>()
   claude.onTurnEnd((t) => {
-    // Every answer in their chat lights the launchers' dot until they look (seen).
-    if (t.ok && !t.aborted && t.result?.trim() && row(t.session.owner_id)?.session_id === t.session.id) {
-      q.setUnread.run(1, t.session.owner_id)
-      changed(t.session.owner_id)
+    // Every answer in one of their chats lights its dot and the launchers' until they look (seen).
+    const c = t.ok && !t.aborted && t.result?.trim() ? (q.chatOf.get(t.session.id) as { user_id: number; harness: string } | undefined) : undefined
+    if (c && c.user_id === t.session.owner_id) {
+      q.setUnread.run(1, c.user_id, c.harness)
+      changed(c.user_id)
     }
     if (!handedOff.delete(t.session.id) || !t.ok || t.aborted || !t.result?.trim()) return
     const body = t.result.trim().replace(/\s+/g, ' ')
@@ -185,13 +227,18 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
       title: AGENT_NAME, body: body.length > 300 ? `${body.slice(0, 299)}…` : body, url: `/sessions/${t.session.id}`, tag: `assistant:${t.session.owner_id}:handoff`,
     }).catch(() => {})
   })
-  const scheduleSessions = (userId: number) => (q.scheduleSessions.all(userId) as { id: string }[]).map((r) => r.id)
-  /** The conversation to talk in: the current one unless it was archived or deleted meanwhile. */
+  const scheduleSessions = (userId: number) => q.scheduleSessions.all(userId) as { id: string; harness: string }[]
+  /** Every conversation of theirs that gets Hamasa's instructions: both chats and the schedules' own. */
+  const conversations = (userId: number) =>
+    [...chats(userId).map((c) => c.session_id), ...scheduleSessions(userId).map((s) => s.id)].filter((x): x is string => !!x && !!q.session.get(x))
+  const configureAll = (u: { id: number; name: string; username: string }, tz: string) => {
+    for (const id of conversations(u.id)) claude.configure(id, { instructions: instructions({ name: u.name, username: u.username, tz }), toolPolicy: { allow: READ_ONLY } })
+  }
+  /** The conversation to talk in: the current one of the chat they're in, unless it was archived or deleted meanwhile. */
   async function current(user: User) {
-    const a = row(user.id)
+    const a = active(user.id)
     if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
-    const s = a.session_id ? (q.session.get(a.session_id) as { id: string; archived: number } | undefined) : undefined
-    return s && !s.archived ? s.id : start(user, a)
+    return live(a) ?? start(user, a)
   }
 
   async function run(s: ScheduleRow, date: string | null) {
@@ -201,8 +248,9 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     const user = q.user.get(s.user_id) as User | undefined
     if (!user) return
     try {
-      const chat = state(user).sessionId
-      const where = chat ? `\n\n(Their chat with you is session ${chat}: session_read it for what they said there today.)` : ''
+      const open = openChats(user.id)
+      const where = open.length > 1 ? `\n\n(Their chats with you are sessions ${open.join(' and ')}: session_read them for what they said there today.)`
+        : open.length ? `\n\n(Their chat with you is session ${open[0]}: session_read it for what they said there today.)` : ''
       await claude.send(user, await conversationFor(user, s), `⏰ Scheduled: ${s.title}\n\n${s.prompt}${where}`, [])
     } catch (err) {
       void notify(user.id, 'errors', { title: `Your schedule "${s.title}" couldn't run`, body: (err as Error).message, url: '/', tag: `schedule:${s.id}` })
@@ -230,58 +278,82 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
   setInterval(() => void tick().catch((err) => console.error('assistant schedules:', err)), 30_000).unref()
 
   // Conversations are reused, never remade: after an update, each one gets the current instructions and allowed tools.
-  for (const a of q.everyone.all() as (Row & { name: string; username: string })[]) {
-    for (const id of [a.session_id, ...scheduleSessions(a.user_id)].filter((x): x is string => !!x && !!q.session.get(x))) {
-      claude.configure(id, { instructions: instructions({ name: a.name, username: a.username, tz: a.tz }), toolPolicy: { allow: READ_ONLY } })
+  for (const m of q.everyone.all() as { user_id: number; tz: string; name: string; username: string }[]) configureAll({ ...m, id: m.user_id }, m.tz)
+
+  /**
+   * Picks the agent (and its account) to talk in, and makes it the chat they're in. Its first chat, or another account
+   * for it, starts a new conversation (the old one is archived, not deleted). The other agent's chat stays as it is.
+   */
+  async function setup(user: User, input: { harness: string; profile: string; tz?: string }) {
+    if (!(HARNESSES as readonly string[]).includes(input.harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+    if (!PROFILE_RE.test(input.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
+    const old = chatFor(user.id, input.harness)
+    const tz = input.tz && validTz(input.tz) ? input.tz : member(user.id)?.tz ?? 'UTC'
+    q.putMember.run(user.id, input.harness, tz)
+    q.putChat.run(user.id, input.harness, input.profile)
+    const a = chatFor(user.id, input.harness)!
+    if (!old?.session_id || old.profile !== a.profile) {
+      if (old?.session_id && q.session.get(old.session_id)) await claude.update(user, old.session_id, { archived: true }).catch(() => {})
+      await start(user, a)
     }
+    configureAll(user, tz) // a new time zone reaches every conversation
+    changed(user.id)
+    return state(user)
   }
 
   return {
     tick,
     state,
+    setup,
 
-    /** Picks (or changes) the member's agent. Another agent or account starts a new conversation; the old one stays. */
-    async setup(user: User, input: { harness: string; profile: string; tz?: string }) {
-      if (!(HARNESSES as readonly string[]).includes(input.harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
-      if (!PROFILE_RE.test(input.profile)) throw new AppError(400, 'bad_profile', 'Unknown profile.')
-      const old = row(user.id)
-      const tz = input.tz && validTz(input.tz) ? input.tz : old?.tz ?? 'UTC'
-      q.put.run(user.id, input.harness, input.profile, tz)
-      const a = row(user.id)!
-      if (!old?.session_id || old.harness !== a.harness || old.profile !== a.profile) {
-        if (old?.session_id && q.session.get(old.session_id)) await claude.update(user, old.session_id, { archived: true }).catch(() => {})
-        await start(user, a)
-      } else {
-        for (const id of [old.session_id, ...scheduleSessions(user.id)]) claude.configure(id, { instructions: instructions({ name: user.name, username: user.username, tz }) })
-      }
-      return state(user)
-    },
-
-    /** Model, effort, permission level and what it reaches: kept for new conversations, and applied to the current one. */
-    async settings(user: User, p: Settings) {
-      const a = row(user.id)
-      if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
-      if (p.reachTailnet && !tailnetConnected?.(user.id)) throw new AppError(409, 'no_tailnet', 'Connect your tailnet on the Network page first.')
-      if (p.drive && !driveConnected?.(user.id)) throw new AppError(409, 'no_drive', 'Connect your Google Drive on the Storage page first.')
-      const id = state(user).sessionId
-      // The session checks each value (a known effort, a permission mode); the settings keep what it accepted.
-      if (id) await claude.update(user, id, p)
-      // The schedules' conversations work the same way; one that refuses a value doesn't stop the change.
-      for (const sid of scheduleSessions(user.id)) if (sid !== id) await claude.update(user, sid, p).catch(() => {})
-      const pick = <T,>(v: T | undefined, old: T) => (v === undefined ? old : v)
-      const bit = (v: boolean | undefined, old: number) => (v === undefined ? old : v ? 1 : 0)
-      q.settings.run(pick(p.model, a.model), pick(p.effort, a.effort), pick(p.permissionMode, a.permission_mode),
-        bit(p.fastMode, a.fast), bit(p.reachTailnet, a.reach_tailnet), bit(p.drive, a.drive), user.id)
+    /** Switches to the other agent's chat (the panel's … menu). Its first one starts on its default account. */
+    async switchTo(user: User, harness: string) {
+      if (!member(user.id)) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
+      if (!(HARNESSES as readonly string[]).includes(harness)) throw new AppError(400, 'bad_harness', 'Unknown agent.')
+      if (!chatFor(user.id, harness)) return setup(user, { harness, profile: 'default' })
+      q.setActive.run(harness, user.id)
       changed(user.id)
       return state(user)
     },
 
-    /** Clears the conversation: the current one is archived (not deleted) and an empty one takes its place. */
+    /**
+     * Model, effort, permission level and what it reaches: kept for new conversations, and applied to the current one.
+     * The first four are the agent's (the other chat keeps its own); what it reaches is the same in both chats.
+     */
+    async settings(user: User, p: Settings) {
+      const m = member(user.id)
+      const a = active(user.id)
+      if (!m || !a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
+      if (p.reachTailnet && !tailnetConnected?.(user.id)) throw new AppError(409, 'no_tailnet', 'Connect your tailnet on the Network page first.')
+      if (p.drive && !driveConnected?.(user.id)) throw new AppError(409, 'no_drive', 'Connect your Google Drive on the Storage page first.')
+      const shared = Object.fromEntries(Object.entries({ reachTailnet: p.reachTailnet, drive: p.drive }).filter(([, v]) => v !== undefined))
+      const id = live(a)
+      // The session checks each value (a known effort, a permission mode); the settings keep what it accepted.
+      if (id) await claude.update(user, id, p)
+      // The other chat, and the schedules' conversations, work the same way: the agent's settings on the same agent,
+      // what it reaches on both. One that refuses a value doesn't stop the change.
+      const others = [
+        ...chats(user.id).filter((c) => c.harness !== a.harness).map((c) => ({ id: live(c), harness: c.harness })),
+        ...scheduleSessions(user.id),
+      ]
+      for (const o of others) {
+        const v = o.harness === a.harness ? p : shared
+        if (o.id && o.id !== id && Object.keys(v).length) await claude.update(user, o.id, v).catch(() => {})
+      }
+      const pick = <T,>(v: T | undefined, old: T) => (v === undefined ? old : v)
+      const bit = (v: boolean | undefined, old: number) => (v === undefined ? old : v ? 1 : 0)
+      q.agentSettings.run(pick(p.model, a.model), pick(p.effort, a.effort), pick(p.permissionMode, a.permission_mode), bit(p.fastMode, a.fast), user.id, a.harness)
+      q.access.run(bit(p.reachTailnet, m.reach_tailnet), bit(p.drive, m.drive), user.id)
+      changed(user.id)
+      return state(user)
+    },
+
+    /** Clears the chat they're in: its conversation is archived (not deleted) and an empty one takes its place. */
     async fresh(user: User) {
-      const a = row(user.id)
+      const a = active(user.id)
       if (!a) throw new AppError(409, 'no_agent', 'Pick your personal agent first.')
       const s = a.session_id ? (q.session.get(a.session_id) as { id: string; archived: number; started: number } | undefined) : undefined
-      q.setUnread.run(0, user.id)
+      q.setUnread.run(0, user.id, a.harness)
       if (s && !s.archived && !s.started) return state(user) // already a fresh one
       if (s && !s.archived) await claude.update(user, s.id, { archived: true }).catch(() => {})
       await start(user, a)
@@ -289,12 +361,15 @@ export function assistantService({ db, hub, claude, notify, tailnetConnected, dr
     },
 
     current,
-    /** They've seen their chat: the launchers' dot goes. */
-    seen(user: User) {
-      q.setUnread.run(0, user.id)
+    /** They've seen a chat (that conversation, or by default the one they're in): its dot goes. */
+    seen(user: User, sessionId?: string) {
+      const c = sessionId ? chats(user.id).find((x) => x.session_id === sessionId) : active(user.id)
+      if (c) q.setUnread.run(0, user.id, c.harness)
       changed(user.id)
       return state(user)
     },
+    /** Whether this session is one of the member's chats with the agent (not a schedule's conversation). */
+    isChat: (user: User, sessionId: string) => chats(user.id).some((c) => c.session_id === sessionId),
     /** The schedule whose own conversation this session is, if it is one. */
     scheduleOf: (user: User, sessionId: string) => (q.bySession.get(sessionId, user.id) as { id: number; title: string } | undefined) ?? null,
     /**

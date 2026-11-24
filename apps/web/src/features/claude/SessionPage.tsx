@@ -42,13 +42,14 @@ import { PlanUsage } from './Usage'
 import { agentName, HARNESS, harnessOf } from './harness'
 import { servicesQuery, stateOf } from '../services/data'
 import { tailnetStatusQuery } from '../network/NetworkPage'
-import { buildTranscript, mergePage, mergeRaw, sessionFacts, touchedFiles, type Raw } from './transcript'
+import { buildTranscript, lastTurnSpoken, mergePage, mergeRaw, sessionFacts, touchedFiles, type Raw } from './transcript'
 import { SubagentCtx } from './ToolSteps'
 import { useTopic } from '@/lib/live'
 import { usePageTitle } from '@/lib/title'
 import { cn } from '@/lib/utils'
 import { useMarkSeen } from '../assistant/AssistantDock'
 import { ReplyProse } from '../voice/ReplyProse'
+import { unwrapVoice } from '../voice/reply'
 import { openVoiceSettings, useVoice, VoiceBar, VoiceButton, voiceQuery } from '../voice/VoiceMode'
 
 const light = (s: Session['status']) => (s === 'working' ? 'live' : s === 'waiting' ? 'waiting' : s === 'error' ? 'error' : 'idle')
@@ -222,6 +223,7 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
     setCommentCount(info.data.comments)
   }, [info.data])
   const blocks = useMemo(() => buildTranscript(all), [all])
+  const spokenTurn = useMemo(() => lastTurnSpoken(all), [all])
   const touched = useMemo(() => touchedFiles(blocks), [blocks])
   // What arrives while you watch (your message, Claude's reply, the turn's result) lands instead of popping in.
   const transcript = useRef<HTMLDivElement>(null)
@@ -350,7 +352,7 @@ export function SessionView({ id, embedded }: { id: string; embedded?: Embedded 
               <SubagentCtx.Provider value={subagentCtx}>
                 <div ref={transcript}><Blocks blocks={blocks} senders={history.data?.senders} live={working || s.status === 'waiting'} /></div>
               </SubagentCtx.Provider>
-              <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} agent={embedded?.name ?? agentName(s.harness)} />
+              <LiveText store={liveText} working={working} since={lastPromptAt} onGrow={toBottom} agent={embedded?.name ?? agentName(s.harness)} spoken={spokenTurn} />
               {s.status === 'error' && s.statusDetail && <ErrorAlert error={s.statusDetail} />}
               <Requests sessionId={id} requests={pending} canAnswer={canSend} isOwner={isOwner} owner={s.owner.name} waitingOn={canSend ? undefined : s.owner.name} afterPlanApproved={afterPlanApproved} />
             </div>
@@ -408,12 +410,12 @@ function Earlier({ loading, onLoad, root, auto }: { loading: boolean; onLoad: ()
 }
 
 /** Only this re-renders while Claude types, at most once per frame (see live-text.ts). */
-const LiveText = memo(function LiveText({ store, working, since, onGrow, agent = 'Claude' }: { store: LiveTextStore; working: boolean; since?: number; onGrow: () => void; agent?: string }) {
+const LiveText = memo(function LiveText({ store, working, since, onGrow, agent = 'Claude', spoken }: { store: LiveTextStore; working: boolean; since?: number; onGrow: () => void; agent?: string; spoken: boolean }) {
   const text = useSyncExternalStore(store.subscribe, store.get)
   const grow = useRef(onGrow)
   grow.current = onGrow
   useLayoutEffect(() => grow.current(), [text])
-  if (text) return <ReplyProse text={text} />
+  if (text) return <ReplyProse text={spoken ? text : unwrapVoice(text)} />
   return working ? (
     <p className="flex items-center gap-2.5 py-1 text-sm text-muted-foreground">
       <Orb state="working" size={20} />{agent} is working… <Elapsed since={since} />

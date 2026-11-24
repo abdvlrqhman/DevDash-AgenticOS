@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { openDb } from '../../core/db.ts'
 import { createHub } from '../../core/hub.ts'
 import { activityService } from '../activity/service.ts'
@@ -75,11 +76,17 @@ test("picking the agent starts its conversation: unlisted, the member's own, wit
   assert.ok((JSON.parse(String(s.tool_policy)).allow as string[]).includes('mcp__plugin_devdash_devdash__session_read'))
   assert.ok(!(JSON.parse(String(s.tool_policy)).allow as string[]).includes('mcp__plugin_devdash_devdash__session_send'))
 
-  // Same agent: same conversation. Another agent: a new one, and the old one is archived (archived, not deletedons).
+  // Same agent and account: same conversation. The other agent: a chat of its own beside it, the first one untouched.
   assert.equal((await assistant.setup(ann, { harness: 'opencode', profile: 'work' })).sessionId, st.sessionId)
-  const next = await assistant.setup(ann, { harness: 'claude', profile: 'default' })
-  assert.notEqual(next.sessionId, st.sessionId)
-  assert.equal(session(st.sessionId!).archived, 1)
+  const both = await assistant.setup(ann, { harness: 'claude', profile: 'default' })
+  assert.notEqual(both.sessionId, st.sessionId)
+  assert.equal(session(st.sessionId!).archived, 0)
+  assert.deepEqual(both.chats.map((c) => [c.harness, c.profile, c.sessionId]), [['claude', 'default', both.sessionId], ['opencode', 'work', st.sessionId]])
+  // Another account for an agent: its chat starts afresh, and the old conversation is archived (not deleted).
+  const next = await assistant.setup(ann, { harness: 'claude', profile: 'work' })
+  assert.notEqual(next.sessionId, both.sessionId)
+  assert.equal(session(both.sessionId!).archived, 1)
+  assert.equal(session(st.sessionId!).archived, 0, "the other agent's chat stays")
   // A new conversation: none while the current one is still empty; once it's used, a new one, the old one archived.
   assert.equal((await assistant.fresh(ann)).sessionId, next.sessionId)
   db.prepare('update claude_sessions set started = 1 where id = ?').run(next.sessionId)
@@ -89,6 +96,64 @@ test("picking the agent starts its conversation: unlisted, the member's own, wit
   // Archived from its own page: the panel gets no conversation, and offers a new one.
   db.prepare('update claude_sessions set archived = 1 where id = ?').run(third)
   assert.equal(assistant.state(ann).sessionId, null)
+})
+
+test('a chat per agent: switching keeps each conversation and its own settings, and the one they talk in gets the rest', async () => {
+  const { assistant, session, emit, sent, db, ann } = setup()
+  const claudeChat = (await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'UTC' })).sessionId!
+  await assistant.settings(ann, { model: 'opus', effort: 'high' })
+
+  // The other agent's first chat: on its default account, with none of Claude Code's settings.
+  const st = await assistant.switchTo(ann, 'opencode')
+  const openChat = st.sessionId!
+  assert.notEqual(openChat, claudeChat)
+  assert.deepEqual([st.agent!.harness, st.agent!.profile, st.agent!.model, st.agent!.effort], ['opencode', 'default', null, null])
+  assert.equal(session(openChat).harness, 'opencode')
+  await assistant.settings(ann, { model: 'anthropic/claude-opus-5-5' })
+  assert.equal(session(claudeChat).model, 'opus', 'the other chat keeps its model')
+  // Back: the same conversation, with its settings as they were. What it reaches is the same in both.
+  const back = await assistant.switchTo(ann, 'claude')
+  assert.deepEqual([back.sessionId, back.agent!.model, back.agent!.effort], [claudeChat, 'opus', 'high'])
+  assert.equal(session(openChat).archived, 0)
+  await assistant.settings(ann, { drive: false })
+  assert.deepEqual([session(claudeChat).drive, session(openChat).drive, session(openChat).model], [0, 0, 'anthropic/claude-opus-5-5'])
+  await assert.rejects(assistant.switchTo(ann, 'nope'), /Unknown agent/)
+
+  // Each chat has its own dot; the launchers' shows either. Seeing one clears only its own.
+  emit({ ev: 'claude.msg', id: openChat, msg: { type: 'result', subtype: 'success', result: 'Done.' } })
+  assert.deepEqual(assistant.state(ann).chats.map((c) => [c.harness, c.unread]), [['claude', false], ['opencode', true]])
+  assert.equal(assistant.state(ann).unread, true)
+  assert.equal(assistant.seen(ann).unread, true, "seeing the chat they're in leaves the other one's dot")
+  assert.equal(assistant.seen(ann, openChat).unread, false)
+
+  // Schedules' runs can read both chats; hand-offs, follow-ups and voice go to the one they talk in.
+  assistant.createSchedule(ann, { title: 'Brief', prompt: 'Brief me.', at: '09:00', days: 'daily' })
+  await assistant.tick(Date.parse('2026-11-05T09:00:30Z'))
+  const run = sent.findLast((r) => r.op === 'claude.send')!
+  assert.match((run.content as { text: string }[]).at(-1)!.text, new RegExp(`Their chats with you are sessions ${claudeChat} and ${openChat}:`))
+  assert.equal(await assistant.current(ann), claudeChat)
+  await assistant.switchTo(ann, 'opencode')
+  assert.equal(await assistant.current(ann), openChat)
+
+  // Clearing clears only the chat they're in.
+  db.prepare('update claude_sessions set started = 1 where id in (?, ?)').run(claudeChat, openChat)
+  const cleared = await assistant.fresh(ann)
+  assert.notEqual(cleared.sessionId, openChat)
+  assert.deepEqual([session(openChat).archived, session(claudeChat).archived], [1, 0])
+  assert.equal(cleared.chats.find((c) => c.harness === 'claude')!.sessionId, claudeChat)
+})
+
+test('after the update, the chat each member had becomes the one of its agent, with its settings and dot', () => {
+  const { db, assistant, ann } = setup()
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, origin_kind, listed) values ('old', 1, 'Chat', '/home/ann', 'assistant', 0)").run()
+  db.exec('drop table assistant_chats') // as it was before migration 066
+  db.prepare(`insert into assistants (user_id, harness, profile, model, effort, permission_mode, fast, tz, session_id, unread)
+    values (1, 'opencode', 'work', 'x/y', 'high', 'acceptEdits', 0, 'Africa/Cairo', 'old', 1)`).run()
+  db.exec(readFileSync(new URL('../../../migrations/066_assistant_chats.sql', import.meta.url), 'utf8'))
+  const st = assistant.state(ann)
+  assert.deepEqual([st.agent!.harness, st.agent!.profile, st.agent!.model, st.agent!.effort, st.agent!.permissionMode, st.agent!.tz], ['opencode', 'work', 'x/y', 'high', 'acceptEdits', 'Africa/Cairo'])
+  assert.deepEqual(st.chats, [{ harness: 'opencode', profile: 'work', sessionId: 'old', unread: true }])
+  assert.equal(st.sessionId, 'old')
 })
 
 test("the agent's tools work only in the member's own agent, and act as them", async () => {
@@ -107,6 +172,27 @@ test("the agent's tools work only in the member's own agent, and act as them", a
   assert.deepEqual((msg.content as { text: string }[]).at(-1)!.text, "(From Hamasa, Ann's personal agent) run the tests")
   await assert.rejects(rpc('ann', 'session_send', sessionId, { id: sessionId, text: 'loop' }), /your own conversations/)
   await assert.rejects(rpc('ann', 'open_page', sessionId, { path: '//evil.example' }), /one slash/)
+})
+
+test("session settings: model, effort and advisor freely; the permission level only on the member's own word", async () => {
+  const { assistant, claude, rpc, sent, db, ann } = setup()
+  const { sessionId } = await assistant.setup(ann, { harness: 'claude', profile: 'default', tz: 'Europe/Berlin' })
+  const id = sessionId!
+  db.prepare("update claude_sessions set mode = 'chat' where id = 'plain'").run()
+  const set = (args: Record<string, unknown>) => rpc('ann', 'session_settings', id, { id: 'plain', ...args }) as Promise<Record<string, string>>
+
+  const r = await set({ model: 'opus', effort: 'high', advisor: 'fable' })
+  assert.deepEqual([r.model, r.effort, r.advisor], ['opus', 'high', 'fable'])
+  assert.deepEqual(sent.filter((x) => x.op === 'claude.set').map((x) => [x.key, x.value]), [['model', 'opus'], ['effort', 'high'], ['advisor', 'fable']], 'applied to the live session')
+  assert.equal((await set({ advisor: 'off' })).advisor, 'off')
+  await assert.rejects(set({ advisor: 'gpt' }), /advisor is "off" or one of/)
+  await assert.rejects(set({}), /Say what to change/)
+
+  // The permission level: refused until she asks in her own message, then set.
+  await assert.rejects(set({ permission_mode: 'bypassPermissions' }), /Only Ann can change a session's permission level/)
+  await claude.send(ann, id, 'Put the login session in bypass mode', [], [], [], { typed: true })
+  assert.equal((await set({ permission_mode: 'bypassPermissions' })).permission_mode, 'bypassPermissions')
+  await assert.rejects(set({ permission_mode: 'root' }), /permission_mode is one of/)
 })
 
 test('a new project only on the member\'s own word: made like the Projects page makes it, then a session can start there', async () => {
@@ -225,16 +311,21 @@ test("a schedule runs in a conversation of its own, never in the one the member 
   await new Promise((r) => setImmediate(r))
   assert.equal(session(a.to).title, 'Scheduled: Daily brief')
 
-  // Archived from its page, or the member moved to another agent: the next run starts a new one.
+  // Archived from its page: the next run starts a new one.
   db.prepare('update claude_sessions set archived = 1 where id = ?').run(a.to)
   await assistant.tick(Date.parse('2026-11-07T09:00:30Z'))
   const fresh = runs().slice(4).find((r) => r.text.includes('Daily brief'))!
   assert.ok(fresh.to !== a.to && fresh.to !== chat)
-  await assistant.setup(ann, { harness: 'opencode', profile: 'default' })
+  // Switching to the other agent's chat leaves its runs where they are.
+  await assistant.switchTo(ann, 'opencode')
   await assistant.tick(Date.parse('2026-11-08T09:00:30Z'))
-  const moved = runs().slice(6).find((r) => r.text.includes('Deploy check'))!
-  assert.equal(session(moved.to).harness, 'opencode')
+  assert.equal(runs().slice(6).find((r) => r.text.includes('Deploy check'))!.to, b.to)
+  // No chat on its agent and account anymore (another account for Claude Code): on the agent they talk in now.
+  await assistant.setup(ann, { harness: 'claude', profile: 'work' })
+  await assistant.tick(Date.parse('2026-11-09T09:00:30Z'))
+  const moved = runs().slice(8).find((r) => r.text.includes('Deploy check'))!
   assert.notEqual(moved.to, b.to)
+  assert.deepEqual([session(moved.to).harness, session(moved.to).profile], ['claude', 'work'])
 })
 
 test("a schedule hands what needs the member to their chat, and the agent's answer there is the one notification", async () => {
@@ -290,7 +381,7 @@ test("schedules' runs can't ping the member through the general notify tool eith
   assert.doesNotMatch(String(await Promise.resolve(claude.notifyFrom('ann', { sessionId: chat, args: { message: 'Done' } })).catch((e: Error) => e.message)), /schedule/)
 
   // An earlier version could open a schedule's conversation as the chat: its next run goes to a new one, not the chat.
-  db.prepare('update assistants set session_id = ? where user_id = 1').run(run)
+  db.prepare("update assistant_chats set session_id = ? where user_id = 1 and harness = 'claude'").run(run)
   await assistant.tick(Date.parse('2026-11-06T09:00:30Z'))
   const to = (sent.filter((r) => r.op === 'claude.send').at(-1)!.launch as { id: string }).id
   assert.ok(to !== run && to !== chat)

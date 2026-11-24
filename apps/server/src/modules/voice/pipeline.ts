@@ -29,6 +29,11 @@ export type Usage = { sttSeconds: number; ttsChars: number; costUsd: number }
  * every system reminder. Works the same for Claude Code and OpenCode: it's part of the message.
  */
 export const CODING_VOICE = `<system-reminder>They said this out loud in voice mode and hear your reply. Put what you say aloud in <voice>…</voice>, in the language of lang, one or two plain sentences: a short human summary of what you did or found, like "I changed three files and the tests pass, the details are on screen". Never say code, paths, diffs, ids, commands or tool names. Everything else is written as usual, in the same language. Say nothing aloud while you work; speak when you have the result or a question. If the tag lists expressions, you may use one, rarely, in square brackets exactly as listed.</system-reminder>`
+/**
+ * Hamasa's voice rules, carried by each spoken message (never in its system prompt: a long conversation full of voice
+ * turns made it answer typed messages with <voice> blocks too). Hidden in the transcript like every reminder.
+ */
+export const HAMASA_VOICE = `<system-reminder>This message was spoken in voice mode, and they hear your reply. Put what you say out loud in <voice>…</voice>; everything else is written in the chat as usual, and never mention the tags. Speak in the language of lang ("ar": colloquial Arabic as they speak it, English tech words as they say them) and write the rest in that language too. Say it like a colleague on a call: one to three flowing sentences, few commas, no lists or colons, numbers in words, never links, paths, code, ids or tool names; when there's more, say "I put it in the chat" and write it after the voice block. If the answer is just what you said, write nothing else. Stay silent while you work. If the tag lists expressions, you may use one, rarely, in square brackets exactly as listed. cut-off-after means they talked over your last answer after hearing that much: don't repeat it. Only "stop" cancels your work; anything else they say mid-turn, take into account and carry on.</system-reminder>`
 const HEADS_UP: Record<'permission' | 'question', Record<string, string>> = {
   permission: { en: 'It needs your permission for something, it\'s on screen.', ar: 'محتاج إذنك في حاجة، هي على الشاشة.', de: 'Es braucht deine Erlaubnis, das steht auf dem Bildschirm.' },
   question: { en: 'It has a question for you, it\'s on screen.', ar: 'عنده سؤال ليك، على الشاشة.', de: 'Es hat eine Frage an dich, sie steht auf dem Bildschirm.' },
@@ -522,7 +527,7 @@ export function voiceConversation(o: {
     lastText = ''
     fillers = 0
     try {
-      await o.chat.send(o.coding ? `${tag}\n${CODING_VOICE}\n\n${utterance}` : `${page ? `${page}\n` : ''}${tag}\n\n${utterance}`)
+      await o.chat.send(o.coding ? `${tag}\n${CODING_VOICE}\n\n${utterance}` : `${page ? `${page}\n` : ''}${tag}\n${HAMASA_VOICE}\n\n${utterance}`)
       mark('sent')
       ev('message', { answering: outstanding > 1, cutOff: tag.includes('cut-off-after') })
       if (o.waitTalk) stillOnIt(STILL_MS)
@@ -535,8 +540,17 @@ export function voiceConversation(o: {
 
   // ---------- the answer ----------
 
+  // Whether the latest message sent into this chat was spoken: replies to typed ones, wake-ups or reminders are never
+  // said aloud, even if they carry a <voice> block.
+  let voiceTurn = false
   function message(m: Raw) {
     if (m.parent_tool_use_id) return
+    if (m.type === 'user') {
+      const c = m.message?.content
+      const t = typeof c === 'string' ? c : Array.isArray(c) ? (c as { type?: string; text?: string }[]).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('') : ''
+      if (t) voiceTurn = t.includes(`<${VOICE_TAG}`)
+      return
+    }
     if (m.type === 'stream_event' || m.type === 'assistant') mark('firstToken')
     if (m.type === 'stream_event') {
       const e = m.event
@@ -566,7 +580,7 @@ export function voiceConversation(o: {
     if (m.type === 'result') turnDone(m)
   }
   function spoken(t: string) {
-    if (!t) return
+    if (!t || !voiceTurn) return
     if (T.firstVoiceText === undefined) ev('voice_text', { quiet })
     mark('firstVoiceText')
     if (T.at) T.voiceChars = (T.voiceChars as number) + t.length

@@ -176,6 +176,25 @@ test("their messages come first: nothing while the chat is busy, waits for them,
   assert.equal(await t.follow.deliver(1), true)
 })
 
+test('switching to the other chat mid-wake: the woken one still answers it, and nothing wakes the other on top', async () => {
+  const t = await ready()
+  t.autopilot.setEnabled(t.ann, true)
+  t.set('work', 'idle', 5)
+  assert.equal(await t.follow.deliver(1), true)
+  // They switch to their OpenCode chat while Hamasa answers in the Claude Code one.
+  const other = (await t.assistant.switchTo(t.ann, 'opencode')).sessionId!
+  t.quietChat(other)
+  t.set('pr', 'idle', 5)
+  assert.equal(await t.follow.deliver(1), false, 'still answering the last one')
+  await t.rpc('follow_reply', t.chat, { id: 'work', text: 'Next step', tier: 'green', why: 'the agreed plan' })
+  assert.equal(t.sends().filter((s) => s.to === 'work').length, 1)
+  // That turn ends: the next wake goes to the chat they talk in now.
+  t.emit({ ev: 'claude.msg', id: t.chat, msg: { type: 'result', subtype: 'success', result: 'Continued the panel.' } })
+  t.quietChat(other)
+  assert.equal(await t.follow.deliver(1), true)
+  assert.ok(t.sends().some((s) => s.to === other && s.text.startsWith('<system-reminder>Sessions you follow')))
+})
+
 test('a restart loses nothing and tells nothing twice: the cursor is in the database', async () => {
   const t = await ready()
   t.set('work', 'idle', 5) // finished while the server was down: no event ever came

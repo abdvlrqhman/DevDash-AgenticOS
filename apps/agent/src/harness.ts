@@ -174,7 +174,7 @@ export function notACommand(prompt: Record<string, unknown>[]): Record<string, u
  */
 const READS = new Set(['Read', 'Grep', 'Glob', 'LS', 'TodoWrite', 'WebSearch', 'Task', 'skill', 'Skill'])
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'patch', 'apply_patch'])
-const REACHES = /^mcp__plugin_devdash_devdash__(net_|session_(create|send|stop)$|schedule_(create|update|delete)$|skill_(update|remove)$)/
+const REACHES = /^mcp__plugin_devdash_devdash__(net_|session_(create|send|stop|settings)$|schedule_(create|update|delete)$|skill_(update|remove)$)/
 export function autoAllowed(mode: string, tool: string) {
   if (mode === 'bypassPermissions') return true
   if (READS.has(tool) || tool.startsWith('mcp__plugin_devdash_devdash__') && !REACHES.test(tool)) return true

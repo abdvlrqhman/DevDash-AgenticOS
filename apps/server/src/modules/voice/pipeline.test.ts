@@ -1,6 +1,6 @@
 import { mock, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ACK_MS, ACKS, END_WAITS, endKind, FALSE_BARGE_MS, socialTurn, STUCK_MS, FILLER_MS, FILLERS, hesitationOnly, IDLE_MS, STILL_MS, stopCommand, voiceConversation, voiceTag, type Raw } from './pipeline.ts'
+import { ACK_MS, ACKS, HAMASA_VOICE, END_WAITS, endKind, FALSE_BARGE_MS, socialTurn, STUCK_MS, FILLER_MS, FILLERS, hesitationOnly, IDLE_MS, STILL_MS, stopCommand, voiceConversation, voiceTag, type Raw } from './pipeline.ts'
 import type { SttEvent, SttProvider, TtsProvider } from './providers.ts'
 
 const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)) }
@@ -45,7 +45,8 @@ function setup(o: { mode?: 'hands-free' | 'ptt'; cap?: number; chunks?: (text: s
   let listener: ((m: Raw) => void) | null = null
   const chat = {
     sent: [] as string[], interrupts: 0,
-    send: async (t: string) => void chat.sent.push(t),
+    // Like the real chat: every message sent into it is also in its stream.
+    send: async (t: string) => { chat.sent.push(t); listener?.({ type: 'user', message: { content: [{ type: 'text', text: t }] } }) },
     interrupt: async () => { chat.interrupts++; queueMicrotask(() => listener?.({ type: 'result', subtype: 'error_during_execution', terminal_reason: 'aborted_streaming' })) },
     onMessage: (fn: (m: Raw) => void) => { listener = fn; return () => { listener = null } },
   }
@@ -86,7 +87,7 @@ test('a spoken turn: an acknowledgement at once, then only the <voice> parts of 
   t.say('شوف ', 'ar'); t.say('my tasks', 'en'); t.say(' بتاعتي النهارده', 'ar')
   t.endpoint()
   await flush()
-  assert.equal(t.chat.sent[0], `<devdash-page path="/tasks" title="Tasks"/>\n${voiceTag('ar')}\n\nشوف my tasks بتاعتي النهارده`)
+  assert.equal(t.chat.sent[0], `<devdash-page path="/tasks" title="Tasks"/>\n${voiceTag('ar')}\n${HAMASA_VOICE}\n\nشوف my tasks بتاعتي النهارده`)
   t.reply({ type: 'stream_event', event: { type: 'message_start' } })
   t.delta('<voice>Okay, I\'m checking'); t.delta(' your tasks.</voice>')
   t.reply({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use' } } })
@@ -143,7 +144,7 @@ test('barge-in stops the audio, not the work; every reply after it is spoken aga
   assert.deepEqual(t.answers().slice(2), ['Checking the shop service now.', 'The builds are all green.'])
   assert.ok(t.client.audio.at(-1)!.gen > 0) // audio after a flush is a new generation: the browser drops the old one's
   // Message 3 interrupted nothing: no cut-off marker, and never the old one.
-  assert.doesNotMatch(t.chat.sent[2]!, /cut-off-after/)
+  assert.doesNotMatch(t.chat.sent[2]!, /cut-off-after="/)
 })
 
 test('cut off before anything of the new answer was heard: no stale marker from an older reply', async () => {
@@ -157,7 +158,7 @@ test('cut off before anything of the new answer was heard: no stale marker from 
   t.delta('<voice>Reply two is starting to play now.</voice>')
   await flush() // sent to the browser, not played yet
   t.say('no wait'); t.endpoint(); await flush()
-  assert.doesNotMatch(t.chat.sent[2]!, /cut-off-after/)
+  assert.doesNotMatch(t.chat.sent[2]!, /cut-off-after="/)
   assert.doesNotMatch(t.chat.sent.join('\n'), /Reply one/)
 })
 
@@ -619,4 +620,23 @@ test('a player that stays stuck: after the retries the voice bar says so, and th
   } finally {
     mock.timers.reset()
   }
+})
+
+test('a reply to a typed message, a wake-up or a reminder is never spoken, even with a <voice> block in it', async () => {
+  const t = setup()
+  t.say('hi'); t.endpoint(); await flush()
+  assert.match(t.chat.sent[0]!, /<system-reminder>This message was spoken in voice mode/) // the rules ride on the spoken message
+  t.delta('<voice>Hello there, good morning to you.</voice>')
+  t.result()
+  await flush()
+  assert.equal(t.answers().length, 1)
+  // A typed message, then a wake-up reminder: their replies stay silent.
+  for (const typed of ['<devdash-page path="/x" title="X"/>\n\nwhat about the shop?', '<system-reminder>Sessions you follow changed: shop finished.</system-reminder>']) {
+    t.reply({ type: 'user', message: { content: [{ type: 'text', text: typed }] } })
+    t.reply({ type: 'stream_event', event: { type: 'message_start' } })
+    t.delta('<voice>The shop deploy is done.</voice>\n\nDetails here.')
+    t.result({ result: 'The shop deploy is done.' })
+    await flush()
+  }
+  assert.equal(t.answers().length, 1)
 })

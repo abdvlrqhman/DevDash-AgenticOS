@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import { createInterface } from 'node:readline'
 import * as claude from './claude.ts'
 import * as harness from './harness.ts'
+import * as opencode from './opencode.ts'
 import * as services from './services.ts'
 import * as tailscale from './tailscale.ts'
 import * as storage from './storage.ts'
@@ -316,3 +317,5 @@ startTeamFiles()
 void skills.syncProfiles().catch((err: Error) => console.error('skills:', err.message))
 // The member's tailnet node comes back after the server restarts (tailscale.ts resume), if they're connected.
 void tailscale.resume().catch((err: Error) => console.error('tailscale:', err.message))
+// The member's OpenCode terminal app gets a background server port of its own, not everyone's one (opencode.ts).
+void opencode.ensureServicePort().catch((err: Error) => console.error('opencode service port:', err.message))

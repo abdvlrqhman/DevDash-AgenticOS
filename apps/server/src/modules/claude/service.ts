@@ -763,6 +763,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     publish(s.id)
     // Everyone watching sees the message right away (the sender's page already shows it; the uuid dedupes).
     hub.publish(`session:${s.id}`, { type: 'msg', msg: { type: 'user', uuid, message } }, (u) => canView(u, s))
+    for (const fn of messages) {
+      try { fn(s.id, { type: 'user', uuid, message }) } catch (err) { console.error('message listener:', err) }
+    }
     return uuid
   }
 

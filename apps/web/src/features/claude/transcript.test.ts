@@ -114,3 +114,21 @@ test("a message the agent hasn't taken in yet shows as queued, one it never got 
   ])
   assert.deepEqual(blocks.map((b) => b.kind === 'user' && b.state), ['queued', 'lost', undefined])
 })
+
+test('a <voice> block is a spoken line only in reply to a spoken message; otherwise its text shows once, plainly', async () => {
+  const { lastTurnSpoken } = await import('./transcript.ts')
+  const user = (text: string, uuid: string): Raw => ({ type: 'user', uuid, message: { role: 'user', content: [{ type: 'text', text }] } } as Raw)
+  const reply = (text: string, uuid: string): Raw => ({ type: 'assistant', uuid, message: { role: 'assistant', content: [{ type: 'text', text }] } } as Raw)
+  const voiceMsg = '<devdash-page path="/" title="Home"/>\n<devdash-voice lang="ar"/>\n<system-reminder>voice rules</system-reminder>\n\nشوف الـ tasks'
+  // A long history full of voice turns, then a typed message and a wake-up whose replies imitate the voice pattern.
+  const raws: Raw[] = []
+  for (let i = 0; i < 20; i++) raws.push(user(voiceMsg, `u${i}`), reply(`<voice>رد رقم ${i}.</voice>\n\nتفاصيل.`, `a${i}`))
+  raws.push(user('<devdash-page path="/tasks" title="Tasks"/>\n\nwhat about the shop?', 'typed'), reply('<voice>[chuckling] The shop is fine.</voice>\n\nAll green.', 'r1'))
+  raws.push(user('<system-reminder>Sessions you follow changed.</system-reminder>', 'wake'), reply('<voice>The deploy finished.</voice>', 'r2'))
+  const texts = buildTranscript(raws).filter((b) => b.kind === 'text').map((b) => (b as { text: string }).text)
+  assert.equal(texts[0], '<voice>رد رقم 0.</voice>\n\nتفاصيل.') // voice turns: unchanged, a spoken line plus the written part
+  assert.equal(texts.at(-2), 'The shop is fine.\n\nAll green.') // typed: once, plain, no cue
+  assert.equal(texts.at(-1), 'The deploy finished.') // wake-up: plain
+  assert.equal(lastTurnSpoken(raws), false)
+  assert.equal(lastTurnSpoken(raws.slice(0, 2)), true)
+})

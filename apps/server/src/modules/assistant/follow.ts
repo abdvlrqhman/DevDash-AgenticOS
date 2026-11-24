@@ -229,9 +229,10 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
     if (!user) return false
     delivering.add(userId)
     try {
-      const chatId = assistant.state(user).sessionId
+      const chatId = assistant.state(user).sessionId // the chat they talk in
       const chat = chatId ? sessionOf(chatId) : undefined
-      if (chatId && waking.has(chatId)) return false // still answering the last one
+      // Still answering the last one, maybe in their other chat (they switched tabs since).
+      if ([...waking.values()].some((w) => w.userId === userId)) return false
       // Their messages first: never into a chat that's busy, waits for them, or that they wrote in moments ago.
       if (chat && (chat.status === 'working' || chat.status === 'waiting' || nowS() - chat.last_activity_at < QUIET_S)) return false
       const t = nowS()
@@ -346,7 +347,8 @@ export function followService({ db, hub, agents, claude, assistant, autopilot, n
 
   /** A wake turn's automatic reply: only in their chat, only to a followed session, only within autopilot. */
   async function gate(user: User, chatId: string, sessionId: string, args: Record<string, unknown>) {
-    if (assistant.state(user).sessionId !== chatId) throw new AppError(400, 'bad_args', 'Only in your chat with them.')
+    // Either of their chats: the one woken may not be the one they switched to since.
+    if (!assistant.isChat(user, chatId)) throw new AppError(400, 'bad_args', 'Only in your chat with them.')
     if (claude.typedByOwner(chatId)) throw new AppError(400, 'bad_args', `${first(user)} is writing to you now: do what they ask with session_send.`)
     const f = q.get.get(user.id, sessionId) as FollowRow | undefined
     if (!f || !on(user.id)) throw new AppError(400, 'bad_args', "You don't follow that session: tell them instead.")
