@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { api, unwrap } from '@/lib/api'
+import { api, ApiError, unwrap } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
@@ -110,7 +110,14 @@ export function NewTask({ open, onClose, project, status }: { open: boolean; onC
     mutationFn: async () => {
       if (f.assignee !== EVERYONE) return [await post(f.assignee ? Number(f.assignee) : null)]
       const made = []
-      for (const m of members) made.push(await post(m.id))
+      for (const m of members) {
+        try {
+          made.push(await post(m.id))
+        } catch (err) {
+          if (!(err instanceof ApiError) || err.code !== 'not_shared') throw err // a private project not shared with them: no task for them
+        }
+      }
+      if (!made.length) throw new Error('Could not make any of the tasks.')
       return made
     },
     onSuccess: (made) => {

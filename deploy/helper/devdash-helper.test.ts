@@ -154,6 +154,25 @@ test('claude-update starts the update unit without waiting; its status is read-o
   assert.deepEqual(s.planned, [])
 })
 
+test('project-access: a private project opens only to its creator and members; a team one to the whole team', () => {
+  const uid = { DEVDASH_HELPER_FAKE_UID: '1001' }
+  const p = call({ cmd: 'project-access', args: { id: 7, slug: 'icetv', owner: 'ann', users: ['bob', 'bob'] } }, uid)
+  assert.equal(p.ok, true)
+  assert.deepEqual(p.planned, [
+    'chown ann /srv/devdash/projects/icetv', 'chmod 2770 /srv/devdash/projects/icetv', 'setfacl --set u::rwx,g::---,o::---,u:bob:rwx,m::rwx /srv/devdash/projects/icetv',
+    'chown ann /srv/devdash/worktrees/icetv', 'chmod 2770 /srv/devdash/worktrees/icetv', 'setfacl --set u::rwx,g::---,o::---,u:bob:rwx,m::rwx /srv/devdash/worktrees/icetv',
+  ])
+  assert.deepEqual(call({ cmd: 'project-access', args: { id: 7, slug: 'icetv', owner: 'ann', users: [] } }, uid).planned.filter((x) => x.startsWith('setfacl')),
+    ['setfacl --set u::rwx,g::---,o::---,m::rwx /srv/devdash/projects/icetv', 'setfacl --set u::rwx,g::---,o::---,m::rwx /srv/devdash/worktrees/icetv'], 'only the creator')
+  const team = call({ cmd: 'project-access', args: { id: 7, slug: 'icetv', owner: 'ann', users: null } }, uid)
+  assert.deepEqual(team.planned.slice(0, 3), ['setfacl -b /srv/devdash/projects/icetv', 'chgrp devdash-users /srv/devdash/projects/icetv', 'chmod 2775 /srv/devdash/projects/icetv'])
+  assert.match(call({ cmd: 'project-access', args: { id: 7, slug: '../etc', owner: 'ann', users: [] } }, uid).error, /refused: invalid project name/)
+  assert.match(call({ cmd: 'project-access', args: { id: 7, slug: 'icetv', owner: 'root', users: [] } }, uid).error, /refused: invalid username/)
+  assert.match(call({ cmd: 'project-access', args: { id: 7, slug: 'icetv', owner: 'ann', users: ['bob;rm'] } }, uid).error, /refused: invalid username/)
+  assert.match(call({ cmd: 'project-access', args: { id: 7, slug: 'icetv', owner: 'ann', users: [] } }).error, /refused: not a member account/, 'no such login')
+  assert.match(call({ cmd: 'project-access', args: { id: 7, slug: 'icetv', owner: 'ann', users: 'bob' } }, uid).error, /refused: give the members as a list/)
+})
+
 test('project-trash/restore/purge: only a project id and short name, fixed folders, argv only', () => {
   const t = call({ cmd: 'project-trash', args: { id: 7, slug: 'dd-delete-test' } })
   assert.equal(t.ok, true)

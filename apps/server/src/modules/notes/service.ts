@@ -1,3 +1,4 @@
+import type { ProjectAccess } from '../projects/access.ts'
 import type { Db } from '../../core/db.ts'
 import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
@@ -20,7 +21,11 @@ const SELECT = `select n.*, p.slug, p.name as project_name, p.deleted_at as proj
   from notes n left join projects p on p.id = n.project_id join users a on a.id = n.created_by join users e on e.id = n.updated_by`
 
 /** Markdown notes: team-visible by default, optionally private, optionally pinned to a project. */
-export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; activity: ActivityService; search: SearchService }) {
+export function notesService({ db, hub, activity, search, access }: {
+  db: Db; hub: Hub; activity: ActivityService; search: SearchService
+  /** Who may see which project (projects/access.ts): a private project's notes are only its people's. */
+  access?: ProjectAccess
+}) {
   const q = {
     list: db.prepare(`${SELECT} where (n.private = 0 or n.created_by = ?1) and (?2 is null or p.slug = ?2) and p.deleted_at is null
       order by n.pinned desc, n.updated_at desc limit 500`),
@@ -35,7 +40,7 @@ export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; 
     supersede: db.prepare(`update notes set status = 'superseded', superseded_by = ?, updated_at = unixepoch() where id = ?`),
   }
   // A deleted project's notes are hidden with it (trash.ts), and go when it's purged.
-  const visible = (n: Row, userId: number) => n.project_deleted_at === null && (!n.private || n.created_by === userId)
+  const visible = (n: Row, userId: number) => n.project_deleted_at === null && (!n.private || n.created_by === userId) && (!access || access.sees(userId, n.project_id))
   const dto = (n: Row) => ({
     id: n.id, title: n.title, body: n.body, pinned: n.pinned === 1, private: n.private === 1, viaClaude: n.via_claude === 1,
     status: n.status, supersededBy: n.superseded_by,
@@ -48,10 +53,10 @@ export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; 
     if (!n || !visible(n, user.id)) throw new AppError(404, 'not_found', 'That note does not exist or is private.')
     return n
   }
-  function projectId(slug: string | null | undefined) {
+  function projectId(slug: string | null | undefined, userId: number) {
     if (!slug) return null
     const p = q.project.get(slug) as { id: number } | undefined
-    if (!p) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
+    if (!p || (access && !access.sees(userId, p.id))) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
     return p.id
   }
   function after(a: Actor, n: Row, verb: string) {
@@ -61,7 +66,7 @@ export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; 
   }
 
   return {
-    list: (user: Pick<User, 'id'>, project?: string) => (q.list.all(user.id, project ?? null) as Row[]).map(dto),
+    list: (user: Pick<User, 'id'>, project?: string) => (q.list.all(user.id, project ?? null) as Row[]).filter((n) => visible(n, user.id)).map(dto),
     get: (user: Pick<User, 'id'>, id: number) => dto(find(user, id)),
     /** For search results: only notes this member may see. */
     visibleIds(user: Pick<User, 'id'>, ids: number[]) {
@@ -70,7 +75,7 @@ export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; 
 
     create(a: Actor, input: { title: string; body?: string; project?: string | null; pinned?: boolean; private?: boolean; status?: NoteStatus }) {
       const status = input.status && NOTE_STATUS.includes(input.status) ? input.status : 'confirmed'
-      const { id } = q.insert.get(projectId(input.project), input.title.trim(), input.body ?? '', input.pinned ? 1 : 0, input.private ? 1 : 0, a.user.id, a.user.id, a.viaClaude ? 1 : 0, a.role ?? null, status) as { id: number }
+      const { id } = q.insert.get(projectId(input.project, a.user.id), input.title.trim(), input.body ?? '', input.pinned ? 1 : 0, input.private ? 1 : 0, a.user.id, a.user.id, a.viaClaude ? 1 : 0, a.role ?? null, status) as { id: number }
       const n = q.byId.get(id) as Row
       // A role's new weekly summary supersedes its previous ones, so stale summaries don't look current.
       if (a.role && n.project_id && WEEKLY_RE.test(n.title)) {
@@ -85,7 +90,7 @@ export function notesService({ db, hub, activity, search }: { db: Db; hub: Hub; 
       if (patch.private !== undefined && n.created_by !== a.user.id) throw new AppError(403, 'forbidden', 'Only the author can change who sees a note.')
       // Marking it current again clears the "superseded by" link; otherwise the status follows the patch.
       const status = patch.status && NOTE_STATUS.includes(patch.status) ? patch.status : n.status
-      q.update.run(patch.project === undefined ? n.project_id : projectId(patch.project), patch.title?.trim() || n.title, patch.body ?? n.body,
+      q.update.run(patch.project === undefined ? n.project_id : projectId(patch.project, a.user.id), patch.title?.trim() || n.title, patch.body ?? n.body,
         patch.pinned === undefined ? n.pinned : patch.pinned ? 1 : 0, patch.private === undefined ? n.private : patch.private ? 1 : 0,
         a.user.id, a.viaClaude ? 1 : 0, status, id)
       if (patch.status && patch.status !== 'superseded' && n.superseded_by) db.prepare('update notes set superseded_by = null where id = ?').run(id)

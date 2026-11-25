@@ -33,6 +33,8 @@ install -d -m 2775 -o root -g devdash-users /srv/devdash/shared
 command -v gh >/dev/null || apt-get install -yq gh >/dev/null
 # pg_dump/pg_restore: each worktree's own copy of a project's dev database, without disturbing the main one (apps/agent/src/worktree-db.ts).
 command -v pg_dump >/dev/null || apt-get install -yq postgresql-client >/dev/null || echo 'postgresql-client not installed: worktree databases copy only an idle main database'
+# setfacl: a private project's folders open only to its creator and the members it's shared with (helper: project-access).
+command -v setfacl >/dev/null || apt-get install -yq acl >/dev/null || echo 'acl not installed: projects cannot be made private'
 # Bun for members who switch claude-mem on (its worker runs on Bun and looks for /usr/local/bin/bun).
 if [[ ! -x /usr/local/bin/bun ]]; then
   command -v unzip >/dev/null || apt-get install -yq unzip >/dev/null

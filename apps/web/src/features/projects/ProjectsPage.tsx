@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { FileArchive, FolderGit2, GitBranch, Plus, TriangleAlert } from 'lucide-react'
+import { FileArchive, FolderGit2, GitBranch, Lock, Plus, TriangleAlert } from 'lucide-react'
 import { StatusLight } from '@/components/app/brand'
 import { Orb } from '@/components/app/orb'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -146,7 +146,10 @@ function ProjectCard({ p }: { p: Project }) {
       <Link to="/projects/$slug" params={{ slug: p.slug }}
         className="flex h-full flex-col gap-5 rounded-2xl sm:min-h-40 bg-surface p-4 transition-[background-color,scale] duration-300 ease-spring hover:bg-surface-2 active:scale-[0.98]">
         <span className="flex min-w-0 flex-col gap-1">
-          <span className="truncate text-lg leading-tight font-semibold tracking-[-0.02em]">{p.name}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-lg leading-tight font-semibold tracking-[-0.02em]">{p.name}</span>
+            {p.visibility === 'private' && <Lock className="size-4 shrink-0 text-muted-foreground" aria-label="Private" />}
+          </span>
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <span className="truncate">{repoLabel(p.repoUrl)}</span>
             <GitBranch className="size-3.5 shrink-0" /><span className="shrink-0">{p.defaultBranch}</span>

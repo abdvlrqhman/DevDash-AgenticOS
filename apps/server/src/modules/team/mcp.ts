@@ -159,7 +159,8 @@ export function registerTeamMcp(agents: AgentsService, team: TeamService) {
     const status = (['open', 'waiting', 'closed', 'all'] as const).includes(s as 'all') ? (s as 'open' | 'waiting' | 'closed' | 'all') : 'all'
     // The personal agent, in no project, sees every Team-on project's threads at once: its team inbox.
     if (!slugOf(c.args) && team.personalAgent(username, c.sessionId)) {
-      return { projects: team.teamProjects().map((slug) => team.sessionThreads(username, c.sessionId, slug, status)) }
+      const viewer = team.sessionMember(username, c.sessionId).user.id
+      return { projects: team.teamProjects(viewer).map((slug) => team.sessionThreads(username, c.sessionId, slug, status)) }
     }
     return team.sessionThreads(username, c.sessionId, slugOf(c.args), status)
   })

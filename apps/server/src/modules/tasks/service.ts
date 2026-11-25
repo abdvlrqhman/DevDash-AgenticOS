@@ -1,3 +1,4 @@
+import type { ProjectAccess } from '../projects/access.ts'
 import { transaction, type Db } from '../../core/db.ts'
 import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
@@ -29,8 +30,10 @@ export type Actor = { user: Pick<User, 'id' | 'name'>; viaClaude?: boolean; role
 const SELECT = `select t.*, p.slug, p.name as project_name, a.name as assignee_name, a.username as assignee_username, c.name as creator_name
   from tasks t join projects p on p.id = t.project_id left join users a on a.id = t.assignee_id join users c on c.id = t.created_by`
 
-export function tasksService({ db, hub, activity, search, threadOf, onClosed }: {
+export function tasksService({ db, hub, activity, search, threadOf, onClosed, access }: {
   db: Db; hub: Hub; activity: ActivityService; search: SearchService
+  /** Who may see which project (projects/access.ts): a private project's tasks are only its people's. */
+  access?: ProjectAccess
   /** The team thread a task belongs to, if any (for "From thread #N"). Injected by the app; core never imports Team. */
   threadOf?: (taskId: number) => { id: number; title: string; status: 'open' | 'resolved' } | null
   /** Fired when a task becomes done, so Team can offer to close the thread it came from. Injected by the app. */
@@ -59,7 +62,7 @@ export function tasksService({ db, hub, activity, search, threadOf, onClosed }: 
     userByEmail: db.prepare('select id from users where email = ? collate nocase'),
     member: db.prepare('select id from users where id = ? and disabled_at is null'),
   }
-  const changed = (slug: string) => hub.publish('tasks', { type: 'changed', project: slug })
+  const changed = (slug: string) => hub.publish('tasks', { type: 'changed', project: slug }, (u) => !access || access.seesSlug(u.id, slug))
 
   const dto = (t: Row) => ({
     id: t.id, number: t.number, key: `${t.slug}#${t.number}`, title: t.title, body: t.body, status: t.status, priority: t.priority,
@@ -75,13 +78,17 @@ export function tasksService({ db, hub, activity, search, threadOf, onClosed }: 
     if (!t) throw new AppError(404, 'not_found', `There is no task ${slug}#${number}.`)
     return t
   }
-  function checkAssignee(id: number | null | undefined) {
+  function checkAssignee(id: number | null | undefined, projectId?: number) {
     if (id && !q.member.get(id)) throw new AppError(400, 'bad_assignee', 'That person is not a member.')
+    // A private project's task can't go to someone it isn't shared with: they couldn't even see it.
+    if (id && projectId !== undefined && access && !access.sees(id, projectId)) throw new AppError(400, 'not_shared', 'That person can\'t see this project.')
   }
 
   const api = {
-    list(f: { project?: string; assignee?: number; status?: Status; includeOldDone?: boolean }) {
-      return (q.list.all(f.project ?? null, f.assignee ?? null, f.status ?? null, f.includeOldDone ? 1 : 0) as Row[]).map(dto)
+    /** `viewer`: only tasks in projects shared with them. */
+    list(f: { project?: string; assignee?: number; status?: Status; includeOldDone?: boolean; viewer?: number }) {
+      return (q.list.all(f.project ?? null, f.assignee ?? null, f.status ?? null, f.includeOldDone ? 1 : 0) as Row[])
+        .filter((t) => f.viewer === undefined || !access || access.sees(f.viewer, t.project_id)).map(dto)
     },
 
     get(slug: string, number: number) {
@@ -98,8 +105,8 @@ export function tasksService({ db, hub, activity, search, threadOf, onClosed }: 
 
     create(a: Actor, input: { project: string; title: string; body?: string; status?: Status; priority?: Priority; due?: string | null; assignee?: number | null }) {
       const p = q.project.get(input.project) as { id: number; slug: string; archived: number } | undefined
-      if (!p || p.archived) throw new AppError(404, 'not_found', `There is no project ${input.project}.`)
-      checkAssignee(input.assignee)
+      if (!p || p.archived || (access && !access.sees(a.user.id, p.id))) throw new AppError(404, 'not_found', `There is no project ${input.project}.`)
+      checkAssignee(input.assignee, p.id)
       const status = input.status ?? 'todo'
       const t = transaction(db, () => {
         const number = (q.next.get(p.id) as { n: number }).n
@@ -115,7 +122,7 @@ export function tasksService({ db, hub, activity, search, threadOf, onClosed }: 
 
     update(a: Actor, slug: string, number: number, patch: { title?: string; body?: string; status?: Status; priority?: Priority; due?: string | null; assignee?: number | null; sort?: number }) {
       const t = find(slug, number)
-      if (patch.assignee !== undefined) checkAssignee(patch.assignee)
+      if (patch.assignee !== undefined) checkAssignee(patch.assignee, t.project_id)
       const status = patch.status ?? t.status
       // A move to another column without a position goes to the bottom of it.
       const sort = patch.sort ?? (status !== t.status ? (q.maxSort.get(t.project_id, status) as { s: number }).s + 1 : t.sort)

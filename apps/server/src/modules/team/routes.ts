@@ -125,10 +125,10 @@ export function teamRoutes(team: TeamService | null, mw: ReturnType<typeof authM
     .post('/sources/:id/test', async (c) => c.json(await t().testSource(id(c.req.param('id')))))
     .get('/approvals', query(z.object({ status: z.enum(['pending', 'decided']).default('pending'), project: z.string().max(40).optional() })), (c) => {
       const { status, project } = c.req.valid('query')
-      return c.json({ proposals: t().approvals(status, project) })
+      return c.json({ proposals: t().approvals(status, project, c.get('user').id) })
     })
-    .get('/approvals/count', (c) => c.json({ pending: team ? team.pendingCount() : 0 }))
-    .get('/approvals/projects', (c) => c.json({ projects: t().approvalProjects() }))
+    .get('/approvals/count', (c) => c.json({ pending: team ? team.pendingCount(c.get('user').id) : 0 }))
+    .get('/approvals/projects', (c) => c.json({ projects: t().approvalProjects(c.get('user').id) }))
     .post('/proposals/:id/decide', json(z.object({ approve: z.boolean(), reply: z.string().max(4000).default('') })), async (c) => {
       const { approve, reply } = c.req.valid('json')
       return c.json({ proposal: await t().decide(c.get('user'), id(c.req.param('id')), approve, reply) })

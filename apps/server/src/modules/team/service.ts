@@ -130,7 +130,10 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     const u = db.prepare('select id, email, username, name, role from users where id = ? and disabled_at is null').get(id)
     return u ? ({ ...u } as User) : undefined
   }
-  const members = () => (db.prepare('select id from users where disabled_at is null').all() as { id: number }[]).map((u) => u.id)
+  /** Who a project's news is for: its people (everyone, or a private project's creator and members). projects/access.ts */
+  const members = (projectId: number) => projects.access?.audience(projectId)
+    ?? (db.prepare('select id from users where disabled_at is null').all() as { id: number }[]).map((u) => u.id)
+  const sees = (userId: number, projectId: number | null) => projects.access?.sees(userId, projectId) ?? true
   /** The member's profile for an agent: their default profile when it's that agent's, else the agent's default one. */
   const profileFor = (u: User, harness: string) => { const d = claude.defaults(u); return d.harness === harness ? d.profile : 'default' }
   /** DevDash's own text jobs for a member (a session digest, drafted instructions) run on their default agent. */
@@ -172,8 +175,8 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     const s = settingsOf(r)
     return { instructions: roleSystem({ ...r, autonomy: s.autonomy, autoApprove: s.autoApprove }, project), toolPolicy: roleTools(s.autonomy) }
   }
-  const tell = (title: string, body: string, url: string, tag: string, kind: NotificationKind = 'needs_you') => {
-    for (const uid of members()) void notify(uid, kind, { title, body, url, tag }).catch(() => {})
+  const tell = (projectId: number, title: string, body: string, url: string, tag: string, kind: NotificationKind = 'needs_you') => {
+    for (const uid of members(projectId)) void notify(uid, kind, { title, body, url, tag }).catch(() => {})
   }
   const monthStart = () => {
     const d = new Date()
@@ -309,7 +312,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       hub.publish('team', { type: 'approvals' })
       return { status: 'pending' as const, outcome: null }
     }
-    for (const uid of members()) {
+    for (const uid of members(p.id)) {
       void notify(uid, 'needs_you', { title: `${r.name} (${p.name}): ${input.title}`, body: 'Waiting for your approval', url: '/approvals', tag: `team-proposal:${id}` }).catch(() => {})
     }
     changed(p.id)
@@ -422,7 +425,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
         const report = repo.shiftBySession(s.id)?.report
         if (role?.lead && e.ok && report) {
           const p = db.prepare('select slug, name from projects where id = ?').get(role.project_id) as { slug: string; name: string }
-          tell(`${p.name}: ${role.name}'s digest`, clipText(report.replace(/[#*_`>]/g, '').replace(/\s+/g, ' ').trim(), 300),
+          tell(role.project_id, `${p.name}: ${role.name}'s digest`, clipText(report.replace(/[#*_`>]/g, '').replace(/\s+/g, ' ').trim(), 300),
             `/projects/${p.slug}/team/${role.id}`, `team-digest:${role.id}`, 'finished')
         }
       }
@@ -540,10 +543,10 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       if (ask) repo.setThreadAsk(t.id, ask)
       repo.needsPeople(t.id, true)
       const decision = ask ?? repo.thread(t.id)?.ask
-      tell(`${p.name}: "${t.title}" needs a person`, decision ? `Decision needed: ${decision}` : `${HOP_LIMIT} messages between roles without a decision.`, url, `team-thread:${t.id}`)
+      tell(projectId, `${p.name}: "${t.title}" needs a person`, decision ? `Decision needed: ${decision}` : `${HOP_LIMIT} messages between roles without a decision.`, url, `team-thread:${t.id}`)
       note = ask ? ` Handed to people — asked: "${ask}".` : ' The roles have gone back and forth enough: this thread now waits for people.'
     } else if (kind === 'alert') {
-      tell(`Alert in ${p.name}: ${t.title}`, clipText(body, 200), url, `team-thread:${t.id}`)
+      tell(projectId, `Alert in ${p.name}: ${t.title}`, clipText(body, 200), url, `team-thread:${t.id}`)
     }
     // Who must act now: the owner on an alert or a person's message (within its limits); others see it on their next shift.
     const owner = t.owner_role_id ? repo.role(t.owner_role_id) : undefined
@@ -646,7 +649,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       projectId: p.id, roleId: r.id, kind: 'close', title: `Close ${payload.target.label}`,
       why: payload.evidence.trim().slice(0, 4000), payload, expiresAt: Math.floor(Date.now() / 1000) + PROPOSAL_DAYS * 86_400, awaiting: 'people',
     })
-    for (const uid of members()) {
+    for (const uid of members(p.id)) {
       void notify(uid, 'needs_you', { title: `${r.name} (${p.name}): close ${payload.target.label}?`, body: clipText(payload.evidence, 140) || 'Close this?', url: '/approvals', tag: `team-proposal:${id}` }).catch(() => {})
     }
     changed(p.id)
@@ -1064,18 +1067,22 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
 
     // ---- Approvals ----
     // People see only proposals awaiting a person; the ones the lead can clear stay off their list.
-    approvals: (status: 'pending' | 'decided', slug?: string) =>
-      repo.proposals(slug ? projects.bySlug(slug).id : null, status, status === 'pending' ? 200 : 40, status === 'pending' ? 'people' : null).map(proposalDto),
-    pendingCount: () => repo.pendingCount(),
+    /** `viewer`: only projects shared with them (projects/access.ts). */
+    approvals: (status: 'pending' | 'decided', slug?: string, viewer?: number) =>
+      repo.proposals(slug ? projects.bySlug(slug).id : null, status, status === 'pending' ? 200 : 40, status === 'pending' ? 'people' : null)
+        .filter((x) => viewer === undefined || sees(viewer, x.project_id)).map(proposalDto),
+    pendingCount(viewer?: number) {
+      return viewer === undefined ? repo.pendingCount() : this.approvals('pending', undefined, viewer).length
+    },
     /** Each project with any proposals: how many wait, how many are decided, who's waiting, and when it last stirred. */
-    approvalProjects() {
+    approvalProjects(viewer?: number) {
       const byProject = new Map<number, { id: number; name: string }[]>()
       for (const r of repo.proposalRoles()) {
         const list = byProject.get(r.project_id) ?? []
         list.push({ id: r.id, name: r.name })
         byProject.set(r.project_id, list)
       }
-      return repo.proposalProjects().map((p) => ({
+      return repo.proposalProjects().filter((p) => viewer === undefined || sees(viewer, p.project_id)).map((p) => ({
         slug: p.slug, name: p.name, pending: p.pending, decided: p.decided, cleared: p.cleared, lastAt: p.last_at, roles: byProject.get(p.project_id) ?? [],
       }))
     },
@@ -1313,7 +1320,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       }
       // Escalate: it becomes a person's call and their phones go off, as a normal proposal would.
       repo.setProposalAwaiting(id, 'people')
-      for (const uid of members()) {
+      for (const uid of members(p.id)) {
         void notify(uid, 'needs_you', { title: `${x.role_name} (${p.name}): ${x.title}`, body: note ? `${r.name} escalated: ${note}` : `${r.name} escalated this to you`, url: '/approvals', tag: `team-proposal:${id}` }).catch(() => {})
       }
       changed(p.id)
@@ -1344,7 +1351,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       const owner = s && userById(s.owner_id)
       if (!s || !owner || owner.username !== username || repo.roleBySession(sessionId)) return null
       const projectId = slug?.trim() ? (db.prepare('select id from projects where slug = ?').get(slug.trim()) as { id: number } | undefined)?.id : s.project_id
-      if (!projectId || !repo.project(projectId)) return null
+      if (!projectId || !repo.project(projectId) || !sees(owner.id, projectId)) return null
       return { projectId, author: { kind: 'session' as const, sessionId, title: s.title, owner } }
     },
     /** The member's personal agent (Hamasa): in no project itself, it manages every project's team by name. */
@@ -1383,7 +1390,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
         name: input.name.trim().slice(0, 60), summary, instructions, model,
         schedule: input.schedule?.length ? input.schedule : [{ days: [1, 2, 3, 4, 5], at: '09:00' }],
       })
-      tell(`${p.name}: ${owner.name}'s Claude added a role`, `${role.name}${summary ? `: ${summary}` : ''}`, `/projects/${p.slug}/team/${role.id}`, `team-role:${role.id}`, 'shared')
+      tell(who.projectId, `${p.name}: ${owner.name}'s Claude added a role`, `${role.name}${summary ? `: ${summary}` : ''}`, `/projects/${p.slug}/team/${role.id}`, `team-role:${role.id}`, 'shared')
       return `Created #${role.id} ${role.name}. It works ${role.schedule.length ? 'on its schedule' : 'when started'}; see and change it at /projects/${p.slug}/team/${role.id}.\n\nInstructions:\n${instructions}`
     },
 
@@ -1444,7 +1451,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       const owner = who.author.owner
       const id = this.addSource(owner, p.slug, input, { keyLater: true })
       const x = repo.source(id)!
-      tell(`${p.name}: ${owner.name}'s Claude added a data source`, `${x.name} (${x.kind}): ${where(x)}`, `/projects/${p.slug}`, `team-source:${id}`, 'shared')
+      tell(who.projectId, `${p.name}: ${owner.name}'s Claude added a data source`, `${x.name} (${x.kind}): ${where(x)}`, `/projects/${p.slug}`, `team-source:${id}`, 'shared')
       return [`Added #${id} ${x.name}. Roles see it in team_sources now.`, needsKey(x) ? keyLater(x, owner.name) : ''].filter(Boolean).join(' ')
     },
 
@@ -1503,11 +1510,18 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       if (!s || !owner || owner.username !== username) throw new AppError(403, 'not_team', 'This is not your own Claude session.')
       return { user: owner, session: s }
     },
+    /** sessionMember, for an item in a project (a thread, a proposal): one in a project not shared with them reads as missing. */
+    memberFor(username: string, sessionId: string | null, projectId: number | undefined) {
+      const m = this.sessionMember(username, sessionId)
+      if (projectId !== undefined && !sees(m.user.id, projectId)) throw new AppError(404, 'not_found', 'There is no such thread or proposal.')
+      return m
+    },
     /** That member and the project to act on with full authority: the `project` slug, or the session's own. Team must be on. */
     sessionActor(username: string, sessionId: string | null, slug?: string) {
       const { user, session } = this.sessionMember(username, sessionId)
       const target = slug?.trim() || (session.project_id ? (db.prepare('select slug from projects where id = ?').get(session.project_id) as { slug: string } | undefined)?.slug : undefined)
       if (!target) throw new AppError(400, 'bad_args', 'Say which project with `project` (this session has none).')
+      if (projects.access && !projects.access.seesSlug(user.id, target)) throw new AppError(404, 'not_found', `There is no project ${target}.`)
       const { p } = on(target)
       return { user, slug: p.slug, projectId: p.id }
     },
@@ -1534,7 +1548,7 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
     },
     /** A member answers a proposal (full authority). Approving a code proposal starts a session as them, as on the web. */
     sessionDecide(username: string, sessionId: string, id: number, approve: boolean, reply: string) {
-      return this.decide(this.sessionMember(username, sessionId).user, id, approve, reply)
+      return this.decide(this.memberFor(username, sessionId, repo.proposal(id)?.project_id).user, id, approve, reply)
     },
     /** A member lists the project's threads (open, waiting, closed or all), shaped short. */
     sessionThreads(username: string, sessionId: string, slug: string | undefined, status: 'open' | 'waiting' | 'closed' | 'all' = 'all') {
@@ -1547,31 +1561,31 @@ export function teamService({ db, hub, claude, projects, activity, tasks, notify
       }
       return shape(this.sessionActor(username, sessionId, slug).slug)
     },
-    /** The projects with Team on (not archived), by short name. */
-    teamProjects: () => repo.projects().map((x) => x.slug),
+    /** The projects with Team on (not archived), by short name; with `viewer`, only ones shared with them. */
+    teamProjects: (viewer?: number) => repo.projects().filter((x) => viewer === undefined || sees(viewer, x.project_id)).map((x) => x.slug),
     /** A member reads one thread, as the web does. */
     sessionThread(username: string, sessionId: string, id: number) {
-      this.sessionMember(username, sessionId)
+      this.memberFor(username, sessionId, repo.thread(id)?.project_id)
       return this.thread(id)
     },
     /** A member closes a thread as a person (full authority). */
     sessionResolveThread(username: string, sessionId: string, id: number, resolution: string, as: CloseAs = 'done', duplicateOf?: number) {
-      this.resolveAsPerson(this.sessionMember(username, sessionId).user, id, resolution, as, duplicateOf)
+      this.resolveAsPerson(this.memberFor(username, sessionId, repo.thread(id)?.project_id).user, id, resolution, as, duplicateOf)
       return as === 'done' ? `Thread #${id} resolved.` : `Thread #${id} closed (${as.replace('_', ' ')}).`
     },
     /** A member reopens a closed thread. */
     sessionReopenThread(username: string, sessionId: string, id: number) {
-      this.reopen(this.sessionMember(username, sessionId).user, id)
+      this.reopen(this.memberFor(username, sessionId, repo.thread(id)?.project_id).user, id)
       return `Thread #${id} reopened.`
     },
     /** A member links a task to a thread, or unlinks it (one job per object). */
     sessionLinkTask(username: string, sessionId: string, threadId: number, taskNumber: number, unlink = false) {
-      const key = this.linkTaskAsPerson(this.sessionMember(username, sessionId).user, threadId, taskNumber, unlink)
+      const key = this.linkTaskAsPerson(this.memberFor(username, sessionId, repo.thread(threadId)?.project_id).user, threadId, taskNumber, unlink)
       return unlink ? `Unlinked ${key} from thread #${threadId}.` : `Linked ${key} to thread #${threadId}.`
     },
     /** A member marks a thread a blocker or clears it. */
     sessionThreadPriority(username: string, sessionId: string, id: number, priority: 'normal' | 'blocker') {
-      this.setThreadPriority(this.sessionMember(username, sessionId).user, id, priority)
+      this.setThreadPriority(this.memberFor(username, sessionId, repo.thread(id)?.project_id).user, id, priority)
       return priority === 'blocker' ? `Thread #${id} marked a blocker.` : `Thread #${id} blocker cleared.`
     },
     /** A member sets the team's "what matters now". */

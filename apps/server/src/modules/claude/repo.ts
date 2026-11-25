@@ -1,3 +1,4 @@
+import { seesSql } from '../projects/access.ts'
 import type { Db } from '../../core/db.ts'
 
 export type SessionStatus = 'working' | 'waiting' | 'idle' | 'stopped' | 'error'
@@ -63,9 +64,13 @@ const SELECT = `select s.*, u.username as owner_username, u.name as owner_name, 
   (select count(*) from claude_session_viewers v where v.session_id = s.id) as people, pg.caps as project_guest_caps
   from claude_sessions s join users u on u.id = s.owner_id left join projects p on p.id = s.project_id
   left join project_guest_caps pg on pg.user_id = s.owner_id and pg.project_id = s.project_id`
-/** The sessions member `who` may open: their own, ones shared with everyone, and ones shared with them by name. */
+/**
+ * The sessions member `who` may open: their own, and ones shared with everyone or with them by name, unless they're in a
+ * private project that isn't shared with them (projects/access.ts).
+ */
 export const canSeeSql = (who: string) =>
-  `(s.owner_id = ${who} or s.shared = 1 or s.id in (select session_id from claude_session_viewers where user_id = ${who}))`
+  `(s.owner_id = ${who} or ((s.shared = 1 or s.id in (select session_id from claude_session_viewers where user_id = ${who}))
+    and (s.project_id is null or exists (select 1 from projects pp where pp.id = s.project_id and ${seesSql('pp', who)}))))`
 
 // Columns a PATCH may touch; anything else is ignored.
 const PATCHABLE = ['title', 'title_custom', 'shared', 'shared_can_send', 'archived', 'model', 'effort', 'permission_mode', 'mode', 'started', 'fast_mode', 'remote_control', 'context_json', 'instructions', 'tool_policy', 'listed', 'reach_tailnet', 'tailnet_mcp', 'tailnet_mcps', 'guest_caps', 'guest_caps_custom', 'origin_kind', 'origin_role', 'native_id', 'drive', 'advisor_model'] as const

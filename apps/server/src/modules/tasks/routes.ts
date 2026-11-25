@@ -27,7 +27,7 @@ export function tasksRoutes(tasks: TasksService, giveToClaude: GiveToClaude, mw:
         tasks: tasks.list({
           project: f.project || undefined,
           assignee: f.assignee === 'me' ? c.get('user').id : f.assignee ? num(f.assignee) : undefined,
-          includeOldDone: f.done === 'all',
+          includeOldDone: f.done === 'all', viewer: c.get('user').id,
         }),
       })
     })

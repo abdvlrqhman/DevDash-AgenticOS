@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto'
-import type { Db } from '../../core/db.ts'
+import { transaction, type Db } from '../../core/db.ts'
 import type { Hub } from '../../core/hub.ts'
 import { AppError } from '../../core/http.ts'
 import type { ActivityService } from '../activity/service.ts'
 import type { AgentsService } from '../agents/service.ts'
 import type { User } from '../auth/repo.ts'
 import { canSeeSql } from '../claude/repo.ts'
+import { projectAccess, type ProjectAccess } from './access.ts'
 import type { TasksService } from '../tasks/service.ts'
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/
@@ -15,7 +16,7 @@ type Row = {
   id: number; slug: string; name: string; repo_url: string | null; default_branch: string; created_by: number; created_at: number
   fetched_at: number | null; fetch_error: string | null; archived: number; creator_username: string; creator_name: string
   creator_disabled_at: number | null; deleted_at: number | null; deleted_by: number | null; deleted_archived: number
-  session_sharing: SessionSharing; instructions: string
+  session_sharing: SessionSharing; instructions: string; visibility: 'team' | 'private'
   open_tasks: number; sessions: number; working: number; waiting: number; active_people: string; last_session_at: number | null
 }
 
@@ -42,8 +43,12 @@ export const slugify = (s: string) => s.toLowerCase().replace(/\.git$/, '').repl
  * through their agent: cloning as the creator, fetching every few minutes as the creator, worktrees as the session owner.
  * After every fetch the branches are scanned for "fixes #N" (tasks service).
  */
-export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, root, onFetched }: {
+export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, root, onFetched, access = projectAccess(db), lockFolders }: {
   db: Db; hub: Hub; agents: AgentsService; activity: ActivityService; tasks: TasksService
+  /** Who may see which project (access.ts). */
+  access?: ProjectAccess
+  /** Applies a project's visibility to its folders (the root helper): private ones only open to its people. */
+  lockFolders?: (p: { id: number; slug: string; owner: string; users: string[] | null }) => Promise<void>
   gitSafeDir: (path: string) => Promise<void>; root: string
   /** After each repo fetch (and its scan): lets "Ready to review" notice branches merged outside DevDash. Injected by the app. */
   onFetched?: (p: { id: number; slug: string; default_branch: string; creator_username: string }) => Promise<void> | void
@@ -74,6 +79,7 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     live: { working: p.working, waiting: p.waiting, people: JSON.parse(p.active_people || '[]') as string[] }, lastSessionAt: p.last_session_at,
     creator: { id: p.created_by, username: p.creator_username, name: p.creator_name, disabled: p.creator_disabled_at !== null },
     sessionSharing: p.session_sharing, instructions: p.instructions,
+    visibility: p.visibility, members: p.visibility === 'private' ? access.members(p.id) : [], viewers: p.visibility === 'private' ? access.viewers(p.id) : [],
   })
   // Who is asking, for the session count (0: nobody's own, shared sessions only).
   const me = (userId = 0) => ({ me: userId })
@@ -90,9 +96,10 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     return { name, slug }
   }
   const byId = (id: number, userId?: number) => q.byId.get(me(userId), id) as Row | undefined
+  /** A project, for `userId` when given: one that isn't shared with them reads as missing, exactly like a missing one. */
   function find(slug: string, userId?: number) {
     const p = q.bySlug.get(me(userId), slug) as Row | undefined
-    if (!p || p.deleted_at !== null) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
+    if (!p || p.deleted_at !== null || (userId !== undefined && !access.sees(userId, p.id))) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
     return p
   }
   /** A short name stays taken while its project is in Recently deleted. */
@@ -172,7 +179,8 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
 
   return {
     path,
-    list: (archived = false, userId?: number) => (q.all.all(me(userId), archived ? 1 : 0) as Row[]).map(dto),
+    list: (archived = false, userId?: number) => (q.all.all(me(userId), archived ? 1 : 0) as Row[]).filter((p) => userId === undefined || access.sees(userId, p.id)).map(dto),
+    access,
     get: (slug: string, userId?: number) => dto(find(slug, userId)),
     idOf: (slug: string) => find(slug).id,
     bySlug: (slug: string) => find(slug),
@@ -254,8 +262,44 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     },
 
     /** Any member renames it or sets how new sessions start out; archiving is for whoever added it, or an admin. */
+    /**
+     * Who can see it: the whole team, or (private) only its creator and the members named. Only its creator decides. Going
+     * private is refused while someone it wouldn't be shared with still works in it (their sessions and services keep
+     * the access they started with), or while its team runs as such a person. Its folders follow (lockFolders).
+     */
+    async setAccess(user: User, slug: string, input: { visibility: 'team' | 'private'; members?: number[] }) {
+      const p = find(slug, user.id)
+      if (user.id !== p.created_by) throw new AppError(403, 'forbidden', 'Only the person who added the project decides who can see it.')
+      const users = db.prepare('select id, username, name from users where disabled_at is null').all() as { id: number; username: string; name: string }[]
+      const members = input.visibility === 'private' ? [...new Set(input.members ?? [])].filter((id) => id !== p.created_by) : []
+      if (members.some((id) => !users.some((u) => u.id === id))) throw new AppError(404, 'not_found', 'No such member.')
+      if (input.visibility === 'private') {
+        const allowed = new Set([p.created_by, ...members])
+        const busy = db.prepare(`select distinct u.name from claude_sessions s join users u on u.id = s.owner_id where s.project_id = ? and s.archived = 0
+          union select distinct u.name from services v join users u on u.id = v.owner_id where v.cwd = ? or v.cwd like ? or v.cwd like ?`)
+          .all(p.id, path(p.slug), `${path(p.slug)}/%`, `${root}/worktrees/${p.slug}/%`) as { name: string }[]
+        const blocked = busy.map((b) => users.find((u) => u.name === b.name)).filter((u): u is (typeof users)[number] => !!u && !allowed.has(u.id))
+        if (blocked.length) {
+          throw new AppError(409, 'in_use', `${blocked.map((u) => u.name).join(', ')} still ${blocked.length === 1 ? 'has' : 'have'} sessions or services in it. Share it with them, or ask them to archive those first.`)
+        }
+        const team = db.prepare('select runs_as from team_projects where project_id = ?').get(p.id) as { runs_as: number } | undefined
+        if (team && !allowed.has(team.runs_as)) throw new AppError(409, 'team', 'Its AI team runs as someone it wouldn\'t be shared with. Share it with them, or turn Team off and on again as yourself.')
+      }
+      const owner = users.find((u) => u.id === p.created_by)?.username
+      if (lockFolders && owner) {
+        await lockFolders({ id: p.id, slug: p.slug, owner, users: input.visibility === 'private' ? members.map((id) => users.find((u) => u.id === id)!.username) : null })
+      }
+      transaction(db, () => {
+        db.prepare('update projects set visibility = ? where id = ?').run(input.visibility, p.id)
+        db.prepare('delete from project_members where project_id = ?').run(p.id)
+        for (const id of members) db.prepare('insert into project_members (project_id, user_id) values (?, ?)').run(p.id, id)
+      })
+      changed()
+      return dto(find(slug, user.id))
+    },
+
     update(user: User, slug: string, patch: { name?: string; archived?: boolean; sessionSharing?: SessionSharing; instructions?: string }) {
-      const p = find(slug)
+      const p = find(slug, user.id)
       if (patch.archived !== undefined && user.role !== 'admin' && user.id !== p.created_by) {
         throw new AppError(403, 'forbidden', 'Only the person who added it or an admin can archive a project.')
       }

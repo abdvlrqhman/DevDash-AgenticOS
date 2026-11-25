@@ -38,9 +38,12 @@ const SELECT = `select s.*, u.username as owner_username, u.name as owner_name, 
  * The services center. The registry lives here; the processes run in each owner's agent (tmux, as the owner),
  * so they survive DevDash restarts. A monitor keeps every service whose desired state is "running" up.
  */
-export function servicesService({ db, agents, hub, notify, previewUrl, basePath }: {
+export function servicesService({ db, agents, hub, notify, previewUrl, basePath, sees }: {
   db: Db; agents: AgentsService; hub: Hub; notify: NotificationsService['notify']; previewUrl: (name: string) => string; basePath: (name: string) => string
+  /** Whether a member may see a folder's project (projects/access.ts): a private project's services are only its people's. */
+  sees?: (userId: number, cwd: string) => boolean
 }) {
+  const mayList = (s: { owner_id: number; cwd: string }, u: Pick<User, 'id'>) => s.owner_id === u.id || !sees || sees(u.id, s.cwd)
   const q = {
     all: db.prepare(`${SELECT} order by s.name`),
     byName: db.prepare(`${SELECT} where s.name = ?`),
@@ -168,8 +171,12 @@ export function servicesService({ db, agents, hub, notify, previewUrl, basePath 
   }
 
   const api = {
-    list: (u: Pick<User, 'id' | 'role'>) => (q.all.all() as Row[]).map((s) => dto(s, u)),
-    get: (u: Pick<User, 'id' | 'role'>, name: string) => dto(get(name), u),
+    list: (u: Pick<User, 'id' | 'role'>) => (q.all.all() as Row[]).filter((s) => mayList(s, u)).map((s) => dto(s, u)),
+    get: (u: Pick<User, 'id' | 'role'>, name: string) => {
+      const s = get(name)
+      if (!mayList(s, u)) throw new AppError(404, 'not_found', `There is no service ${name}.`)
+      return dto(s, u)
+    },
 
     async create(u: Pick<User, 'id' | 'role' | 'username'>, input: { name: string; cwd: string; command: string; sessionId?: string } & Options) {
       if (!NAME_RE.test(input.name)) throw new AppError(400, 'invalid_name', 'Use lowercase letters, digits and dashes, starting with a letter (up to 31).')
@@ -241,8 +248,9 @@ export function servicesService({ db, agents, hub, notify, previewUrl, basePath 
     },
 
     /** Every port in use on the server, and which service (if any) holds it. */
-    ports() {
-      const byPort = new Map((q.all.all() as Row[]).map((s) => [s.port, s.name]))
+    /** Every port in use (none may be picked twice), named only when `u` may see the service (a private project's hides). */
+    ports(u?: Pick<User, 'id'>) {
+      const byPort = new Map((q.all.all() as Row[]).map((s) => [s.port, !u || mayList(s, u) ? s.name : "(a private project's)"]))
       return listeningPorts().map((p) => ({ ...p, service: byPort.get(p.port) ?? null }))
     },
 
@@ -279,7 +287,7 @@ export function servicesService({ db, agents, hub, notify, previewUrl, basePath 
     const o = (v ?? {}) as { name: string; cwd: string; command: string; sessionId?: string; env?: string; autostart?: boolean; restart?: boolean }
     return api.create(asUser(username), o)
   })
-  agents.onRpc('services.ports', () => ({ ports: api.ports() }))
+  agents.onRpc('services.ports', (username) => ({ ports: api.ports(asUser(username)) }))
   agents.onRpc('services.start', (username, v) => api.start(asUser(username), p(v).name!))
   agents.onRpc('services.stop', (username, v) => api.stop(asUser(username), p(v).name!))
   agents.onRpc('services.restart', (username, v) => api.restart(asUser(username), p(v).name!))

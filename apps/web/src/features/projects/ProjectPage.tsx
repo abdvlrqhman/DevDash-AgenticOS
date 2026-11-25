@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import { BadgeCheck, Bot, ChevronRight, Copy, Ellipsis, GitBranch, GitCommitHorizontal, KeyRound, Lock, Plus, RefreshCw, Search, Share2, Sparkles, StickyNote, Trash2, TriangleAlert } from 'lucide-react'
+import { BadgeCheck, Bot, ChevronRight, Copy, Ellipsis, GitBranch, GitCommitHorizontal, KeyRound, Lock, Plus, RefreshCw, Search, Share2, Sparkles, StickyNote, Trash2, TriangleAlert, Users } from 'lucide-react'
 import { toast } from '@/lib/toast'
 import { StatusLight } from '@/components/app/brand'
 import { authorName } from '@/components/app/author'
@@ -9,6 +9,7 @@ import { Orb } from '@/components/app/orb'
 import { PageBody, PageHeader } from '@/components/app/page'
 import { UserAvatar } from '@/components/app/user-avatar'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -24,7 +25,7 @@ import { NewSession } from '../claude/SessionsPage'
 import { CAPS, capsLabel, projectCapsQuery, type Cap } from '../claude/ShareDialog'
 import { Board } from '../work/Board'
 import { activityQuery, commitsQuery, notesQuery, projectQuery, STATUSES, tasksQuery, useLiveWork, type Activity, type Project, type SessionSharing, type Task } from '../work/data'
-import { Due, PriorityIcon, StatusIcon } from '../work/TaskBits'
+import { Due, PriorityIcon, StatusIcon, useMembers } from '../work/TaskBits'
 import { cn } from '@/lib/utils'
 import { NoteList } from '../notes/NotesPage'
 import { count, repoLabel, segment, segmented } from './ProjectsPage'
@@ -73,6 +74,7 @@ function ProjectPageView() {
         description={<span className="flex items-center gap-1.5"><span className="truncate">{repoLabel(p.repoUrl)}</span><GitBranch className="size-3.5 shrink-0" />{p.defaultBranch}</span>}
         actions={<>
           {p.repoUrl && <Button size="icon-sm" variant="ghost" aria-label="Fetch now" title="Fetch now" disabled={fetchNow.isPending} onClick={() => fetchNow.mutate()}><RefreshCw className={fetchNow.isPending ? 'animate-spin' : ''} /></Button>}
+          <ProjectAccess p={p} mine={!!me && p.creator.username === me.username} />
           <GuestCapsDefault slug={p.slug} />
           <PinButton kind="project" id={p.slug} />
           <Button size="sm" variant="outline" onClick={() => setSession(true)}><Sparkles /><span className="hidden sm:inline">Session</span></Button>
@@ -362,6 +364,65 @@ function ProjectSessions({ slug, sharing, onNew }: { slug: string; sharing: Sess
         )}
       {list.data && !needle && (filter === 'all' || filter === 'teammates') && <HiddenLine hidden={list.data.hidden} archived={archived} />}
     </div>
+  )
+}
+
+/**
+ * Who can see the project, in its header. Its creator chooses the team, or private: only them and the members they tick.
+ * A private project doesn't exist for anyone else: not in lists, not its tasks, notes, sessions or team, not its folders.
+ */
+function ProjectAccess({ p, mine }: { p: { slug: string; visibility: 'team' | 'private'; members: { id: number; name: string }[]; viewers: { id: number; name: string }[]; creator: { username: string } }; mine: boolean }) {
+  const qc = useQueryClient()
+  const members = useMembers().filter((m) => m.username !== p.creator.username)
+  const [picked, setPicked] = useState<number[] | null>(null)
+  const chosen = picked ?? p.members.map((m) => m.id)
+  const save = useMutation({
+    mutationFn: (v: { visibility: 'team' | 'private'; members: number[] }) => unwrap(api.api.projects[':slug'].access.$put({ param: { slug: p.slug }, json: v })),
+    onSuccess: () => { setPicked(null); void qc.invalidateQueries({ queryKey: ['projects'] }) },
+    onError: (e) => toast.error(e.message),
+  })
+  const priv = p.visibility === 'private'
+  const people = p.members.length + p.viewers.length
+  const label = priv ? `Private${people ? ` · ${people + 1} people` : ''}` : 'Team'
+  if (!mine) return priv ? <span className="flex items-center gap-1.5 px-2 text-sm text-muted-foreground" title="Only the people it's shared with see this project"><Lock className="size-4" /><span className="max-sm:hidden">Private</span></span> : null
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="ghost" className="text-muted-foreground" aria-label={`Who can see it: ${label}`}>
+          {priv ? <Lock /> : <Users />}<span className="max-sm:hidden">{label}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 text-sm">
+        <p className="font-medium">Who can see this project</p>
+        <ToggleGroup type="single" spacing={1} size="sm" className={cn(segmented, 'mt-3 w-full')} value={p.visibility} disabled={save.isPending}
+          onValueChange={(v) => v && v !== p.visibility && save.mutate({ visibility: v as 'team' | 'private', members: chosen })}>
+          <ToggleGroupItem value="team" className={cn(segment, 'h-7 px-2')}>Team</ToggleGroupItem>
+          <ToggleGroupItem value="private" className={cn(segment, 'h-7 px-2')}>Private</ToggleGroupItem>
+        </ToggleGroup>
+        <p className="mt-2 text-xs text-pretty text-muted-foreground">
+          {priv ? 'Only you, the people ticked below, and anyone you share one of its sessions with see it in DevDash: its tasks, notes, sessions and team, and its notifications. Its folders open to you and the people ticked.'
+            : 'Everyone on the team sees it. Make it private to keep it to you and the people you pick.'}
+        </p>
+        {priv && members.length > 0 && (
+          <div className="mt-3 flex flex-col gap-2">
+            {members.map((m) => (
+              <label key={m.id} className="flex items-center gap-2.5">
+                <Checkbox checked={chosen.includes(m.id)} disabled={save.isPending}
+                  onCheckedChange={(on) => setPicked(on ? [...chosen, m.id] : chosen.filter((x) => x !== m.id))} />
+                {m.name}
+              </label>
+            ))}
+            {picked && <Button size="sm" className="self-end" disabled={save.isPending} onClick={() => save.mutate({ visibility: 'private', members: chosen })}>Save</Button>}
+          </div>
+        )}
+        {priv && p.viewers.length > 0 && (
+          <p className="mt-3 text-xs text-pretty text-muted-foreground">
+            Also sees it, because one of its sessions is shared with them: {p.viewers.map((v) => v.name).join(', ')}. Stop sharing those sessions to take it away.
+          </p>
+        )}
+        <p className="mt-3 text-xs text-pretty text-muted-foreground">Admins with sudo or Docker on the server can still read any folder there; its folder's name stays visible.</p>
+      </PopoverContent>
+    </Popover>
   )
 }
 

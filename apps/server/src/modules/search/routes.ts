@@ -23,9 +23,10 @@ export function searchRoutes(d: {
       if (!text) return c.json({ projects: [], tasks: [], notes: [], sessions: [], services: [] })
       const needle = text.toLowerCase()
       const hits = d.search.find(text)
+      const sees = (slug: string) => d.projects.access.seesSlug(user.id, slug) // a private project not shared with them: nothing from it
       const snippet = new Map(hits.map((h) => [`${h.kind}:${h.ref}`, h.snippet]))
       const tasks = hits.filter((h) => h.kind === 'task').map((h) => taskById.get(Number(h.ref)) as { id: number; number: number; title: string; status: string; slug: string } | undefined)
-        .filter((t) => !!t).slice(0, 12).map((t) => ({ key: `${t.slug}#${t.number}`, slug: t.slug, number: t.number, title: t.title, status: t.status, snippet: snippet.get(`task:${t.id}`) ?? '' }))
+        .filter((t): t is NonNullable<typeof t> => !!t && sees(t.slug)).slice(0, 12).map((t) => ({ key: `${t.slug}#${t.number}`, slug: t.slug, number: t.number, title: t.title, status: t.status, snippet: snippet.get(`task:${t.id}`) ?? '' }))
       // "app#12" or "#12" finds the task directly.
       const direct = text.match(/^([a-z0-9-]+)?#(\d+)$/)
       const notes = d.notes.visibleIds(user, hits.filter((h) => h.kind === 'note').map((h) => Number(h.ref))).slice(0, 10)
@@ -33,14 +34,17 @@ export function searchRoutes(d: {
       return c.json({
         projects: d.projects.list(false, user.id).filter((p) => p.name.toLowerCase().includes(needle) || p.slug.includes(needle)).slice(0, 6),
         tasks: direct ? [...d.db.prepare(`select t.number, t.title, t.status, p.slug from tasks t join projects p on p.id = t.project_id where t.number = ? and (? is null or p.slug = ?) and p.deleted_at is null limit 6`)
-          .all(Number(direct[2]), direct[1] ?? null, direct[1] ?? null).map((t) => {
+          .all(Number(direct[2]), direct[1] ?? null, direct[1] ?? null).filter((t) => sees((t as { slug: string }).slug)).map((t) => {
             const r = t as { number: number; title: string; status: string; slug: string }
             return { key: `${r.slug}#${r.number}`, slug: r.slug, number: r.number, title: r.title, status: r.status, snippet: '' }
           }), ...tasks] : tasks,
         notes,
         sessions: d.claude.list(user, false).filter((s) => s.title.toLowerCase().includes(needle)).slice(0, 8).map((s) => ({ id: s.id, title: s.title, status: s.status })),
-        services: d.services.list(user).filter((s) => s.name.includes(needle)).slice(0, 6).map((s) => ({ name: s.name, port: s.port, state: s.state })),
+        services: d.services.list(user).filter((s) => s.name.includes(needle) && d.projects.access.sees(user.id, d.projects.forPath(s.cwd)?.id)).slice(0, 6).map((s) => ({ name: s.name, port: s.port, state: s.state })),
       })
     })
-    .get('/activity', (c) => c.json({ activity: d.activity.list(null) }))
+    .get('/activity', (c) => {
+      const user = c.get('user')
+      return c.json({ activity: d.activity.list(null, 200).filter((a) => !a.project || d.projects.access.seesSlug(user.id, a.project.slug)).slice(0, 40) })
+    })
 }

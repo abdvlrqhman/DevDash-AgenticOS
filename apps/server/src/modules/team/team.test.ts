@@ -1,3 +1,4 @@
+import { projectAccess } from '../projects/access.ts'
 import { test } from 'node:test'
 import { Hono, type Context, type Next } from 'hono'
 import assert from 'node:assert/strict'
@@ -42,6 +43,7 @@ function setup() {
     path: () => '/srv/devdash/projects/shop',
     forPath: () => project,
     worktree: async () => null,
+    access: projectAccess(db),
   } as unknown as ProjectsService
   const hub = createHub()
   const activity = activityService({ db, hub })
@@ -515,6 +517,23 @@ test('roles start shifts on their own: on schedule, on triggers, within their da
   team.tick(nine + 240_000)
   assert.equal(shiftsOf(sent).length, 2) // paused team: nothing on its own
   assert.equal(activityTrigger({ kind: 'task.created', summary: 'created x', via_claude: 1 }), null) // roles' own tasks never wake roles
+})
+
+test("a private project's team doesn't exist for anyone it isn't shared with, by name or by number", async (t) => {
+  const { team, claude, yara, omar, db } = setup()
+  t.after(() => team.stop())
+  team.enable(yara, 'shop')
+  const cto = team.createRole(yara, 'shop', { name: 'CTO', summary: '', instructions: '', model: null })
+  const th = team.roleMessage(cto.id, 'x', { to: 'cto', title: 'Login crashes', kind: 'request', body: 'Users stuck.', evidence: 'logs' })
+  const s = await claude.create(omar, { prompt: 'Hi', images: [], cwd: '/home/omar', profile: 'default', model: null, effort: null, permissionMode: 'default', mode: 'chat' })
+  db.prepare('update claude_sessions set project_id = null where id = ?').run(s.id)
+  db.prepare("update projects set visibility = 'private' where slug = 'shop'").run() // Yara's alone now
+  assert.throws(() => team.sessionThread('omar', s.id, th.thread), /no such thread/)
+  assert.throws(() => team.sessionReopenThread('omar', s.id, th.thread), /no such thread/)
+  assert.throws(() => team.sessionOverview('omar', s.id, 'shop'), /There is no project shop/)
+  assert.equal(team.approvals('pending', undefined, omar.id).length, 0)
+  assert.deepEqual(team.teamProjects(omar.id), [])
+  assert.deepEqual(team.teamProjects(yara.id), ['shop'])
 })
 
 test("a role's coding jobs start with its job permission level; the personal agent sets it only on the member's word", async (t) => {

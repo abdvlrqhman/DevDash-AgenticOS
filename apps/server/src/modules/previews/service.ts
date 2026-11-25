@@ -43,9 +43,13 @@ export function letDevDashFrame(headers: Headers, devdash: string) {
  * Public services open for anyone with the link (testers). Apps that request absolute paths (/assets/app.js) still
  * work: such requests go to the service the page came from (Referer, else the last service opened).
  */
-export function servicePages({ db, auth, origin, port }: { db: Db; auth: AuthService; origin: string; port: number }) {
+export function servicePages({ db, auth, origin, port, sees }: {
+  db: Db; auth: AuthService; origin: string; port: number
+  /** Whether a member may see the project a folder is in (projects/access.ts): a private project's services are its people's. */
+  sees?: (userId: number, cwd: string) => boolean
+}) {
   const base = `${origin.replace(/:\d+$/, '')}:${port}`
-  const q = { service: db.prepare('select port, public from services where name = ?') }
+  const q = { service: db.prepare('select port, public, owner_id, cwd from services where name = ?') }
 
   function resolve(path: string, referer: string | undefined, cookies: Record<string, string>) {
     const m = PATH_RE.exec(path)
@@ -56,9 +60,10 @@ export function servicePages({ db, auth, origin, port }: { db: Db; auth: AuthSer
     return name && /^[a-z][a-z0-9-]{0,30}$/.test(name) ? { name, rest: path, direct: false } : null
   }
   function allowed(name: string, cookies: Record<string, string>) {
-    const s = q.service.get(name) as { port: number; public: number } | undefined
+    const s = q.service.get(name) as { port: number; public: number; owner_id: number; cwd: string } | undefined
     if (!s) return { s: null, ok: false }
-    return { s, ok: s.public === 1 || !!auth.sessionUser(cookies[SESSION]) }
+    const user = auth.sessionUser(cookies[SESSION])?.user
+    return { s, ok: s.public === 1 || (!!user && (user.id === s.owner_id || !sees || sees(user.id, s.cwd))) }
   }
   const forwardCookies = (header: string | undefined) =>
     (header ?? '').split(/;\s*/).filter((c) => c && !c.startsWith(`${SESSION}=`) && !c.startsWith(`${LAST}=`)).join('; ')

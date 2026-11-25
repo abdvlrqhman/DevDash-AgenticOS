@@ -39,6 +39,9 @@ export function projectsRoutes(projects: ProjectsService, trash: ProjectTrash, a
     .post('/trash/:slug/purge', json(Confirm), async (c) => { await trash.purge(c.get('user'), c.req.param('slug'), c.req.valid('json').confirm); return c.json({ ok: true }) })
     .get('/:slug', (c) => c.json({ project: projects.get(c.req.param('slug'), c.get('user').id) }))
     .patch('/:slug', json(Patch), (c) => c.json({ project: projects.update(c.get('user'), c.req.param('slug'), c.req.valid('json')) }))
+    // Who can see it (its creator only): the team, or privately its creator and the members named.
+    .put('/:slug/access', json(z.object({ visibility: z.enum(['team', 'private']), members: z.array(z.number().int().positive()).max(50).default([]) })), async (c) =>
+      c.json({ project: await projects.setAccess(c.get('user'), c.req.param('slug'), c.req.valid('json')) }))
     .post('/:slug/connect', json(Connect), async (c) => c.json({ project: await projects.connectRepo(c.get('user'), c.req.param('slug'), c.req.valid('json').repoUrl) }))
     .post('/:slug/fetch', async (c) => c.json({ project: await projects.fetch(c.req.param('slug'), c.get('user').id) }))
     .get('/:slug/commits', async (c) => c.json({ commits: await projects.commits(c.req.param('slug')) }))

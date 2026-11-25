@@ -44,6 +44,7 @@ import { notesRoutes } from './modules/notes/routes.ts'
 import { notesService } from './modules/notes/service.ts'
 import { projectsRoutes } from './modules/projects/routes.ts'
 import { projectTrash } from './modules/projects/trash.ts'
+import { projectAccess } from './modules/projects/access.ts'
 import { projectsService } from './modules/projects/service.ts'
 import { searchRoutes } from './modules/search/routes.ts'
 import { skillsRoutes } from './modules/skills/routes.ts'
@@ -82,15 +83,17 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     exists: (username, path) => agents.request(username, { op: 'fs.exists', path }, 5_000)
       .then((r) => (r as { exists?: unknown }).exists === false ? false : (r as { exists?: unknown }).exists === true ? true : null, () => null),
   })
+  // Who may see which project: everywhere asks this one rule (projects/access.ts).
+  const access = projectAccess(db)
   const activity = activityService({ db, hub })
   const search = searchService({ db })
   // Team and reviews (both built further down) are read late, like tailnet: tasks show "From thread #N" and each repo
   // fetch lets "Ready to review" notice branches merged outside DevDash.
   let team: ReturnType<typeof teamPlugin> | undefined
   let reviews: ReturnType<typeof reviewsService> | undefined
-  const tasks = tasksService({ db, hub, activity, search, threadOf: (id) => team?.service?.taskThread(id) ?? null, onClosed: (id) => team?.service?.taskClosed(id) })
-  const notes = notesService({ db, hub, activity, search })
-  const projects = projectsService({ db, hub, agents, activity, tasks, root: config.projectsRoot, gitSafeDir: (p) => provisioning.gitSafeDir(p), onFetched: (p) => reviews?.checkMerges(p) })
+  const tasks = tasksService({ db, hub, activity, search, access, threadOf: (id) => team?.service?.taskThread(id) ?? null, onClosed: (id) => team?.service?.taskClosed(id) })
+  const notes = notesService({ db, hub, activity, search, access })
+  const projects = projectsService({ db, hub, agents, activity, tasks, root: config.projectsRoot, gitSafeDir: (p) => provisioning.gitSafeDir(p), onFetched: (p) => reviews?.checkMerges(p), access, lockFolders: (p) => provisioning.lockProject(p) })
   for (const topic of ['projects', 'tasks', 'notes', 'activity']) hub.authorize(topic, () => true)
   // Per-user tailnets: claude asks whether the owner has a connected node before letting a session route through it.
   // The tailnet service is built further down (it needs Team's isRole), so this reads it late, like Team's own wiring.
@@ -136,8 +139,9 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     if (t.status !== 'in_progress') tasks.update({ user }, slug, number, { status: 'in_progress', assignee: t.assignee?.id ?? user.id })
     return { sessionId: s.id }
   }
-  const previews = servicePages({ db, auth, origin: config.origin, port: config.servicesPort })
-  const services = servicesService({ db, agents, hub, notify: notifications.notify, previewUrl: previews.urlOf, basePath: previews.basePathOf })
+  const previews = servicePages({ db, auth, origin: config.origin, port: config.servicesPort, sees: (userId, cwd) => access.sees(userId, projects.forPath(cwd)?.id) })
+  const services = servicesService({ db, agents, hub, notify: notifications.notify, previewUrl: previews.urlOf, basePath: previews.basePathOf,
+    sees: (userId, cwd) => access.sees(userId, projects.forPath(cwd)?.id) })
   hub.authorize('services', () => true)
   // Members' agents clean up session worktrees (apps/agent/src/janitor.ts) only when nothing here still uses them.
   // Deleting a project: soft, with seven days to restore it; its folders move through the root helper.
@@ -171,8 +175,9 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     return { title: p.name, url: `/projects/${slug}`, detail: p.archived ? 'archived' : null }
   }))
   pins.register('session', (u, refs) => claude.pinned(u, refs))
-  pins.register('task', (_u, refs) => each(refs, (ref) => {
+  pins.register('task', (u, refs) => each(refs, (ref) => {
     const [slug, n] = ref.split('/')
+    if (!access.seesSlug(u.id, slug!)) throw new Error('not shared with them')
     const t = tasks.get(slug!, Number(n))
     return { title: `#${t.number} ${t.title}`, url: `/tasks/${slug}/${n}`, state: t.status, detail: slug ?? null }
   }))
@@ -184,6 +189,23 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     const s = services.get(u, name)
     return { title: s.name, url: `/services/${name}/view`, state: s.state } // a pinned service opens inside DevDash
   }))
+  // A project that isn't shared with someone doesn't exist for them (projects/access.ts): any address naming it, or a team
+  // item or note in it, is "not found", exactly like a missing one. Lists leave it out where they're built.
+  const projectInPath = /^\/api\/(?:projects|tasks|builds|team\/projects|skills\/projects|claude\/projects)\/([a-z0-9][a-z0-9-]{0,39})(?:\/|$)/
+  const itemInPath = /^\/api\/(?:team\/(threads|roles|goals|sources|proposals)|(notes))\/(\d+)(?:\/|$)/
+  const itemProject = Object.fromEntries(['threads', 'roles', 'goals', 'sources', 'proposals', 'notes'].map((k) => [k,
+    db.prepare(`select project_id from ${k === 'notes' ? 'notes' : `team_${k}`} where id = ?`)]))
+  const projectGuard = async (c: Context, next: () => Promise<void>) => {
+    const user = mw.signedIn(c)
+    if (user) {
+      const slugs = [c.req.path.match(projectInPath)?.[1], c.req.query('project')].filter((x): x is string => !!x)
+      if (slugs.some((slug) => !access.seesSlug(user.id, slug))) throw new AppError(404, 'not_found', 'There is no such project.')
+      const item = c.req.path.match(itemInPath)
+      const row = item ? itemProject[item[1] ?? item[2]!]?.get(Number(item[3])) as { project_id: number | null } | undefined : undefined
+      if (row && !access.sees(user.id, row.project_id)) throw new AppError(404, 'not_found', 'Not found.')
+    }
+    await next()
+  }
   const app = new Hono()
     // Requests from the services site (port 8443) are proxied to services, never mixed with DevDash's routes.
     .use('*', previews.middleware)
@@ -202,6 +224,7 @@ export function createApp({ db, config }: { db: Db; config: Config }) {
     // rclone's token endpoint for members' Drives: loopback only, Caddy never proxies /internal.
     .route('/internal/storage', storageTokenRoutes(storage))
     .use('/api/*', sameOrigin(config.origin))
+    .use('/api/*', projectGuard)
     .route('/api/auth', authRoutes(auth, mw, ip, (u) => void provisioning.ensure(u)))
     .route('/api/members', membersRoutes(auth, mw, ip, config.origin, (id) => {
       vault.memberRemoved(id)

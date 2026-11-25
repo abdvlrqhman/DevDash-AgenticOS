@@ -40,8 +40,10 @@ export function registerMcp({ db, agents, projects, tasks, notes, services, auth
     const slug = str(args.project)
       ?? (c.sessionId ? (q.sessionProject.get(c.sessionId, user.id) as { slug: string } | undefined)?.slug : undefined)
       ?? (typeof c.cwd === 'string' ? projects.forPath(c.cwd)?.slug : undefined)
+    // A project that isn't shared with them doesn't exist for them (projects/access.ts).
+    if (slug && !projects.access.seesSlug(user.id, slug)) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
     const need = () => {
-      if (!slug) throw new AppError(400, 'no_project', `This session isn't in a DevDash project. Pass "project" (one of: ${projects.list().map((p) => p.slug).join(', ') || 'none yet'}).`)
+      if (!slug) throw new AppError(400, 'no_project', `This session isn't in a DevDash project. Pass "project" (one of: ${projects.list(false, user.id).map((p) => p.slug).join(', ') || 'none yet'}).`)
       return slug
     }
     return { user, args, slug, need, actor: { user, viaClaude: true, role: authorRole?.(username, c.sessionId) ?? null } }
@@ -53,17 +55,17 @@ export function registerMcp({ db, agents, projects, tasks, notes, services, auth
 
   on('project_info', (c) => ({
     project: c.slug ? projects.get(c.slug, c.user.id) : null,
-    projects: projects.list().map((p) => ({ slug: p.slug, name: p.name, openTasks: p.openTasks })),
+    projects: projects.list(false, c.user.id).map((p) => ({ slug: p.slug, name: p.name, openTasks: p.openTasks })),
   }))
   on('tasks_list', (c) => {
     const status = str(c.args.status) as Status | undefined
-    return tasks.list({ project: c.slug, assignee: c.args.mine ? c.user.id : undefined })
+    return tasks.list({ project: c.slug, assignee: c.args.mine ? c.user.id : undefined, viewer: c.user.id })
       .filter((t) => !status || t.status === status).map(brief)
   })
   on('task_get', (c) => tasks.get(c.need(), int(c.args.number, 'number')))
   on('task_create', (c) => {
     // For whom: nobody, a member (username or name, "me"), or "everyone": one task each, theirs to do and close.
-    const team = q.members.all() as { id: number; username: string; name: string }[]
+    const team = (q.members.all() as { id: number; username: string; name: string }[]).filter((m) => projects.access.seesSlug(m.id, c.need()))
     const who = str(c.args.assignee)?.toLowerCase()
     const one = (assignee: number | null) => brief(tasks.create(c.actor, {
       project: c.need(), title: str(c.args.title) ?? '', body: str(c.args.body), status: str(c.args.status) as Status | undefined,

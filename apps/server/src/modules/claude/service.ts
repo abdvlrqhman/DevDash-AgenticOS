@@ -284,7 +284,9 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
   // Every launch also says whether the owner's Drive is connected: the agent sets up the remote and tells Claude about it.
   const launch = (s: SessionRow) => ({ ...baseLaunch(s), storage: s.drive === 0 ? null : storageFor?.(s.owner_id) ?? null, ownerName: s.owner_name })
   // The owner, everyone while it's shared with the team, or the members it's shared with by name.
-  const canView = (u: Pick<User, 'id'>, s: SessionRow) => s.owner_id === u.id || s.shared === 1 || repo.isViewer(s.id, u.id)
+  // Shared, but never beyond its project's people: a private project's sessions stay inside it (projects/access.ts).
+  const seesProject = (userId: number, projectId: number | null | undefined) => projects.access?.sees(userId, projectId) ?? true
+  const canView = (u: Pick<User, 'id'>, s: SessionRow) => s.owner_id === u.id || ((s.shared === 1 || repo.isViewer(s.id, u.id)) && seesProject(u.id, s.project_id))
   // A failing turn can report twice (its result, then the process exiting): one error alert per session per minute.
   const lastError = new Map<string, number>()
   // Per session: the id of the last message of the answer being written (the saved numbers go after it).
@@ -386,7 +388,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     if (link && !/^\/(?!\/)[^\s<>"]*$/.test(link)) throw new AppError(400, 'bad_args', 'link is a DevDash path, like /tasks/shop/12.')
     const ago = Date.now() - (notifiedAt.get(s.id) ?? 0)
     if (ago < 30_000) throw new AppError(429, 'too_soon', `This session sent one ${Math.round(ago / 1000)}s ago: put everything in one notification.`)
-    const team = members.all() as Person[]
+    // In a private project, only its people: "everyone" is them, and nobody else can be named (projects/access.ts).
+    const team = (members.all() as Person[]).filter((m) => seesProject(m.id, s.project_id))
     // By default, whoever sent the message being answered (the owner, or the teammate who asked); DevDash's record, not a guess.
     const asked = s.mode === 'cli' ? null : repo.lastSender(s.id) // only the owner (or full access) types in the terminal
     const to = recipients(a.to, team, team.find((m) => m.id === (asked?.id ?? s.owner_id)) ?? { id: s.owner_id, username: s.owner_username, name: s.owner_name })
@@ -430,7 +433,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
    */
   const accessOf = (u: User, s: SessionRow): 'owner' | 'full' | 'ask' | 'watch' | 'none' => {
     if (s.owner_id === u.id) return 'owner'
-    if (!canView(u, s) && !roleLabel(s)) return 'none'
+    if (!seesProject(u.id, s.project_id) || (!canView(u, s) && !roleLabel(s))) return 'none'
     const w = repo.writerAccess(s.id, u.id)
     if (w === 'full') return 'full'
     if (w === 'ask' || roleLabel(s) || (s.shared === 1 && s.shared_can_send === 1)) return 'ask'
@@ -823,6 +826,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
     inProject(user: User, slug: string, archived: boolean) {
       const p = projects.bySlug(slug)
+      if (!seesProject(user.id, p.id)) throw new AppError(404, 'not_found', `There is no project ${slug}.`)
       const label = labels(p.id)
       const sessions = repo.inProject(p.id, user.id, archived).map((s) => {
         const dto = toDto(s)
@@ -884,9 +888,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const home = `/home/${user.username}`
       // In a project: its shared checkout, or a fresh worktree on its own branch so parallel sessions don't collide.
       const wt = input.project && input.worktree ? await projects.worktree(user, input.project) : null
+      // A project not shared with them is no project for them.
+      if (input.project && !seesProject(user.id, projects.bySlug(input.project).id)) throw new AppError(404, 'not_found', `There is no project ${input.project}.`)
       const cwd = wt?.path ?? (input.project ? projects.path(projects.bySlug(input.project).slug)
         : input.cwd.trim() === '' || input.cwd.trim() === '~' ? home : input.cwd.trim().replace(/^~(?=\/)/, home))
       if (!cwd.startsWith('/')) throw new AppError(400, 'bad_cwd', 'Use a full folder path, like ~/projects/app.')
+      if (!seesProject(user.id, projects.forPath(cwd)?.id)) throw new AppError(404, 'not_found', 'There is no such project.')
       // Outside a project the session gets its own folder (the dialog suggests ~/sessions/<name>); make it if it's new.
       if (!input.project) await agents.request(user.username, { op: 'fs.mkdirp', path: cwd })
       const project = input.project ? projects.bySlug(input.project) : projects.forPath(cwd)
@@ -1147,6 +1154,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       }
       if (p.shared && !s.shared) {
         for (const { id: uid } of db.prepare('select id from users where disabled_at is null and id != ?').all(s.owner_id) as { id: number }[]) {
+          if (!seesProject(uid, s.project_id)) continue // a private project's sessions are news only for its people
           void notify(uid, 'shared', { title: `${user.name} shared a Claude session`, body: s.title, url: `/sessions/${id}` }).catch(() => {})
         }
       }

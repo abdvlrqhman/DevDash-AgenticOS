@@ -60,6 +60,12 @@ export function provisioningService({ db, runDir, onReady }: { db: Db; runDir: s
       const r = await requestLine<{ ok: boolean; error?: string }>(join(runDir, 'helper.sock'), { cmd, args: { id, slug } }, 10 * 60_000)
       if (!r.ok) throw new Error(r.error?.replace(/^refused: /, '') ?? 'Could not move the project folder.')
     },
+    /** Applies a project's visibility to its folders (helper project-access): users null for the whole team. */
+    async lockProject(a: { id: number; slug: string; owner: string; users: string[] | null }) {
+      if (!runDir) return
+      const r = await requestLine<{ ok: boolean; error?: string }>(join(runDir, 'helper.sock'), { cmd: 'project-access', args: a }, 60_000)
+      if (!r.ok) throw new Error(r.error?.replace(/^refused: /, '') ?? 'Could not change who can open the project folder.')
+    },
     usernames: () => (s.pending.all() as User[]).map((u) => u.username),
     /** Idempotent: re-applies every active member (role changes, missed sign-ups, a fresh host). */
     async reconcileAll() {
