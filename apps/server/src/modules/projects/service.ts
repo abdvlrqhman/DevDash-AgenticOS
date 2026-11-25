@@ -9,6 +9,7 @@ import { canSeeSql } from '../claude/repo.ts'
 import { projectAccess, type ProjectAccess } from './access.ts'
 import type { TasksService } from '../tasks/service.ts'
 
+type Visibility = 'team' | 'private'
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/
 const FETCH_EVERY_MS = 5 * 60_000
 
@@ -62,7 +63,7 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     purge: db.prepare('delete from projects where id = ? and deleted_at is not null'),
     bySlug: db.prepare(`${SELECT} where p.slug = ?`),
     byId: db.prepare(`${SELECT} where p.id = ?`),
-    insert: db.prepare('insert into projects (slug, name, repo_url, default_branch, created_by, instructions) values (?, ?, ?, ?, ?, ?) returning id'),
+    insert: db.prepare('insert into projects (slug, name, repo_url, default_branch, created_by, instructions, visibility) values (?, ?, ?, ?, ?, ?, ?) returning id'),
     patch: db.prepare('update projects set name = ?, archived = ?, session_sharing = ?, instructions = ? where id = ?'),
     setRepo: db.prepare('update projects set repo_url = ? where id = ?'),
     fetched: db.prepare('update projects set fetched_at = unixepoch(), fetch_error = ?, default_branch = coalesce(?, default_branch) where id = ?'),
@@ -165,6 +166,14 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
     changed()
   }
 
+  /** A new project starts private (its creator alone) unless they choose the team: its folders are locked to match. */
+  async function lockNew(id: number, slug: string, user: User, visibility: Visibility = 'private') {
+    if (visibility !== 'private' || !lockFolders) return
+    // The project is already hidden in DevDash; a folder left open is fixed by saving its access again from its header.
+    await lockFolders({ id, slug, owner: user.username, users: [] })
+      .catch((err: Error) => console.error(`lock ${slug}:`, err.message))
+  }
+
   let fetching = false
   async function fetchAll() {
     if (fetching) return
@@ -191,7 +200,7 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
       return p && p.deleted_at === null ? p : null
     },
 
-    async create(user: User, input: { name: string; slug?: string; repoUrl?: string; instructions?: string }) {
+    async create(user: User, input: { name: string; slug?: string; repoUrl?: string; instructions?: string; visibility?: Visibility }) {
       const repoUrl = input.repoUrl?.trim() || null
       const name = input.name.trim() || (repoUrl ? repoUrl.split('/').pop()!.replace(/\.git$/, '') : '')
       if (!name) throw new AppError(400, 'bad_name', 'Give the project a name.')
@@ -201,7 +210,8 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
       const r = await agents.request<{ defaultBranch: string }>(user.username,
         repoUrl ? { op: 'git.clone', path: path(slug), url: repoUrl } : { op: 'git.init', path: path(slug) }, 16 * 60_000)
       await gitSafeDir(path(slug))
-      const { id } = q.insert.get(slug, name, repoUrl, r.defaultBranch || 'main', user.id, input.instructions?.trim() ?? '') as { id: number }
+      const { id } = q.insert.get(slug, name, repoUrl, r.defaultBranch || 'main', user.id, input.instructions?.trim() ?? '', input.visibility ?? 'private') as { id: number }
+      await lockNew(id, slug, user, input.visibility)
       await scan(byId(id)!).catch(() => {})
       q.fetched.run(null, null, id)
       activity.record({ projectId: id, userId: user.id, kind: 'project.created', summary: `added project ${name}`, url: `/projects/${slug}` })
@@ -219,12 +229,13 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
       return agents.request(user.username, { op: 'project.zipAbort', id: uploadId }, 10_000).catch(() => ({ ok: true }))
     },
 
-    async createFromZip(user: User, input: { name: string; slug?: string; uploadId: string; instructions?: string }) {
+    async createFromZip(user: User, input: { name: string; slug?: string; uploadId: string; instructions?: string; visibility?: Visibility }) {
       const { name, slug } = zipTarget(input)
       // Extract first (as the uploader): only insert the row once the folder is a real repo. A 20 GB archive takes a while.
       const r = await agents.request<{ defaultBranch: string }>(user.username, { op: 'project.fromZip', id: input.uploadId, dest: path(slug) }, 3 * 3_600_000)
       await gitSafeDir(path(slug))
-      const { id } = q.insert.get(slug, name, null, r.defaultBranch || 'main', user.id, input.instructions?.trim() ?? '') as { id: number }
+      const { id } = q.insert.get(slug, name, null, r.defaultBranch || 'main', user.id, input.instructions?.trim() ?? '', input.visibility ?? 'private') as { id: number }
+      await lockNew(id, slug, user, input.visibility)
       await scan(byId(id)!).catch(() => {})
       q.fetched.run(null, null, id)
       activity.record({ projectId: id, userId: user.id, kind: 'project.created', summary: `added project ${name}`, url: `/projects/${slug}` })
@@ -236,7 +247,7 @@ export function projectsService({ db, hub, agents, activity, tasks, gitSafeDir, 
      * Starts creating a project from an uploaded .zip in the background. Unpacking and committing a big archive takes
      * minutes, longer than a request may last behind Cloudflare (100 s), so the page asks `importStatus` how it's going.
      */
-    startFromZip(user: User, input: { name: string; slug?: string; uploadId: string; instructions?: string }) {
+    startFromZip(user: User, input: { name: string; slug?: string; uploadId: string; instructions?: string; visibility?: Visibility }) {
       for (const [k, v] of imports) if (v.state !== 'importing' && Date.now() - v.at > 3_600_000) imports.delete(k)
       // Asked again (the page lost the answer): say how it's going. After a server restart this map is empty, and starting
       // again is safe: the agent joins the import still running, or reports the finished one (apps/agent/src/project.ts).

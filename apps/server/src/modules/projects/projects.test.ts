@@ -178,3 +178,27 @@ test('how new Claude sessions start out is a project setting any member changes;
   assert.throws(() => projects.update(bob, 'shop', { archived: true }), /Only the person who added it/)
   assert.throws(() => db.prepare("update projects set session_sharing = 'public' where id = 1").run(), /CHECK/)
 })
+
+test("a new project is its creator's alone, folders locked, unless they pick the team", async () => {
+  const db = openDb(':memory:')
+  const add = db.prepare("insert into users (id, email, username, name, password_hash, totp_secret, role) values (?, ?, ?, ?, 'x', 'x', 'admin')")
+  add.run(1, 'a@x.io', 'ann', 'Ann Lee')
+  add.run(2, 'b@x.io', 'bob', 'Bob Day')
+  const hub = createHub()
+  const activity = activityService({ db, hub })
+  const tasks = tasksService({ db, hub, activity, search: searchService({ db }) })
+  const agents = { request: async () => ({ defaultBranch: 'main' }) } as unknown as AgentsService
+  const locked: object[] = []
+  const projects = projectsService({ db, hub, agents, activity, tasks, gitSafeDir: async () => {}, root: '/srv/devdash', lockFolders: async (p) => void locked.push(p) })
+  const ann: User = { id: 1, name: 'Ann Lee', username: 'ann', email: '', role: 'admin' }
+
+  const mine = await projects.create(ann, { name: 'Mine', slug: 'mine' })
+  assert.equal(mine.visibility, 'private')
+  assert.deepEqual(locked, [{ id: 1, slug: 'mine', owner: 'ann', users: [] }])
+  assert.deepEqual(projects.list(false, 2).map((p) => p.slug), [], 'Bob, an admin too, never sees it')
+
+  const team = await projects.create(ann, { name: 'Ours', slug: 'ours', visibility: 'team' })
+  assert.equal(team.visibility, 'team')
+  assert.equal(locked.length, 1, 'a team project keeps its shared folders')
+  assert.deepEqual(projects.list(false, 2).map((p) => p.slug), ['ours'])
+})

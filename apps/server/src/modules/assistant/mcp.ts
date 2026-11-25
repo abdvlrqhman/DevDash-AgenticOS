@@ -182,6 +182,7 @@ export function registerAssistantMcp({ agents, claude, assistant, projects, noti
     }
     const input = ProjectCreate.safeParse({
       name: str(c.args.name) ?? '', slug: str(c.args.slug), repoUrl: str(c.args.repo_url), instructions: str(c.args.instructions),
+      visibility: str(c.args.visibility),
     })
     if (!input.success) throw new AppError(400, 'bad_args', `Check the arguments: ${input.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}.`)
     const p = await projects.create(c.user, input.data)

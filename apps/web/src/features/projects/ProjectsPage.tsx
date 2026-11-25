@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { FileArchive, FolderGit2, GitBranch, Lock, Plus, TriangleAlert } from 'lucide-react'
+import { FileArchive, FolderGit2, GitBranch, Lock, Plus, TriangleAlert, Users } from 'lucide-react'
 import { StatusLight } from '@/components/app/brand'
 import { Orb } from '@/components/app/orb'
 import { PageBody, PageHeader } from '@/components/app/page'
@@ -241,6 +241,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [slug, setSlug] = useState('')
   const [slugTouched, setSlugTouched] = useState(false)
   const [instructions, setInstructions] = useState('')
+  const [visibility, setVisibility] = useState<'private' | 'team'>('private')
   const [progress, setProgress] = useState<number | null>(null) // 0–100 while a zip is uploading
   const [unpacking, setUnpacking] = useState(false)
   const [stats, setStats] = useState<UploadStats | null>(null)
@@ -250,7 +251,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
 
   const create = useMutation({
     mutationFn: async () => {
-      if (!zip) return unwrap(api.api.projects.$post({ json: { name: name || guess, slug: effectiveSlug, repoUrl: repoUrl.trim() || undefined, instructions: instructions.trim() || undefined } }))
+      if (!zip) return unwrap(api.api.projects.$post({ json: { name: name || guess, slug: effectiveSlug, repoUrl: repoUrl.trim() || undefined, instructions: instructions.trim() || undefined, visibility } }))
       if (!file) throw new ApiError('Choose a .zip file to upload.', 400, 'no_file')
       if (file.size > MAX_ZIP) throw new ApiError(`That .zip is ${gb(file.size)}; the limit is ${gb(MAX_ZIP)}.`, 400, 'too_big')
       const uploadId = hexId()
@@ -282,7 +283,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
         setProgress(null)
         setStats(null)
         setUnpacking(true)
-        const start = () => patiently(() => unwrap(api.api.projects['from-zip'].$post({ json: { name: name || guess, slug: effectiveSlug, uploadId, instructions: instructions.trim() || undefined } })))
+        const start = () => patiently(() => unwrap(api.api.projects['from-zip'].$post({ json: { name: name || guess, slug: effectiveSlug, uploadId, instructions: instructions.trim() || undefined, visibility } })))
         await start()
         started = true
         for (;;) {
@@ -315,7 +316,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
   const close = (v: boolean) => {
     if (v || create.isPending) return
     onClose()
-    setMode('repo'); setRepoUrl(''); setFile(null); setName(''); setSlug(''); setSlugTouched(false); setInstructions(''); create.reset()
+    setMode('repo'); setRepoUrl(''); setFile(null); setName(''); setSlug(''); setSlugTouched(false); setInstructions(''); setVisibility('private'); create.reset()
   }
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -325,7 +326,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
     ? (zip ? (unpacking ? 'Unpacking…' : progress === null ? 'Finishing…' : stats?.reconnecting ? 'Reconnecting…' : `Uploading ${Math.floor(progress)}%…`) : repoUrl ? 'Cloning…' : 'Creating…')
     : zip ? 'Create from zip' : 'Add project'
   return (
-    <ResponsiveDialog open={open} onOpenChange={close} title="Add a project" description="One shared checkout on the server that the whole team and their sessions work in.">
+    <ResponsiveDialog open={open} onOpenChange={close} title="Add a project" description="One checkout on the server for you and your sessions to work in, and the team too if you share it.">
       <form onSubmit={submit}>
         <FieldGroup>
           <ToggleGroup type="single" spacing={1} value={mode} className={cn(segmented, 'w-full')} onValueChange={(v) => v && setMode(v as 'repo' | 'zip')}>
@@ -357,6 +358,17 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
             <FieldLabel htmlFor="np-slug">Short name</FieldLabel>
             <Input id="np-slug" className="h-10" value={effectiveSlug} onChange={(e) => { setSlugTouched(true); setSlug(slugify(e.target.value)) }} />
             <FieldDescription>The folder name and the prefix of its tasks, like <span className="text-foreground tabular-nums">{effectiveSlug || 'app'}#12</span>.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel id="np-visibility">Who sees it</FieldLabel>
+            <ToggleGroup type="single" spacing={1} value={visibility} className={cn(segmented, 'w-full')} aria-labelledby="np-visibility"
+              onValueChange={(v) => v && setVisibility(v as 'private' | 'team')}>
+              <ToggleGroupItem value="private" className={cn(segment, 'h-9')}><Lock />Only me</ToggleGroupItem>
+              <ToggleGroupItem value="team" className={cn(segment, 'h-9')}><Users />The team</ToggleGroupItem>
+            </ToggleGroup>
+            <FieldDescription>{visibility === 'private'
+              ? 'Nobody else sees it, its folder included, until you share it from its page with the people you pick.'
+              : 'Everyone on the team sees it and works in it. You can make it private later from its page.'}</FieldDescription>
           </Field>
           <Field>
             <FieldLabel htmlFor="np-instructions">Instructions <span className="font-normal text-muted-foreground">(optional)</span></FieldLabel>

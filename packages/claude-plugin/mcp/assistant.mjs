@@ -96,6 +96,7 @@ export const ASSISTANT_TOOLS = [
       slug: { type: 'string', description: 'Short name for the folder and links: lowercase letters, digits and dashes, up to 40. Default: made from the name.' },
       instructions: { type: 'string', description: 'What the project is and how to work on it: every session in the project gets these (like a Claude Project).' },
       repo_url: { type: 'string', description: 'An existing git repository to clone instead of starting empty.' },
+      visibility: { type: 'string', enum: ['private', 'team'], description: 'Who sees it. Default private: the person alone, its folder included. "team" only when they say the team should see it.' },
     }, ['name']),
   },
   {
