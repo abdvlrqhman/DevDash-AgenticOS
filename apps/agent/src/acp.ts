@@ -30,6 +30,7 @@ export class Rpc {
     this.child = child
     this.on = on
     createInterface({ input: child.stdout! }).on('line', (line) => this.receive(line))
+    child.stdin?.on('error', () => {}) // it died: its exit event below says so
     child.on('exit', () => {
       this.closed = true
       for (const c of this.calls.values()) c.reject(new Error('The agent stopped.'))

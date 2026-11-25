@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import type { Socket } from 'node:net'
 import { promisify } from 'node:util'
 import { checkedPath, pushBranch } from './git.ts'
-import { send } from './tmux.ts'
+import { drained, send } from './tmux.ts'
 
 // GitHub's API as this member, through their own `gh` login (Account → GitHub). Only repository endpoints.
 const run = promisify(execFile)
@@ -38,6 +38,7 @@ export const ops = {
         child.stdout?.on('data', (d) => (o += d))
         child.stderr?.on('data', (d) => (e += d))
         child.on('close', (code) => (code === 0 ? resolve(o) : reject(Object.assign(new Error(e || `gh exited ${code}`), { stderr: e }))))
+        child.stdin?.on('error', () => {}) // gh quit before reading it: its exit code says why
         child.stdin?.end(JSON.stringify(r.body ?? {}))
       })
       return { text: out }
@@ -79,7 +80,7 @@ export async function download(conn: Socket, path: unknown, name: unknown) {
       started = true
       send(conn, { ok: true, name: String(name ?? 'download'), size: 0 })
     }
-    if (!send(conn, { b: (chunk as Buffer).toString('base64') })) await new Promise((r) => conn.once('drain', r))
+    if (!send(conn, { b: (chunk as Buffer).toString('base64') })) await drained(conn)
     if (conn.destroyed) return child.kill()
   }
   const code = await new Promise<number>((r) => (child.exitCode !== null ? r(child.exitCode) : child.on('close', (c) => r(c ?? 1))))

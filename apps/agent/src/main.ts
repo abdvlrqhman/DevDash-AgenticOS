@@ -241,6 +241,9 @@ claude.setEmitter(toServer)
 harness.setEmitter(toServer)
 
 async function handle(conn: Socket) {
+  // Once the server hangs up, readline drops its error listener: a later write error would then crash the agent and
+  // every Claude session and background command in it.
+  conn.on('error', () => conn.destroy())
   conn.setEncoding('utf8')
   const lines = createInterface({ input: conn, crlfDelay: Infinity })[Symbol.asyncIterator]()
   try {
@@ -302,6 +305,15 @@ setInterval(() => {
 // Apply the current tmux.conf and environment to an already running tmux server (no-op when none is running).
 void tmux('source-file', TMUX_CONF).catch(() => {})
 for (const k of ['DEVDASH_AGENT_SOCKET', 'DISABLE_AUTOUPDATER']) void tmux('set-environment', '-g', k, process.env[k]!).catch(() => {})
+
+// A peer that hangs up mid-write (the server, a child process) is logged, not fatal: a crash here takes down every Claude
+// session of this member, and the background commands (renders, watchers) running in them. Anything else still crashes.
+// shortcut: the source of the EPIPE crash loop of 2026-11-25 wasn't found (its trace has no DevDash frames), only contained;
+// this log gives a time to match against what was going on, not the source. Find it if these lines show up.
+process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
+  console.error('agent:', err)
+  if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') process.exit(1)
+})
 
 const server = createServer((conn) => void handle(conn))
 if (process.env.LISTEN_FDS === '1') server.listen({ fd: 3 }) // socket activation

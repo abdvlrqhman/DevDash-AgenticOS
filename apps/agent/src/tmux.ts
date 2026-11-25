@@ -43,6 +43,13 @@ export function send(conn: Socket, msg: object) {
   return conn.write(JSON.stringify(msg) + '\n')
 }
 
+/** Once the connection takes more, or is gone (a hung-up connection never drains). */
+export const drained = (conn: Socket) => new Promise<void>((r) => {
+  if (conn.destroyed) return r()
+  const go = () => { conn.off('drain', go).off('close', go); r() }
+  conn.on('drain', go).on('close', go)
+})
+
 // As much as the browser terminal keeps (TerminalView scrollback), so a session scrolls back to its start.
 const HISTORY_LINES = 10_000
 

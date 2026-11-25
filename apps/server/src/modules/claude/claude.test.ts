@@ -547,3 +547,18 @@ test('voice mode in a session: wherever they may send, never where they only wat
   assert.throws(() => claude.voiceAccess(bob, 's3'), /only watch|not_found|does not exist/)
   void cat
 })
+
+test('a crash that cut off background commands wakes the session once; an idle one without any stays asleep', async () => {
+  const { sent, emit, db } = setup()
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, started) values ('s2', 1, 'Notes', '/home/ann', 1)").run()
+  emit({ ev: 'claude.tasks', id: 's1', tasks: [{ id: 'b1', type: 'local_bash', description: 'Render the video' }] })
+  emit({ ev: 'snapshot', sessions: [] }) // the agent came back without them: its processes died
+  await new Promise((r) => setImmediate(r))
+  const sends = sent.filter((r) => r.op === 'claude.send')
+  assert.deepEqual(sends.map((r) => (r.launch as { id: string }).id), ['s1'])
+  assert.match(JSON.stringify(sends[0]!.content), /background commands were running/)
+  emit({ ev: 'claude.tasks', id: 's1', tasks: [{ id: 'b2', type: 'local_bash', description: 'Render again' }] })
+  emit({ ev: 'snapshot', sessions: [] })
+  await new Promise((r) => setImmediate(r))
+  assert.equal(sent.filter((r) => r.op === 'claude.send').length, 1, 'a crash loop wakes it once per half hour')
+})

@@ -3,7 +3,7 @@ import { lstat, mkdir, open, readdir, realpath, rename, rm, stat } from 'node:fs
 import type { Socket } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { send } from './tmux.ts'
+import { drained, send } from './tmux.ts'
 
 // Files as this member: their home, the shared project checkouts, the sessions' worktrees and the team's shared folder,
 // plus /tmp, where Claude often leaves screenshots and builds. Linux permissions apply on top; paths are resolved
@@ -165,7 +165,7 @@ export async function read(conn: Socket, path: unknown, start?: unknown, end?: u
   const to = Number.isSafeInteger(end) && (end as number) >= from ? (end as number) : undefined
   const stream = createReadStream(real, { highWaterMark: 768 * 1024, start: from, end: to })
   for await (const chunk of stream) {
-    if (!send(conn, { b: (chunk as Buffer).toString('base64') })) await new Promise((r) => conn.once('drain', r))
+    if (!send(conn, { b: (chunk as Buffer).toString('base64') })) await drained(conn)
     if (conn.destroyed) return stream.destroy()
   }
   send(conn, { end: true })

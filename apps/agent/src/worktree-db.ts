@@ -97,6 +97,7 @@ function dumpRestore(from: string, to: string, schemaOnly: boolean) {
     let err = ''
     dump.stderr.on('data', (d) => { err += d })
     restore.stderr.on('data', (d) => { err += d })
+    restore.stdin.on('error', () => {}) // pg_restore quit early: its exit code says so
     dump.stdout.pipe(restore.stdin)
     let left = 2
     let failed = false

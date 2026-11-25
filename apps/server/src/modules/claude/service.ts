@@ -631,10 +631,12 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
   /** After (re)connecting to an agent: trust what is actually running over what the database remembers. */
   // A session that was working when its process went away (server reboot, agent crash) carries on by itself:
-  // nobody has to keep a device open. At most once per half hour per session, so a crash can't loop.
+  // nobody has to keep a device open. So does one whose background commands (a render, a watcher) the crash cut off:
+  // they would have woken it when they finished. At most once per half hour per session, so a crash can't loop.
   const RESUME_TEXT = 'Continue where you left off. (DevDash: the server restarted while you were working.)'
+  const RESUME_BG = 'Continue where you left off. (DevDash: the server restarted while your background commands were running, which stopped them.)'
   const resumed = new Map<string, number>()
-  async function resumeInterrupted(s: SessionRow) {
+  async function resumeInterrupted(s: SessionRow, text = RESUME_TEXT) {
     resumed.set(s.id, Date.now())
     try {
       const uuid = randomUUID()
@@ -644,7 +646,7 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       const guest = last ? guestOf(last, s) : null
       await agents.request(s.owner_username, {
         op: 'claude.send', launch: launch(s), uuid, guest,
-        content: guest ? [guestNote(guest, s), ...content(RESUME_TEXT, [])] : content(RESUME_TEXT, []),
+        content: guest ? [guestNote(guest, s), ...content(text, [])] : content(text, []),
       })
       repo.setStatus(s.id, 'working', null, 'chat')
     } catch (err) {
@@ -669,10 +671,13 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     const byId = new Map(running.map((l) => [l.id, l]))
     for (const s of repo.ownedActive(username)) {
       const l = byId.get(s.id)
+      // Its process is gone though background commands were still running: no one is left to say they finished.
+      // shortcut: remembered in memory only, so a reboot of the whole server (not just the agent) doesn't resume these.
+      const cut = !l && !!live.get(s.id)?.tasks?.length
       setLive(s.id, { remoteUrl: l?.mode === 'chat' ? (l.remote ?? null) : null, tasks: l?.mode === 'chat' ? (l.tasks ?? []) : [] })
       if (!l && s.remote_control && s.mode === 'chat' && s.started && s.status !== 'working') void restoreRemote(s)
-      if (!l && s.status === 'working' && s.started && Date.now() - (resumed.get(s.id) ?? 0) > 30 * 60_000) {
-        void resumeInterrupted(s)
+      if (!l && (s.status === 'working' || cut) && s.started && Date.now() - (resumed.get(s.id) ?? 0) > 30 * 60_000) {
+        void resumeInterrupted(s, s.status === 'working' ? RESUME_TEXT : RESUME_BG)
         continue
       }
       const mode = l?.mode === 'cli' ? 'cli' : 'chat'
