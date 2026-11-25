@@ -10,6 +10,7 @@ import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { api, unwrap } from '@/lib/api'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ErrorAlert } from '../auth/LoginPage'
 import { dueLabel, PRIORITIES, projectsQuery, STATUSES, type Priority, type Status, type Task } from './data'
@@ -84,6 +85,8 @@ export function TaskRow({ t, showProject }: { t: Task; showProject: boolean }) {
   )
 }
 
+const EVERYONE = '@everyone'
+
 export function useMembers() {
   return useQuery({ queryKey: ['members'], queryFn: () => unwrap(api.api.members.$get()), staleTime: 60_000 }).data?.users ?? []
 }
@@ -99,14 +102,25 @@ export function NewTask({ open, onClose, project, status }: { open: boolean; onC
   useEffect(() => { if (open) setF({ ...blank, project: project ?? projects[0]?.slug ?? '' }) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (open && !f.project && projects[0]) set({ project: projects[0].slug }) }, [open, projects, f.project])
 
+  const post = (assignee: number | null) => unwrap(api.api.tasks.$post({
+    json: { project: f.project, title: f.title, body: f.body, status: f.status, priority: f.priority, due: f.due || null, assignee },
+  })).then((r) => r.task)
   const create = useMutation({
-    mutationFn: () => unwrap(api.api.tasks.$post({
-      json: { project: f.project, title: f.title, body: f.body, status: f.status, priority: f.priority, due: f.due || null, assignee: f.assignee ? Number(f.assignee) : null },
-    })),
-    onSuccess: ({ task }) => {
+    // Everyone: one task per member, each theirs to do and close (in their Mine), one after another so numbers follow.
+    mutationFn: async () => {
+      if (f.assignee !== EVERYONE) return [await post(f.assignee ? Number(f.assignee) : null)]
+      const made = []
+      for (const m of members) made.push(await post(m.id))
+      return made
+    },
+    onSuccess: (made) => {
       void qc.invalidateQueries({ queryKey: ['tasks'] })
       onClose()
-      void navigate({ to: '/tasks/$slug/$number', params: { slug: task.project.slug, number: String(task.number) } })
+      if (made.length > 1) {
+        toast.success(`Made ${made.length} tasks, one for each member`)
+        return
+      }
+      void navigate({ to: '/tasks/$slug/$number', params: { slug: made[0]!.project.slug, number: String(made[0]!.number) } })
     },
   })
   const submit = (e: FormEvent) => {
@@ -153,6 +167,7 @@ export function NewTask({ open, onClose, project, status }: { open: boolean; onC
                 <FieldLabel htmlFor="nt-assignee">Assignee</FieldLabel>
                 <NativeSelect id="nt-assignee" value={f.assignee} onChange={(e) => set({ assignee: e.target.value })}>
                   <option value="">Nobody</option>
+                  {members.length > 1 && <option value={EVERYONE}>Everyone (a task each)</option>}
                   {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </NativeSelect>
               </Field>

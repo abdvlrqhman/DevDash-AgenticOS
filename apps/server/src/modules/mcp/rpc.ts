@@ -23,6 +23,7 @@ export function registerMcp({ db, agents, projects, tasks, notes, services, auth
   const q = {
     user: db.prepare("select id, username, name, email, role from users where username = ? and disabled_at is null"),
     sessionProject: db.prepare('select p.slug from claude_sessions s join projects p on p.id = s.project_id where s.id = ? and s.owner_id = ?'),
+    members: db.prepare('select id, username, name from users where disabled_at is null order by name'),
   }
   const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
   const int = (v: unknown, what: string) => {
@@ -60,10 +61,21 @@ export function registerMcp({ db, agents, projects, tasks, notes, services, auth
       .filter((t) => !status || t.status === status).map(brief)
   })
   on('task_get', (c) => tasks.get(c.need(), int(c.args.number, 'number')))
-  on('task_create', (c) => brief(tasks.create(c.actor, {
-    project: c.need(), title: str(c.args.title) ?? '', body: str(c.args.body), status: str(c.args.status) as Status | undefined,
-    priority: str(c.args.priority) as Priority | undefined, due: str(c.args.due) ?? null,
-  })))
+  on('task_create', (c) => {
+    // For whom: nobody, a member (username or name, "me"), or "everyone": one task each, theirs to do and close.
+    const team = q.members.all() as { id: number; username: string; name: string }[]
+    const who = str(c.args.assignee)?.toLowerCase()
+    const one = (assignee: number | null) => brief(tasks.create(c.actor, {
+      project: c.need(), title: str(c.args.title) ?? '', body: str(c.args.body), status: str(c.args.status) as Status | undefined,
+      priority: str(c.args.priority) as Priority | undefined, due: str(c.args.due) ?? null, assignee,
+    }))
+    if (!who) return one(null)
+    if (who === 'everyone') return team.map((m) => one(m.id))
+    const m = who === 'me' ? c.user : team.find((x) => x.username.toLowerCase() === who || x.name.toLowerCase() === who)
+      ?? (team.filter((x) => x.name.split(' ')[0]!.toLowerCase() === who).length === 1 ? team.find((x) => x.name.split(' ')[0]!.toLowerCase() === who) : undefined)
+    if (!m) throw new AppError(400, 'bad_args', `No one on the team is "${who}". The team: ${team.map((x) => `${x.username} (${x.name})`).join(', ')}; or "everyone".`)
+    return one(m.id)
+  })
   on('task_update', (c) => brief(tasks.update(c.actor, c.need(), int(c.args.number, 'number'), {
     status: str(c.args.status) as Status | undefined, priority: str(c.args.priority) as Priority | undefined,
     due: c.args.due === null ? null : str(c.args.due), title: str(c.args.title), body: typeof c.args.body === 'string' ? c.args.body : undefined,
