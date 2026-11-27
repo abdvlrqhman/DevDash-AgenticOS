@@ -22,7 +22,7 @@ export const DEFAULT_RULES = `{name} lets you make their routine decisions inste
 - It adds something new to run or maintain: a new service, library, database change or outside API.
 - It touches more than one project.
 - Reversible calls you're less than ~70% sure they'd agree with.
-Yellow decisions reach {name} on their Autopilot page and in the morning ping: you don't notify them yourself.
+Yellow decisions reach {name} on their Autopilot page and in the morning ping, and the project's later sessions are given them: you don't notify them yourself. When one changes something teammates build on too, also write it where the project keeps its decisions (its CLAUDE.md or a note): teammates' sessions don't see your log.
 
 ## Red: never on autopilot, stop and ask them
 - Publishing that isn't already in an agreed plan. Uploads that ARE in the plan are green, but always scheduled for the next morning or later, never public right away, so they can stop them. Still red: the first video of a new series, format or channel, and changing titles, thumbnail style or the upload schedule.
@@ -47,6 +47,12 @@ export const rulesBlock = (rules: string, name: string) =>
 /** Every later message of theirs: a line, so a session that lost the rules (compaction) knows where they are. */
 export const reminderBlock = (name: string) =>
   reminder(`Autopilot is ON for ${firstName(name)}: follow the autopilot rules given earlier in this session (call autopilot_rules if you don't have them) and log each decision with autopilot_log.`)
+/**
+ * Yellow decisions its other sessions (or the supervisor) made in the same project lately: each changed something
+ * decided before, so a session builds on them, not on what they replaced. Sent again whenever the list changes.
+ */
+export const decisionsBlock = (lines: string[], name: string) =>
+  reminder(`Decisions made for ${firstName(name)} on autopilot in this project lately (yellow: each changed something decided before), newest first. Build on these, not on what they replaced, unless ${firstName(name)} has said otherwise since:\n${lines.join('\n')}`)
 /** Once, after it was on in this session and went off. */
 export const offBlock = (name: string) =>
   reminder(`Autopilot is now OFF for ${firstName(name)}: don't decide for them any more, ask them as usual. Don't call autopilot_log.`)

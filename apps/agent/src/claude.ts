@@ -1121,6 +1121,12 @@ export function hook(p: { session_id?: string; hook_event_name?: string }) {
   if (l && (status === 'idle' || status === 'stopped')) refreshTitle(l)
 }
 
+/** The member's own CLAUDE.md for a profile, as its sessions load it: the autopilot supervisor's completions load none. */
+export function ownInstructions(profile: string) {
+  if (!PROFILE_RE.test(profile)) return ''
+  try { return readFileSync(join(profileDir(profile), 'CLAUDE.md'), 'utf8').trim().slice(0, 20_000) } catch { return '' }
+}
+
 /** Login runs in a terminal tab, because Claude's own login flow is interactive. */
 export function loginCommand(profile: string) {
   if (!PROFILE_RE.test(profile)) throw new Error('invalid profile')

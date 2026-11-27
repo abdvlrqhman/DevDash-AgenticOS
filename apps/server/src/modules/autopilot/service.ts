@@ -14,7 +14,7 @@ import { harnessOf, type ClaudeService, type Harness } from '../claude/service.t
 import type { SessionRow } from '../claude/repo.ts'
 import type { NotificationKind } from '../notifications/service.ts'
 import { convertPrototypeRules, isDuplicate, parsePrototypeLog } from './migrate.ts'
-import { DEFAULT_RULES, teamSystem, offBlock, reminderBlock, renderRules, rulesBlock, supervisorSystem } from './prompt.ts'
+import { DEFAULT_RULES, teamSystem, offBlock, reminderBlock, renderRules, rulesBlock, supervisorSystem, decisionsBlock } from './prompt.ts'
 import { DEFAULTS, describePrompt, judge, limitedUntil, neverApprove, obviousRed, redQuestion, nightStart, parseDecision, parseTeamDecision, TEAM_WAIT_MIN, pingDue, USAGE_LIMIT_RE, type Candidate, type Decision, type Settings, type Verdict } from './sweep.ts'
 
 type Row = {
@@ -91,6 +91,8 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     followed: db.prepare('select 1 from assistant_follows f join assistants a on a.user_id = f.user_id where f.session_id = ? and a.follow = 1'),
     remember: db.prepare(`insert into autopilot_sessions (session_id, goal, nudges, last_error, checked_activity) values (?1, ?2, ?3, ?4, ?5)
       on conflict (session_id) do update set goal = ?2, nudges = ?3, last_error = ?4, checked_activity = ?5`),
+    yellow: db.prepare(`select at, what, why from autopilot_log where user_id = ? and tier = 'yellow' and project = ? and at > ?
+      and (session_id is null or session_id != ?) order by at desc limit 10`),
     rulesSent: db.prepare(`insert into autopilot_sessions (session_id, rules_sent) values (?1, ?2)
       on conflict (session_id) do update set rules_sent = ?2`),
     relayed: db.prepare(`insert into autopilot_sessions (session_id, relayed_message) values (?1, ?2)
@@ -126,6 +128,11 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       e.why ? clip(oneLine(e.why), 300) : null, e.message ?? null) as { id: number }).id
     changed(userId)
     return id
+  }
+  /** The member's yellow decisions in a project over the last two weeks, newest first, one line each (not `except`'s own). */
+  function decisions(userId: number, project: string, except = '') {
+    const rows = q.yellow.all(userId, project, Math.floor(now() / 1000) - 14 * 86_400, except) as { at: number; what: string; why: string | null }[]
+    return rows.map((r) => `- ${new Date(r.at * 1000).toISOString().slice(0, 10)}: ${r.what}${r.why ? ` (why: ${r.why})` : ''}`)
   }
   function toInbox(userId: number, i: { sessionId?: string | null; threadId?: number | null; kind: 'red' | 'stuck' | 'permission' | 'thread'; title: string; detail?: string | null; url?: string }) {
     if (i.sessionId && q.inboxOpen.get(i.sessionId)) return
@@ -259,10 +266,13 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
       return []
     }
     const rules = renderRules(a.rules, s.owner_name)
+    const dec = decisions(s.owner_id, projectOf(s), s.id)
+    // What it has been given, "<rules>:<decisions>": the rules again only when they changed, the decisions when they did.
     const version = hash(rules)
-    if (mem?.rules_sent === version) return [reminderBlock(s.owner_name)]
-    q.rulesSent.run(s.id, version)
-    return [rulesBlock(rules, s.owner_name)]
+    const sent = dec.length ? `${version}:${hash(dec.join('\n'))}` : version
+    if (mem?.rules_sent === sent) return [reminderBlock(s.owner_name)]
+    q.rulesSent.run(s.id, sent)
+    return [mem?.rules_sent?.split(':')[0] === version ? reminderBlock(s.owner_name) : rulesBlock(rules, s.owner_name), ...(dec.length ? [decisionsBlock(dec, s.owner_name)] : [])]
   })
 
   /** What the autopilot tools act on: the member's own session, outside team roles' and proposals', in their own turn. */
@@ -310,15 +320,17 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
     const waiting = pending.map((p) => p.toolName === 'AskUserQuestion'
       ? (p.input?.questions ?? []).map((x) => `- Question: ${x.question}\n  Options: ${(x.options ?? []).map((o) => o.label).join(' | ') || '(free text)'}${x.multiSelect ? ' (several allowed)' : ''}`).join('\n')
       : `- ${p.toolName === 'ExitPlanMode' ? 'Approval of this plan' : `Permission for ${p.toolName}`}: ${clip(describePrompt(p), 300)}\n  Full request: ${clip(JSON.stringify(p.input ?? {}), 3000)}`).join('\n')
+    const dec = decisions(user.id, projectOf(s))
     const prompt = [
       `Session "${s.title}" in ${projectOf(s)}. Status: ${s.status}${s.status_detail ? ` (${clip(s.status_detail, 300)})` : ''}.`,
       waiting ? `Waiting for:\n${waiting}` : 'Waiting for: nothing, it stopped.',
+      dec.length ? `Decisions already made for ${user.name.split(' ')[0]} on autopilot in this project lately (yellow), newest first: build on these, not on what they replaced.\n${dec.join('\n')}` : '',
       extra,
       `Conversation, oldest first:\n\n${clip(convo, 30_000)}`,
     ].filter(Boolean).join('\n\n')
     const sv = settingsOf(r)
     const text = await claude.complete(user.username, prompt, {
-      system: supervisorSystem(user.name) + renderRules(r.rules, user.name),
+      system: supervisorSystem(user.name) + renderRules(r.rules, user.name), own: true,
       model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness) as Harness,
     })
     return parseDecision(text)
@@ -622,7 +634,7 @@ export function autopilotService({ db, hub, claude, notify, team = () => undefin
             ? `Proposal from the ${x.role} role in ${x.project} (${(x as { kind: string }).kind}): ${x.title}\n\nWhy: ${clip((x as { why: string }).why, 4000)}`
             : `Question from the ${x.role} role in ${x.project}, thread "${x.title}":\n${(x as { ask: string }).ask}\n\nThe thread so far:\n${(x as { recent: string[] }).recent.join('\n\n')}`
           const d = parseTeamDecision(await claude.complete(user.username, prompt, {
-            system: teamSystem(user.name) + renderRules(r.rules, user.name),
+            system: teamSystem(user.name) + renderRules(r.rules, user.name), own: true,
             model: sv.svModel, profile: sv.svProfile, harness: harnessOf(sv.svHarness) as Harness,
           }), it.of)
           if (!d || d.action === 'needs_you') {

@@ -1251,9 +1251,10 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
      * One answer from an agent, run as `username` on one of their profiles: no tools, no session left behind. Claude Code
      * unless `harness` names another (a role that runs on OpenCode, a member whose agent is OpenCode).
      */
-    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; system?: string; harness?: Harness } = {}) =>
+    /** `own`: add the member's own CLAUDE.md to the system prompt (a completion loads no settings of its own). */
+    complete: async (username: string, prompt: string, o: { profile?: string; model?: string; system?: string; harness?: Harness; own?: boolean } = {}) =>
       (await agents.request<{ text: string }>(username, {
-        op: 'claude.complete', profile: o.profile ?? 'default', prompt, model: o.model, system: o.system, ...(o.harness && o.harness !== 'claude' ? { harness: o.harness } : {}),
+        op: 'claude.complete', profile: o.profile ?? 'default', prompt, model: o.model, system: o.system, ...(o.own ? { own: true } : {}), ...(o.harness && o.harness !== 'claude' ? { harness: o.harness } : {}),
       }, 180_000)).text,
 
     /**

@@ -108,7 +108,9 @@ const ops: Record<string, (r: Req) => Promise<unknown> | unknown> = {
   'claude.set': async (r) => (await running(str(r.id, 'id')).setOption(str(r.id, 'id'), r.key as 'model', (r.value as string | boolean | string[] | null) ?? null), { ok: true }),
   'claude.remote': (r) => (acp(r) ? { url: null } : claude.remote(launchOf(r), r.enabled === true)),
   'claude.complete': async (r) => {
-    const o = { model: typeof r.model === 'string' ? r.model : undefined, system: typeof r.system === 'string' ? r.system : undefined }
+    const own = r.own === true ? claude.ownInstructions(harness.isAcp(r.harness) ? 'default' : str(r.profile, 'profile')) : ''
+    const system = [typeof r.system === 'string' ? r.system : '', own && `# Their own instructions (their CLAUDE.md, which their sessions follow)\n\n${own}`].filter(Boolean).join('\n\n')
+    const o = { model: typeof r.model === 'string' ? r.model : undefined, system: system || undefined }
     return { text: harness.isAcp(r.harness) ? await harness.complete(r.harness, str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) : await claude.complete(str(r.profile, 'profile'), str(r.prompt, 'prompt'), o) }
   },
   'claude.files': async (r) => ({ paths: await mentions.search(str(r.cwd, 'cwd'), typeof r.q === 'string' ? r.q : '') }),

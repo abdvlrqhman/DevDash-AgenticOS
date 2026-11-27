@@ -658,3 +658,30 @@ test('supervisor fallback: resets to defaults when the configured model or profi
   assert.equal(s.supervisor.model, 'sonnet')
   assert.ok(t.autopilot.entries(t.yo, { limit: 100 }).entries.some((e) => /reset to the default/.test(e.what)))
 })
+
+test("a yellow decision reaches the project's later sessions and the supervisor, not the session that made it", async () => {
+  const t = setup()
+  t.session('s1')
+  t.session('s2')
+  t.autopilot.setEnabled(t.yo, true)
+  await t.claude.send(t.yo, 's2', 'start', [])
+  assert.doesNotMatch(JSON.stringify(t.sends().at(-1)!.content), /Decisions made for Yara/, 'nothing decided yet')
+  await t.rpc('autopilot_log', 'yo', 's1', { tier: 'yellow', what: 'Switched the voice to Fish v2', why: 'the A/B test' })
+  await t.claude.send(t.yo, 's1', 'next', [])
+  assert.doesNotMatch(JSON.stringify(t.sends().at(-1)!.content), /Fish v2/, 'its own decision: it knows')
+  await t.claude.send(t.yo, 's2', 'next', [])
+  const text = JSON.stringify(t.sends().at(-1)!.content)
+  assert.match(text, /Autopilot is ON for Yara: follow/, 'the rules themselves are unchanged: only the line')
+  assert.match(text, /Decisions made for Yara[\s\S]*Switched the voice to Fish v2 \(why: the A\/B test\)/)
+  await t.claude.send(t.yo, 's2', 'more', [])
+  assert.doesNotMatch(JSON.stringify(t.sends().at(-1)!.content), /Fish v2/, 'once, until the list changes')
+
+  // The supervisor judging a stalled session there reads them too, with the member's own CLAUDE.md.
+  t.quiet('s2')
+  t.tick(3_600_000)
+  t.quiet('s2')
+  await t.autopilot.sweep()
+  const call = t.sent.findLast((r) => r.op === 'claude.complete')!
+  assert.equal(call.own, true)
+  assert.match(String(call.prompt), /Decisions already made for Yara[\s\S]*Fish v2/)
+})
