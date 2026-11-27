@@ -89,7 +89,8 @@ export function parseTailnetMcps(s: { tailnet_mcps: string | null; tailnet_mcp: 
  */
 type Task = { id: string; type: string; description: string }
 /** `efforts`: the effort levels of the model an agent other than Claude Code runs now (OpenCode's variants). */
-type Live = { remoteUrl?: string | null; remoteError?: string | null; fast?: { state: string; reason: string | null }; tasks?: Task[]; efforts?: string[] }
+/** `crons`: how many wakeups and loops it has scheduled (ScheduleWakeup, CronCreate, /loop); they live in its process. */
+type Live = { remoteUrl?: string | null; remoteError?: string | null; fast?: { state: string; reason: string | null }; tasks?: Task[]; efforts?: string[]; crons?: number }
 /** The end of a Chat answer, as Claude Code reports it. */
 type ResultMsg = {
   uuid?: string; subtype?: string; is_error?: boolean; duration_ms?: number; total_cost_usd?: number; num_turns?: number
@@ -522,6 +523,8 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
       case 'claude.efforts':
         setLive(s.id, { efforts: Array.isArray(ev.efforts) ? (ev.efforts as unknown[]).filter((e): e is string => typeof e === 'string').slice(0, 20) : [] })
         return publish(s.id)
+      case 'claude.crons':
+        return setLive(s.id, { crons: Math.max(0, Number(ev.count) || 0) })
       case 'claude.tasks': {
         const had = live.get(s.id)?.tasks?.length ?? 0
         const tasks = Array.isArray(ev.tasks) ? (ev.tasks as Task[]).slice(0, 50) : []
@@ -631,10 +634,13 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
 
   /** After (re)connecting to an agent: trust what is actually running over what the database remembers. */
   // A session that was working when its process went away (server reboot, agent crash) carries on by itself:
-  // nobody has to keep a device open. So does one whose background commands (a render, a watcher) the crash cut off:
-  // they would have woken it when they finished. At most once per half hour per session, so a crash can't loop.
+  // nobody has to keep a device open. So does one whose background commands (a render, a watcher) or scheduled wakeups
+  // and loops went with it: they would have woken it. At most once per half hour per session, so a crash can't loop.
   const RESUME_TEXT = 'Continue where you left off. (DevDash: the server restarted while you were working.)'
-  const RESUME_BG = 'Continue where you left off. (DevDash: the server restarted while your background commands were running, which stopped them.)'
+  const resumeText = (o: { tasks: boolean; crons: boolean }) => `Continue where you left off. (DevDash: the server restarted, which ${[
+    o.tasks && 'stopped the background commands you were running',
+    o.crons && 'cancelled the wakeups and loops you had scheduled: schedule again the ones you still need',
+  ].filter(Boolean).join(', and ')}.)`
   const resumed = new Map<string, number>()
   async function resumeInterrupted(s: SessionRow, text = RESUME_TEXT) {
     resumed.set(s.id, Date.now())
@@ -671,13 +677,14 @@ export function claudeService({ db, agents, hub, notify, projects, tailnetConnec
     const byId = new Map(running.map((l) => [l.id, l]))
     for (const s of repo.ownedActive(username)) {
       const l = byId.get(s.id)
-      // Its process is gone though background commands were still running: no one is left to say they finished.
+      // Its process is gone though background commands were running or wakeups were scheduled: nothing is left to wake it.
       // shortcut: remembered in memory only, so a reboot of the whole server (not just the agent) doesn't resume these.
-      const cut = !l && !!live.get(s.id)?.tasks?.length
-      setLive(s.id, { remoteUrl: l?.mode === 'chat' ? (l.remote ?? null) : null, tasks: l?.mode === 'chat' ? (l.tasks ?? []) : [] })
+      const was = live.get(s.id)
+      const lost = { tasks: !l && !!was?.tasks?.length, crons: !l && !!was?.crons }
+      setLive(s.id, { remoteUrl: l?.mode === 'chat' ? (l.remote ?? null) : null, tasks: l?.mode === 'chat' ? (l.tasks ?? []) : [], crons: l ? was?.crons : 0 })
       if (!l && s.remote_control && s.mode === 'chat' && s.started && s.status !== 'working') void restoreRemote(s)
-      if (!l && (s.status === 'working' || cut) && s.started && Date.now() - (resumed.get(s.id) ?? 0) > 30 * 60_000) {
-        void resumeInterrupted(s, s.status === 'working' ? RESUME_TEXT : RESUME_BG)
+      if (!l && (s.status === 'working' || lost.tasks || lost.crons) && s.started && Date.now() - (resumed.get(s.id) ?? 0) > 30 * 60_000) {
+        void resumeInterrupted(s, s.status === 'working' ? RESUME_TEXT : resumeText(lost))
         continue
       }
       const mode = l?.mode === 'cli' ? 'cli' : 'chat'

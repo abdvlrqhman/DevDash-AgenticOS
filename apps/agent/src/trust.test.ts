@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { trustFolder } from './claude.ts'
+import { heldByWakeups, trustFolder } from './claude.ts'
 
 test("a session's folder is trusted for Claude Code, without disturbing the rest of its config", () => {
   const dir = mkdtempSync(join(tmpdir(), 'dd-'))
@@ -23,4 +23,13 @@ test("a session's folder is trusted for Claude Code, without disturbing the rest
   const fresh = join(dir, 'none.json')
   trustFolder(fresh, '/c')
   assert.equal(JSON.parse(readFileSync(fresh, 'utf8')).projects['/c'].hasTrustDialogAccepted, true)
+})
+
+test('an idle session stays open while a wakeup or loop it scheduled is still due', () => {
+  const H = 3_600_000
+  assert.equal(heldByWakeups([], H), false, 'nothing scheduled: closes as idle')
+  assert.equal(heldByWakeups([{ recurring: false }], H), true, 'ScheduleWakeup within the hour')
+  assert.equal(heldByWakeups([{ recurring: false }], 3 * H), false, 'a one-shot long overdue: stale')
+  assert.equal(heldByWakeups([{ recurring: true }], 48 * H), true, 'a /loop every day')
+  assert.equal(heldByWakeups([{ recurring: true }], 8 * 24 * H), false, "past Claude Code's 7-day expiry")
 })

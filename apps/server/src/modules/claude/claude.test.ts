@@ -556,9 +556,22 @@ test('a crash that cut off background commands wakes the session once; an idle o
   await new Promise((r) => setImmediate(r))
   const sends = sent.filter((r) => r.op === 'claude.send')
   assert.deepEqual(sends.map((r) => (r.launch as { id: string }).id), ['s1'])
-  assert.match(JSON.stringify(sends[0]!.content), /background commands were running/)
+  assert.match(JSON.stringify(sends[0]!.content), /stopped the background commands you were running/)
   emit({ ev: 'claude.tasks', id: 's1', tasks: [{ id: 'b2', type: 'local_bash', description: 'Render again' }] })
   emit({ ev: 'snapshot', sessions: [] })
   await new Promise((r) => setImmediate(r))
   assert.equal(sent.filter((r) => r.op === 'claude.send').length, 1, 'a crash loop wakes it once per half hour')
+})
+
+test("a restart that cancelled a session's scheduled wakeups wakes it to schedule them again; closing it on purpose doesn't", async () => {
+  const { sent, emit, db } = setup()
+  db.prepare("insert into claude_sessions (id, owner_id, title, cwd, started) values ('s2', 1, 'Loop', '/home/ann', 1)").run()
+  emit({ ev: 'claude.crons', id: 's1', count: 1 }) // ScheduleWakeup in 30 minutes
+  emit({ ev: 'claude.crons', id: 's2', count: 1 })
+  emit({ ev: 'claude.crons', id: 's2', count: 0 }) // s2's process was closed on purpose
+  emit({ ev: 'snapshot', sessions: [] })
+  await new Promise((r) => setImmediate(r))
+  const sends = sent.filter((r) => r.op === 'claude.send')
+  assert.deepEqual(sends.map((r) => (r.launch as { id: string }).id), ['s1'])
+  assert.match(JSON.stringify(sends[0]!.content), /cancelled the wakeups and loops you had scheduled/)
 })

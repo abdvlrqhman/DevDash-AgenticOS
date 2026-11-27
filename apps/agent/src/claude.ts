@@ -23,6 +23,12 @@ export const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,20}$/
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // An idle Chat process (no turn, no question, no background task) is closed to free memory; the next message resumes it.
 export const IDLE_CLOSE_MS = 20 * 60_000 // ponytail: fixed; make per-member if RAM allows longer
+/**
+ * Wakeups it scheduled (ScheduleWakeup, CronCreate, /loop) live in its process: closing it as idle would cancel them.
+ * A one-shot one is at most an hour away; a recurring loop keeps it up to Claude Code's own 7-day expiry. Pure, tested.
+ */
+export const heldByWakeups = (crons: { recurring: boolean }[], idleMs: number) =>
+  crons.length > 0 && idleMs < (crons.some((c) => c.recurring) ? 7 * 86_400_000 : 2 * 3_600_000)
 const run = promisify(execFile)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -87,7 +93,7 @@ type Task = { id: string; type: string; description: string }
 /** `guest`: a teammate's message is being handled, so what would use the owner's access waits for them (guest.ts). */
 type Chat = {
   launch: Launch; q: Query; inbox: Inbox; pending: Map<string, Pending>; status: Status; lastActive: number; bg: number; tasks: Task[]
-  remote: string | null; fresh: boolean; done?: Promise<void>; guest: Guest | null
+  remote: string | null; fresh: boolean; done?: Promise<void>; guest: Guest | null; crons: { recurring: boolean }[]
 }
 
 let emit: (ev: Record<string, unknown>) => void = () => {}
@@ -328,6 +334,16 @@ async function startChat(l: Launch): Promise<Chat> {
       canUseTool: async (toolName: string, input: Record<string, unknown>, o: AskOptions) =>
         INTERACTIVE.has(toolName) ? { behavior: 'allow', updatedInput: input } : ask(toolName, input, o.suggestions, o.signal, undefined, askInfo(o)),
       hooks: {
+        // Each turn's end says which wakeups and loops are still scheduled (Claude Code's session_crons).
+        Stop: [{
+          hooks: [async (h: { session_crons?: { recurring?: boolean }[] }) => {
+            if (chat) {
+              chat.crons = (h.session_crons ?? []).map((c) => ({ recurring: !!c.recurring }))
+              emit({ ev: 'claude.crons', id: l.id, count: chat.crons.length })
+            }
+            return {}
+          }],
+        }],
         PreToolUse: [{
           matcher: 'AskUserQuestion|ExitPlanMode',
           timeout: WEEK_S, // people answer from their phone, maybe much later
@@ -362,7 +378,7 @@ async function startChat(l: Launch): Promise<Chat> {
       stderr: (d: string) => console.error(`[${l.id.slice(0, 8)}] ${d.trimEnd()}`),
     },
   })
-  chat = { launch: { ...l, started: true }, q, inbox, pending, status: 'idle', lastActive: Date.now(), bg: 0, tasks: [], remote: null, fresh: !l.started, guest: null }
+  chat = { launch: { ...l, started: true }, q, inbox, pending, status: 'idle', lastActive: Date.now(), bg: 0, tasks: [], remote: null, fresh: !l.started, guest: null, crons: [] }
   chats.set(l.id, chat)
   chat.done = pump(chat)
   if (l.remote) void remoteControl(chat, true).catch((err: Error) => emit({ ev: 'claude.remote', id: l.id, url: null, error: err.message.slice(0, 300) }))
@@ -417,6 +433,7 @@ async function pump(c: Chat) {
     }
     c.pending.clear()
     if (c.tasks.length) emit({ ev: 'claude.tasks', id, tasks: [] })
+    if (c.crons.length) emit({ ev: 'claude.crons', id, count: 0 }) // closed on purpose: nothing to restore
     emit({ ev: 'claude.closed', id })
   }
 }
@@ -1116,6 +1133,7 @@ export const busy = () => [...chats.values()].some((c) => c.status === 'working'
 setInterval(() => {
   for (const c of chats.values()) {
     // With Remote Control on, the Claude app needs the process: it stays until the owner turns it off.
-    if (c.status === 'idle' && !c.pending.size && !c.bg && !c.remote && Date.now() - c.lastActive > IDLE_CLOSE_MS) void stopChat(c)
+    const idle = Date.now() - c.lastActive
+    if (c.status === 'idle' && !c.pending.size && !c.bg && !c.remote && idle > IDLE_CLOSE_MS && !heldByWakeups(c.crons, idle)) void stopChat(c)
   }
 }, 60_000).unref()
